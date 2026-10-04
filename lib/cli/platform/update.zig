@@ -1,4 +1,4 @@
-﻿//! Self-update: check, verify, and replace the running executable.
+//! Self-update: check, verify, and replace the running executable.
 //!
 //! ## What was there, and why it was not an updater
 //!
