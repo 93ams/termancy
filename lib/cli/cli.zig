@@ -91,6 +91,8 @@ pub const log = platform.log;
 pub const text_input = interact.text_input;
 /// Check, verify and replace the running executable. The transport is the caller's.
 pub const update = platform.update;
+/// Detaching the process so it outlives the terminal that started it.
+pub const detach = platform.detach;
 /// A single-line spinner for a step whose total is unknown.
 pub const spinner = render.spinner;
 

@@ -262,13 +262,15 @@ pub fn replaceExecutable(io: std.Io, path: []const u8, bytes: []const u8) Error!
     };
 }
 
-/// `0755` on POSIX, and the platform default on Windows.
+/// The mode a replacement executable is created with.
 ///
-/// Windows has no execute bit - whether a file can run is decided by its extension
-/// - so asking for a POSIX mode there would be meaningless at best.
+/// `.executable_file` rather than a hand-built `0o755`. On POSIX `Permissions` is
+/// an **enum** over `mode_t`, not an integer, so `@as(Permissions, 0o755)` does not
+/// compile there at all - and the first version of this function did exactly that,
+/// which was invisible on Windows because the non-Windows branch is never analysed
+/// there. The standard library already names the thing being asked for.
 fn executablePermissions() std.Io.File.Permissions {
-    if (comptime builtin.os.tag == .windows) return .default_file;
-    return @as(std.Io.File.Permissions, 0o755);
+    return .executable_file;
 }
 
 const testing = std.testing;
@@ -486,14 +488,19 @@ test "a verified update replaces the file and keeps it executable" {
 test "the replacement is created with a mode that can be executed" {
     // The defect the version this replaces shipped with: it recreated the binary
     // with default permissions, so on POSIX an updated program was not executable.
-    // Asserted here rather than through a stat call because the guarantee is at
-    // creation time - the file is made with this mode before it is moved into place.
-    if (comptime builtin.os.tag == .windows) {
-        // Windows decides runnability by extension, so there is no mode to lose.
-        try testing.expectEqual(std.Io.File.Permissions.default_file, executablePermissions());
-    } else {
-        try testing.expectEqual(@as(std.Io.File.Permissions, 0o755), executablePermissions());
+    try testing.expectEqual(
+        std.Io.File.Permissions.executable_file,
+        executablePermissions(),
+    );
+
+    if (comptime std.Io.File.Permissions.has_executable_bit) {
+        // POSIX, where the mode really carries an execute bit. Asserting the bit
+        // rather than the enum value means an `executable_file` that stopped being
+        // executable would be caught here.
+        try testing.expect(@intFromEnum(executablePermissions()) & 0o111 != 0);
     }
+    // Windows has no execute bit - runnability is decided by the extension - which
+    // the standard library reports as `has_executable_bit == false`.
 }
 
 test "a fetch failure propagates rather than being treated as up to date" {

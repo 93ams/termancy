@@ -50,6 +50,8 @@ pub const process = @import("process.zig");
 pub const signal = @import("signal.zig");
 /// Leveled logging, as readable text or machine-readable JSON.
 pub const log = @import("log.zig");
+/// Detaching the process so it outlives the terminal that started it.
+pub const detach = @import("detach.zig");
 /// `.env` and systemd unit export. Now owned by `lib/util`; re-exported here under
 /// its historical name so `cli.systemd_exporter` keeps resolving.
 pub const systemd_exporter = @import("util").systemd_exporter;
@@ -84,6 +86,7 @@ test {
     std.testing.refAllDecls(process);
     std.testing.refAllDecls(signal);
     std.testing.refAllDecls(log);
+    std.testing.refAllDecls(detach);
     std.testing.refAllDecls(systemd_exporter);
     std.testing.refAllDecls(telemetry);
     std.testing.refAllDecls(trace_parent);
