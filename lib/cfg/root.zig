@@ -93,6 +93,14 @@ pub const dotenv = @import("dotenv.zig");
 /// and its own defaults, with the precedence stated as the caller's layer order.
 pub const binder = @import("binder.zig");
 
+/// A bounded YAML subset: block mappings, sequences and scalars, with every
+/// unsupported construct refused by name rather than read as text.
+pub const yaml = @import("yaml.zig");
+
+/// Format detection and a flat, dotted-key view of a config file, ready to hand to
+/// `binder` as a `.file` layer.
+pub const format = @import("format.zig");
+
 /// Config scalar types and their string grammars: `DurationMs` and `ByteSize`.
 ///
 /// These were lifted out of `app/bus/config/root.zig`, which was their only home
@@ -141,4 +149,6 @@ test {
     // before it existed.
     std.testing.refAllDecls(dotenv);
     std.testing.refAllDecls(binder);
+    std.testing.refAllDecls(yaml);
+    std.testing.refAllDecls(format);
 }
