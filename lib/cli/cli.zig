@@ -85,6 +85,8 @@ pub const xdg = platform.xdg;
 pub const process = platform.process;
 /// Graceful shutdown: conventional signals, as a poll-able flag.
 pub const signal = platform.signal;
+/// Leveled logging, as readable text or machine-readable JSON.
+pub const log = platform.log;
 /// A single-line spinner for a step whose total is unknown.
 pub const spinner = render.spinner;
 

@@ -178,6 +178,7 @@ pub const daemon = framework.daemon;
 pub const xdg = framework.xdg;
 pub const process = framework.process;
 pub const signal = framework.signal;
+pub const log = framework.log;
 pub const spinner = framework.spinner;
 pub const capability = framework.capability;
 pub const cancellation = framework.cancellation;

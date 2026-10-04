@@ -46,6 +46,8 @@ pub const xdg = @import("xdg.zig");
 pub const process = @import("process.zig");
 /// Graceful shutdown: conventional signals, as a poll-able flag.
 pub const signal = @import("signal.zig");
+/// Leveled logging, as readable text or machine-readable JSON.
+pub const log = @import("log.zig");
 /// `.env` and systemd unit export. Now owned by `lib/util`; re-exported here under
 /// its historical name so `cli.systemd_exporter` keeps resolving.
 pub const systemd_exporter = @import("util").systemd_exporter;
@@ -76,6 +78,7 @@ test {
     std.testing.refAllDecls(xdg);
     std.testing.refAllDecls(process);
     std.testing.refAllDecls(signal);
+    std.testing.refAllDecls(log);
     std.testing.refAllDecls(systemd_exporter);
     std.testing.refAllDecls(telemetry);
     std.testing.refAllDecls(trace_parent);
