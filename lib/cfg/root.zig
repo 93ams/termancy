@@ -82,6 +82,13 @@ pub const remote_config = @import("remote_config.zig");
 /// Feature-flag gates loaded from configuration.
 pub const ota_flags = @import("ota_flags.zig");
 
+/// `.env` parsing, with recursive variable expansion and cycle detection.
+///
+/// The tree could previously *write* a `.env` (`writeDotEnv`, the `dotenv` export
+/// format) and had no reader for one, so a program could not read back what it
+/// wrote.
+pub const dotenv = @import("dotenv.zig");
+
 /// Config scalar types and their string grammars: `DurationMs` and `ByteSize`.
 ///
 /// These were lifted out of `app/bus/config/root.zig`, which was their only home
@@ -123,4 +130,10 @@ test {
     std.testing.refAllDecls(remote_config);
     std.testing.refAllDecls(ota_flags);
     std.testing.refAllDecls(scalar);
+    // Named explicitly, like every other namespace above. Adding the `pub const`
+    // without this line compiles and silently runs zero of `dotenv.zig`'s tests -
+    // which is precisely the failure M-2 was written about, and it happened again
+    // here: the first test run after this module landed reported the same total as
+    // before it existed.
+    std.testing.refAllDecls(dotenv);
 }
