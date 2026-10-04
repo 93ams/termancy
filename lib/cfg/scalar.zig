@@ -153,7 +153,13 @@ pub fn parseValue(
 
     var parsed: RealType = switch (@typeInfo(RealType)) {
         .int => std.fmt.parseInt(RealType, raw, 10) catch return error.InvalidValue,
+        .float => std.fmt.parseFloat(RealType, raw) catch return error.InvalidValue,
         .bool => parseBool(raw) orelse return error.InvalidValue,
+        // An enum is matched by tag name, because that is what a human writes in a
+        // config file and what a flag value looks like. Numeric ordinals are
+        // deliberately not accepted: a config file that silently changes meaning
+        // when a variant is inserted in the middle is worse than one that fails.
+        .@"enum" => std.meta.stringToEnum(RealType, raw) orelse return error.InvalidValue,
         .pointer => |p| blk: {
             if (p.size != .slice or p.child != u8) {
                 @compileError("unsupported config field type: " ++ @typeName(RealType));
@@ -177,9 +183,17 @@ pub fn parseValue(
 ///
 /// `yes`/`no` are included because the bus's existing flag sink already accepts
 /// them (`app/kvs/persistence`) and both spellings appear in real config files.
+///
+/// `1`/`0` are included because the environment is where a boolean most often
+/// arrives as a digit, and `loader.load` already accepted `1` as true. Omitting
+/// them here would have made the binder reject a spelling the resolver it replaces
+/// accepted - the kind of quiet regression that only shows up as "my env var
+/// stopped working".
 fn parseBool(raw: []const u8) ?bool {
     if (std.ascii.eqlIgnoreCase(raw, "true") or std.ascii.eqlIgnoreCase(raw, "yes")) return true;
     if (std.ascii.eqlIgnoreCase(raw, "false") or std.ascii.eqlIgnoreCase(raw, "no")) return false;
+    if (std.mem.eql(u8, raw, "1")) return true;
+    if (std.mem.eql(u8, raw, "0")) return false;
     return null;
 }
 

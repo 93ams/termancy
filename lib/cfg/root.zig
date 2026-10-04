@@ -89,6 +89,10 @@ pub const ota_flags = @import("ota_flags.zig");
 /// wrote.
 pub const dotenv = @import("dotenv.zig");
 
+/// The comptime data binder: one struct resolved from flags, environment, files
+/// and its own defaults, with the precedence stated as the caller's layer order.
+pub const binder = @import("binder.zig");
+
 /// Config scalar types and their string grammars: `DurationMs` and `ByteSize`.
 ///
 /// These were lifted out of `app/bus/config/root.zig`, which was their only home
@@ -136,4 +140,5 @@ test {
     // here: the first test run after this module landed reported the same total as
     // before it existed.
     std.testing.refAllDecls(dotenv);
+    std.testing.refAllDecls(binder);
 }
