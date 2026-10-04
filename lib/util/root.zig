@@ -66,7 +66,14 @@ pub const object_pipe = @import("object_pipe.zig");
 /// Named tasks with dependencies and cycle detection.
 pub const tasks = @import("tasks.zig");
 
-/// An embedded-asset virtual filesystem.
+/// A virtual filesystem: one interface over memory, disk and embedded assets.
+///
+/// **This file has diverged from the copy it started as.** Everything else here is
+/// byte-identical to the monorepo's `lib/util`; `vfs.zig` was a comptime asset
+/// table with no interface, and now carries the `Vfs` vtable plus the in-memory
+/// and disk backends. So "vendored" is accurate for the other thirteen modules and
+/// no longer accurate for this one - recorded here rather than left for someone to
+/// discover by diffing.
 pub const vfs = @import("vfs.zig");
 
 /// W3C Trace Context: the shared `traceparent` serializer.
