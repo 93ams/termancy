@@ -61,6 +61,8 @@ pub const trace_parent = @import("trace_parent.zig");
 pub const profiler = @import("profiler.zig");
 /// Self-update. Recreates the binary without preserving its mode; see ROADMAP 5.4.
 pub const updater = @import("updater.zig");
+/// Check, verify and replace the running executable. The transport is the caller's.
+pub const update = @import("update.zig");
 /// A string-in/string-out bridge for a wasm host.
 pub const wasm_bridge = @import("wasm_bridge.zig");
 
@@ -87,5 +89,6 @@ test {
     std.testing.refAllDecls(trace_parent);
     std.testing.refAllDecls(profiler);
     std.testing.refAllDecls(updater);
+    std.testing.refAllDecls(update);
     std.testing.refAllDecls(wasm_bridge);
 }

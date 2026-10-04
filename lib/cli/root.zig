@@ -180,6 +180,7 @@ pub const process = framework.process;
 pub const signal = framework.signal;
 pub const log = framework.log;
 pub const text_input = framework.text_input;
+pub const update = framework.update;
 pub const spinner = framework.spinner;
 pub const capability = framework.capability;
 pub const cancellation = framework.cancellation;
