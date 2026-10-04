@@ -44,6 +44,8 @@ pub const sys = @import("sys.zig");
 pub const xdg = @import("xdg.zig");
 /// Running a child process, captured or streamed.
 pub const process = @import("process.zig");
+/// Graceful shutdown: conventional signals, as a poll-able flag.
+pub const signal = @import("signal.zig");
 /// `.env` and systemd unit export. Now owned by `lib/util`; re-exported here under
 /// its historical name so `cli.systemd_exporter` keeps resolving.
 pub const systemd_exporter = @import("util").systemd_exporter;
@@ -73,6 +75,7 @@ test {
     std.testing.refAllDecls(sys);
     std.testing.refAllDecls(xdg);
     std.testing.refAllDecls(process);
+    std.testing.refAllDecls(signal);
     std.testing.refAllDecls(systemd_exporter);
     std.testing.refAllDecls(telemetry);
     std.testing.refAllDecls(trace_parent);

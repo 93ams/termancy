@@ -21,6 +21,8 @@
 //! sit at file scope alongside the type.
 
 const std = @import("std");
+const assert = std.debug.assert;
+const capability = @import("capability.zig");
 
 /// The file is the type. `Style` in this file's API means this struct.
 const Self = @This();
@@ -91,14 +93,24 @@ pub fn padding(self: Self, p: u8) Self {
 }
 
 /// Renders the styled text directly to the writer without allocating strings.
+///
+/// When the process capability says colour is off - `NO_COLOR`, or stdout is not a
+/// terminal - the text, padding and border are still written and every escape
+/// sequence is dropped. The gate is read **once** rather than per escape: a
+/// capability read twice could change between a start sequence and its reset,
+/// leaving the terminal in the styled state for everything printed afterwards.
 pub fn render(self: Self, writer: anytype, text: []const u8) !void {
-    if (self._bold) try writer.writeAll("\x1b[1m");
-    if (self._italic) try writer.writeAll("\x1b[3m");
-    if (self._underline) try writer.writeAll("\x1b[4m");
-    if (self._faint) try writer.writeAll("\x1b[2m");
+    const styled = capability.get().color;
 
-    if (self._fg) |c| try writer.print("\x1b[38;2;{d};{d};{d}m", .{ c.r, c.g, c.b });
-    if (self._bg) |c| try writer.print("\x1b[48;2;{d};{d};{d}m", .{ c.r, c.g, c.b });
+    if (styled) {
+        if (self._bold) try writer.writeAll("\x1b[1m");
+        if (self._italic) try writer.writeAll("\x1b[3m");
+        if (self._underline) try writer.writeAll("\x1b[4m");
+        if (self._faint) try writer.writeAll("\x1b[2m");
+
+        if (self._fg) |c| try writer.print("\x1b[38;2;{d};{d};{d}m", .{ c.r, c.g, c.b });
+        if (self._bg) |c| try writer.print("\x1b[48;2;{d};{d};{d}m", .{ c.r, c.g, c.b });
+    }
 
     if (self._border == .rounded) try writer.writeAll("╭ ");
 
@@ -110,7 +122,7 @@ pub fn render(self: Self, writer: anytype, text: []const u8) !void {
 
     if (self._border == .rounded) try writer.writeAll(" ╮");
 
-    try writer.writeAll("\x1b[0m");
+    if (styled) try writer.writeAll("\x1b[0m");
 }
 
 /// ANSI colour constructors.
@@ -197,12 +209,20 @@ pub fn joinHorizontal(writer: anytype, left_lines: []const []const u8, right_lin
 }
 
 /// Renders an OSC 8 terminal hyperlink: \x1b]8;;<URL>\x1b\<TEXT>\x1b]8;;\x1b\
+/// Emits OSC 8 hyperlink text.
+///
+/// Gated on `color` rather than emitted unconditionally: OSC 8 is a terminal
+/// escape, so into a pipe or under `NO_COLOR` it is noise the reader has to
+/// scroll past, and the link text alone is the useful half.
 pub fn hyperlink(writer: anytype, url: []const u8, text: []const u8) !void {
+    if (!capability.get().color) return writer.writeAll(text);
     try writer.print("\x1b]8;;{s}\x1b\\{s}\x1b]8;;\x1b\\", .{ url, text });
 }
 
 /// Zero-dependency line-by-line terminal diff viewer.
 pub fn renderDiff(writer: anytype, old_content: []const u8, new_content: []const u8) !void {
+    const styled = capability.get().color;
+
     var old_lines = std.mem.splitScalar(u8, old_content, '\n');
     var new_lines = std.mem.splitScalar(u8, new_content, '\n');
 
@@ -218,17 +238,26 @@ pub fn renderDiff(writer: anytype, old_content: []const u8, new_content: []const
             if (std.mem.eql(u8, old_l, new_l)) {
                 try writer.print("  {s}\n", .{old_l});
             } else {
-                try writer.print("\x1b[31m- {s}\x1b[0m\n", .{old_l});
-                try writer.print("\x1b[32m+ {s}\x1b[0m\n", .{new_l});
+                try emitDiffLine(writer, styled, '-', old_l);
+                try emitDiffLine(writer, styled, '+', new_l);
             }
         } else if (o != null) {
-            const old_l = std.mem.trim(u8, o.?, "\r");
-            try writer.print("\x1b[31m- {s}\x1b[0m\n", .{old_l});
+            try emitDiffLine(writer, styled, '-', std.mem.trim(u8, o.?, "\r"));
         } else if (n != null) {
-            const new_l = std.mem.trim(u8, n.?, "\r");
-            try writer.print("\x1b[32m+ {s}\x1b[0m\n", .{new_l});
+            try emitDiffLine(writer, styled, '+', std.mem.trim(u8, n.?, "\r"));
         }
     }
+}
+
+/// One added or removed line. The `-`/`+` marker carries the meaning on its own,
+/// which is why the uncoloured form is still unambiguous rather than merely plain.
+fn emitDiffLine(writer: anytype, styled: bool, marker: u8, line: []const u8) !void {
+    assert(marker == '-' or marker == '+');
+
+    if (!styled) return writer.print("{c} {s}\n", .{ marker, line });
+
+    const color_code: []const u8 = if (marker == '-') "31" else "32";
+    try writer.print("\x1b[{s}m{c} {s}\x1b[0m\n", .{ color_code, marker, line });
 }
 
 /// How a column's cells are aligned within their width.
@@ -425,7 +454,12 @@ fn renderAligned(writer: anytype, text: []const u8, width: usize, align_mode: Al
 }
 
 /// Minimal, zero-allocation micro syntax highlighter for JSON, Zig/C keywords, and key-values.
+///
+/// A disabled highlighter is the identity function, and saying so once here is
+/// both cheaper and clearer than guarding each of the five branches below.
 pub fn highlight(writer: anytype, code: []const u8) !void {
+    if (!capability.get().color) return writer.writeAll(code);
+
     var i: usize = 0;
     while (i < code.len) {
         const c = code[i];
@@ -541,4 +575,86 @@ test "Highlight colours keywords and passes other words through" {
     try std.testing.expect(std.mem.indexOf(u8, out, "const") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[35m") != null);
     try std.testing.expect(std.mem.endsWith(u8, out, " x"));
+}
+
+/// Runs `body` with colour forced off, restoring the process capability after.
+///
+/// The gate is process-wide, so a test that flips it must put it back or it leaks
+/// into every test that runs afterwards - a failure that would look like a
+/// rendering bug in an unrelated file.
+fn withColorDisabled(body: anytype) !void {
+    const saved = capability.get();
+    defer capability.set(saved);
+
+    capability.set(.{ .color = false, .cursor = saved.cursor, .interactive = saved.interactive });
+    try body();
+}
+
+test "render drops every escape when colour is disabled, keeping the text" {
+    try withColorDisabled(struct {
+        fn run() !void {
+            var buf: [128]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            try new().bold(true).foreground(Color.rgb(1, 2, 3)).padding(1).render(&w, "hello");
+
+            const out = w.buffered();
+            try std.testing.expect(std.mem.indexOfScalar(u8, out, 0x1b) == null);
+            // The text and the padding survive; only the styling is gone.
+            try std.testing.expectEqualStrings(" hello ", out);
+        }
+    }.run);
+}
+
+test "render keeps the border when colour is disabled" {
+    try withColorDisabled(struct {
+        fn run() !void {
+            var buf: [128]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            try new().border(.rounded).render(&w, "hi");
+
+            const out = w.buffered();
+            try std.testing.expect(std.mem.indexOfScalar(u8, out, 0x1b) == null);
+            // Box-drawing is structure, not colour, so it stays.
+            try std.testing.expectEqualStrings("╭ hi ╮", out);
+        }
+    }.run);
+}
+
+test "highlight becomes the identity function when colour is disabled" {
+    try withColorDisabled(struct {
+        fn run() !void {
+            var buf: [256]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            try highlight(&w, "const x = 42; // note");
+            // Byte-for-byte the input, so the caller can rely on it not to
+            // mangle what it is shown.
+            try std.testing.expectEqualStrings("const x = 42; // note", w.buffered());
+        }
+    }.run);
+}
+
+test "renderDiff keeps the +/- markers when colour is disabled" {
+    try withColorDisabled(struct {
+        fn run() !void {
+            var buf: [256]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            try renderDiff(&w, "a\nb", "a\nc");
+
+            const out = w.buffered();
+            try std.testing.expect(std.mem.indexOfScalar(u8, out, 0x1b) == null);
+            // The marker carries the meaning, so the plain form is unambiguous.
+            try std.testing.expectEqualStrings("  a\n- b\n+ c\n", out);
+        }
+    }.run);
+}
+
+test "hyperlink degrades to its text when colour is disabled" {
+    try withColorDisabled(struct {
+        fn run() !void {
+            var buf: [256]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            try hyperlink(&w, "https://example.com", "example");
+            try std.testing.expectEqualStrings("example", w.buffered());
+        }
+    }.run);
 }

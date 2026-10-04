@@ -54,7 +54,11 @@ pub const PidFile = struct {
             };
             return kernel32.GetCurrentProcessId();
         } else {
-            return @intCast(std.posix.getpid());
+            // `std.posix.getpid` does not exist in this std; the syscall layer is
+            // where it lives, and it is spelled per platform - `std.os.linux` on
+            // Linux, `std.c` elsewhere. `std.posix.system` is exactly that alias,
+            // so this is the portable spelling rather than a Linux-only one.
+            return @intCast(std.posix.system.getpid());
         }
     }
 
@@ -72,9 +76,20 @@ pub const PidFile = struct {
             }
             return false;
         } else {
-            // POSIX: kill(pid, 0) checks if process exists without sending a signal
-            const rc = std.posix.system.kill(@intCast(pid), 0);
-            return rc == 0;
+            // POSIX has no "is this pid alive" call. The idiom is `kill(pid, 0)`,
+            // which runs the existence and permission checks without delivering a
+            // signal. `std.posix.kill` takes the platform's `SIG` enum, and 0 is
+            // not a named member of it, so it is constructed from the integer -
+            // legal because the enum is non-exhaustive.
+            std.posix.kill(@intCast(pid), @enumFromInt(0)) catch |err| switch (err) {
+                // ESRCH: no such process.
+                error.ProcessNotFound => return false,
+                // EPERM: the pid exists but belongs to another user. That is
+                // still running, which is the question being asked.
+                error.PermissionDenied => return true,
+                else => return false,
+            };
+            return true;
         }
     }
 };

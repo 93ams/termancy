@@ -1,4 +1,5 @@
 const std = @import("std");
+const capability = @import("capability.zig");
 
 /// The shared spin lock, from `lib/util`. This file used to carry its own
 /// thirteen-line copy, which was the same algorithm with the scheduler yield and
@@ -13,6 +14,9 @@ pub const Bar = struct {
     current: u64 = 0,
     done: bool = false,
     color: []const u8 = "\x1b[36m", // Cyan
+    /// Whether this bar has already been announced on a stream that cannot be
+    /// redrawn. Unused when cursor movement is available.
+    reported: bool = false,
 };
 
 pub const MultiProgress = struct {
@@ -80,9 +84,17 @@ pub const MultiProgress = struct {
     }
 
     /// Renders all progress bars. Uses ANSI cursor movement to redraw in-place without screen tearing.
+    ///
+    /// When the process capability says cursor movement is unavailable - the
+    /// output is a pipe, or `TERM=dumb` - redrawing is impossible, because the
+    /// cursor-up sequence is exactly what would be redrawn over. Rather than
+    /// emitting the sequences anyway and filling a log with them, each bar is
+    /// announced **once**, when it completes.
     pub fn render(self: *MultiProgress, writer: anytype) !void {
         self.lock.lock();
         defer self.lock.unlock();
+
+        if (!capability.get().cursor) return self.renderPlain(writer);
 
         if (self.rendered_lines > 0) {
             try writer.print("\x1b[{d}A", .{self.rendered_lines});
@@ -110,4 +122,105 @@ pub const MultiProgress = struct {
 
         self.rendered_lines = self.bars.items.len;
     }
+
+    /// The append-only form used when the cursor cannot be moved.
+    ///
+    /// Bounded by construction: a bar is announced at most once, so a caller that
+    /// renders in a loop cannot grow the output without bound.
+    fn renderPlain(self: *MultiProgress, writer: anytype) !void {
+        for (self.bars.items) |*bar| {
+            if (!bar.done or bar.reported) continue;
+            bar.reported = true;
+
+            const pct: usize = if (bar.total > 0)
+                @intCast((bar.current * 100) / bar.total)
+            else
+                0;
+            try writer.print("{s}: {d}% ({d}/{d})\n", .{
+                bar.label, pct, bar.current, bar.total,
+            });
+        }
+    }
 };
+
+const testing = std.testing;
+
+/// Installs a capability for the duration of `body`, restoring it afterwards.
+///
+/// Process-wide state in a test is a leak waiting to happen: without the restore,
+/// whichever test ran last would decide how every later test renders.
+fn withCapability(caps: capability.Capability, body: anytype) !void {
+    const saved = capability.get();
+    defer capability.set(saved);
+
+    capability.set(caps);
+    try body();
+}
+
+test "a completed bar is announced exactly once when the cursor cannot move" {
+    try withCapability(.{ .color = false, .cursor = false, .interactive = false }, struct {
+        fn run() !void {
+            var mp = MultiProgress.init(testing.allocator);
+            defer mp.deinit();
+
+            const id = try mp.addBar("fetch", 10);
+            var buf: [256]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+
+            // In progress: nothing is printed, because there is no way to redraw
+            // an in-progress bar on a stream you cannot move the cursor on.
+            try mp.render(&w);
+            try testing.expectEqual(@as(usize, 0), w.buffered().len);
+
+            mp.set(id, 10);
+            try mp.render(&w);
+            try testing.expectEqualStrings("fetch: 100% (10/10)\n", w.buffered());
+
+            // And a second render does not repeat it. That bound is the whole
+            // reason this mode is append-only rather than re-rendering.
+            try mp.render(&w);
+            try testing.expectEqualStrings("fetch: 100% (10/10)\n", w.buffered());
+        }
+    }.run);
+}
+
+test "an unfinished bar stays silent on a stream that cannot be redrawn" {
+    try withCapability(.{ .color = false, .cursor = false, .interactive = false }, struct {
+        fn run() !void {
+            var mp = MultiProgress.init(testing.allocator);
+            defer mp.deinit();
+
+            const id = try mp.addBar("fetch", 4);
+            mp.set(id, 3);
+
+            var buf: [256]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            try mp.render(&w);
+            try testing.expectEqual(@as(usize, 0), w.buffered().len);
+        }
+    }.run);
+}
+
+test "the redrawing form still emits the bar when the cursor can move" {
+    try withCapability(.{ .color = true, .cursor = true, .interactive = true }, struct {
+        fn run() !void {
+            var mp = MultiProgress.init(testing.allocator);
+            defer mp.deinit();
+
+            const id = try mp.addBar("fetch", 4);
+            mp.set(id, 2);
+
+            var buf: [256]u8 = undefined;
+            var w = std.Io.Writer.fixed(&buf);
+            try mp.render(&w);
+
+            const out = w.buffered();
+            try testing.expect(std.mem.indexOf(u8, out, "fetch") != null);
+            try testing.expect(std.mem.indexOf(u8, out, "50%") != null);
+            // It redraws in place, so the line is cleared first.
+            try testing.expect(std.mem.indexOf(u8, out, "\x1b[2K") != null);
+            // And the bar was never announced in the append-only form.
+            try testing.expect(!mp.bars.items[0].reported);
+        }
+    }.run);
+}

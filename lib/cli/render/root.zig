@@ -14,6 +14,8 @@ const std = @import("std");
 
 /// Escape-sequence construction for DECSTBM scroll regions.
 pub const decstbm = @import("decstbm.zig");
+/// The single process-wide decision about whether escapes may be emitted.
+pub const capability = @import("capability.zig");
 /// Truecolor/256/16-colour degradation and terminal profile detection.
 pub const color = @import("color.zig");
 /// Inline images: kitty, iTerm2 and sixel protocol detection and encoding.
@@ -44,6 +46,7 @@ test {
     // declaration in that namespace references it. Each one is therefore
     // listed explicitly. See `app/cli/lib/ROADMAP.md` M-2.
     std.testing.refAllDecls(decstbm);
+    std.testing.refAllDecls(capability);
     std.testing.refAllDecls(color);
     std.testing.refAllDecls(graphics);
     std.testing.refAllDecls(layout);

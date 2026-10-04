@@ -55,8 +55,15 @@ pub fn enable() !Self {
             rt.enabled = true;
         }
     } else {
-        if (std.posix.isatty(0)) {
-            const termios = try std.posix.tcgetattr(0);
+        // `std.posix.isatty` does not exist in this std, and the check was
+        // redundant anyway: `tcgetattr` fails with `error.NotATerminal` on
+        // something that is not a terminal, which is the same question asked one
+        // step later and without a second syscall. The error is caught rather
+        // than propagated because a disabled handle is the documented contract -
+        // a caller has to be able to `defer` the result without branching.
+        // `catch null` turns the error union into the optional this branch wants:
+        // a terminal we cannot interrogate is simply one we do not reconfigure.
+        if (std.posix.tcgetattr(0) catch null) |termios| {
             rt.orig_mode = termios;
             var raw = termios;
             // Standard POSIX cfmakeraw

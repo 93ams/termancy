@@ -77,10 +77,14 @@ pub const toml_mutator = zcfg.toml_mutator;
 pub const remote_config = zcfg.remote_config;
 pub const ota_flags = zcfg.ota_flags;
 pub const systemd_exporter = platform.systemd_exporter;
+/// The single process-wide decision about whether escapes may be emitted.
+pub const capability = render.capability;
 /// Standard application directories, resolved per platform and per XDG variable.
 pub const xdg = platform.xdg;
 /// Running a child process, captured or streamed.
 pub const process = platform.process;
+/// Graceful shutdown: conventional signals, as a poll-able flag.
+pub const signal = platform.signal;
 /// A single-line spinner for a step whose total is unknown.
 pub const spinner = render.spinner;
 
@@ -2064,6 +2068,24 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             var out_file_writer: std.Io.File.Writer = .init(.stdout(), io, &out_buffer);
             var err_file_writer: std.Io.File.Writer = .init(.stderr(), io, &err_buffer);
 
+            // Both streams are probed, not just stdin.
+            //
+            // `is_tty` was one bit taken from **stdin**, and `color_enabled` was
+            // declared on `Ctx` and never set or read anywhere. So `prog > file`
+            // still emitted colour, because stdin was the terminal the user was
+            // typing at - which is precisely the case a colour gate exists to
+            // catch, and neither field could catch it.
+            //
+            // Best-effort: a redirected or closed stream is not an error worth
+            // failing startup over, so it degrades to "not a terminal".
+            const stdin_is_tty = std.Io.File.stdin().isTty(io) catch false;
+            const stdout_is_tty = std.Io.File.stdout().isTty(io) catch false;
+            const caps = render.capability.decide(init.environ_map, stdout_is_tty, stdin_is_tty);
+            // Installed once, before any command runs, and read by every renderer
+            // afterwards. This is the only place the environment is consulted for
+            // it, so `NO_COLOR` and a piped stdout cannot disagree with each other.
+            render.capability.set(caps);
+
             const ctx = Ctx{
                 .allocator = init.gpa,
                 .in = &in_file_reader.interface,
@@ -2072,9 +2094,8 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 .state = state,
                 .env_map = init.environ_map,
                 .io = io,
-                // A tty check is best-effort: a redirected or closed stdin is not an
-                // error worth failing startup over, so it degrades to "not a tty".
-                .is_tty = std.Io.File.stdin().isTty(io) catch false,
+                .is_tty = stdin_is_tty,
+                .color_enabled = caps.color,
                 .output_format = .text,
             };
 
