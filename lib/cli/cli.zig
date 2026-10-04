@@ -87,6 +87,8 @@ pub const process = platform.process;
 pub const signal = platform.signal;
 /// Leveled logging, as readable text or machine-readable JSON.
 pub const log = platform.log;
+/// A line editor with echo suppression, for text and password entry.
+pub const text_input = interact.text_input;
 /// A single-line spinner for a step whose total is unknown.
 pub const spinner = render.spinner;
 

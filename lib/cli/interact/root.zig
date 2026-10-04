@@ -11,6 +11,8 @@ const std = @import("std");
 
 /// Interactive prompts built on `render/tea`: confirm, select, multi-select.
 pub const prompt = @import("prompt.zig");
+/// A line editor with echo suppression, for text and password entry.
+pub const text_input = @import("text_input.zig");
 /// Raw (uncooked) terminal mode, Windows and POSIX.
 pub const raw_terminal = @import("raw_terminal.zig");
 /// A line buffer for multi-line text editing.
@@ -26,6 +28,7 @@ pub const widgets = @import("widgets.zig");
 test {
     // Shallow by design; every namespace is named. See `app/cli/lib/ROADMAP.md` M-2.
     std.testing.refAllDecls(prompt);
+    std.testing.refAllDecls(text_input);
     std.testing.refAllDecls(raw_terminal);
     std.testing.refAllDecls(rope);
     std.testing.refAllDecls(supervisor);
