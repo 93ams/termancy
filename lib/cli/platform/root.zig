@@ -34,6 +34,8 @@ pub const oauth = @import("oauth.zig");
 pub const openapi = @import("openapi.zig");
 /// Panic rendering and crash reporting.
 pub const panic = @import("panic.zig");
+/// The opt-in panic hook: a banner, a stack trace and a report on disk.
+pub const crash = @import("crash.zig");
 /// Process title and argv scrubbing.
 pub const proctitle = @import("proctitle.zig");
 /// Path-allowance policy for generated code. Fails open; see ROADMAP 5.4.
@@ -72,6 +74,7 @@ test {
     std.testing.refAllDecls(oauth);
     std.testing.refAllDecls(openapi);
     std.testing.refAllDecls(panic);
+    std.testing.refAllDecls(crash);
     std.testing.refAllDecls(proctitle);
     std.testing.refAllDecls(sandbox);
     std.testing.refAllDecls(sys);
