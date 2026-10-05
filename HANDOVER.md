@@ -1,7 +1,8 @@
 # HANDOVER — start here
 
 **For:** the next session or agent picking up this work.
-**State:** every gate is green, **nothing is committed**. Read §1, then §2, then pick from §3.
+**State:** every gate is green, and the tree is **committed** as `d5c1d8f`. Read §0,
+then §1, then pick from §3.
 
 Last verified numbers (run them yourself before trusting anything here):
 
@@ -11,25 +12,68 @@ Last verified numbers (run them yourself before trusting anything here):
 | `zig build test-direct --summary all` | `13/13 steps succeeded` |
 | `zig fmt --check build.zig build lib app` | exit 0, no output |
 | `zig build` | exit 0; `.\zig-out\bin\tigershark.exe --version` → `v0.1.0` |
-| `git status --porcelain` | ~62 changed paths, all uncommitted |
+| `git status --porcelain` | empty |
+
+**Two traps in this environment, both paid for:**
+
+1. `zig build … 2>&1` in PowerShell sets `$LASTEXITCODE` to **1** even when the
+   build succeeds, because Zig writes its summary to stderr and PowerShell turns
+   that into a `NativeCommandError`. Redirect with `*> $file` instead, or check the
+   `N/N steps succeeded` line rather than the exit code.
+2. `zig build test --summary all` does **not** reprint individual test names for a
+   cached step. To see the `N/M test.<module>.test.<Name>...OK` lines you must run a
+   root directly, e.g.
+   `zig test --dep cfg --dep util "-Mroot=lib/cli/root.zig" "-Mcfg=lib/cfg/root.zig" "-Mutil=lib/util/root.zig"`.
+   Redirecting *that* with `>` writes **UTF-16LE**, and PowerShell wraps the first
+   line in an error record; parse with `[System.IO.File]::ReadAllLines` and a regex
+   that tolerates a `zig : ` prefix, or you will silently analyse 322 of 323 tests.
 
 If you see `OutOfMemory` from the compiler, or test binaries exiting `255` with no test
-failure, **check free disk space first**: `.zig-cache` grew to 7.6 GB during this work and a
-nearly-full volume produced both symptoms, neither of which was a code failure. Deleting
-`.zig-cache` restores ~8 GB and the next build recreates it.
+failure, **check free disk space first**: `.zig-cache` had grown to **11 GB** here, and
+deleting it dropped a full rebuild's cache to **0.15 GB**. The 11 GB was accumulated
+legacy garbage, not the cost of this tree. A nearly-full volume produces both symptoms
+and neither is a code failure.
 
 ---
 
-## 1. Do this first: commit the green tree
+## 0. What the previous session's open item turned out to be
 
-The roadmap's own item **C-3** asks for it, and every remaining task lands more easily from
-a known-good base. ~62 paths are uncommitted, including two new files
-(`lib/cli/platform/state.zig`, `lib/cli/platform/self_exe.zig`), six renames
-(`lib/cfg_ops/*` → `app/cfg/lib/ops/*`, shown by git as `R100`, i.e. content-identical), and
-one deletion (`lib/cli/version.zig`, superseded — see the note left in `lib/cli/cli.zig`).
+§3's first task — "find the one dead test in `lib/`" — is **resolved, and there is no
+dead test**. The measured claim (479 declarations, 478 runs) was real, but the cause
+was an accounting artifact, not a lost test. Read `lib/cli/ROADMAP.md` item **C-6**
+for the full method and the two control experiments; the short version:
 
-Inspect before committing: `git status --porcelain`, `git diff --stat`, and
-`git diff --cached -M --name-status` (the renames are staged).
+* All **471 named** declarations in `lib/` execute (cli 318 + cfg 123 + util 30).
+  Verified by running each module root directly and pairing every declaration with
+  the executed name that served it, allowing for the instantiation-qualified prefix
+  a test inside a generic container runs under.
+* Those 471 are 471 of the 479; the remaining 8 are **bare `test { ... }` blocks**,
+  every one of them a `refAllDecls` collector with **no test body**. The runner
+  names 7 of them; the one it never names is `lib/cli/test/root.zig`, a second entry
+  point to the same suite that `lib/cli/root.zig` does not import.
+* No file is unreachable: of 100 `lib/` sources, **60 declare tests and zero are
+  imported by nothing**.
+* The handover's nominated suspect, `render/tea.zig:313`, runs — it was observed
+  passing at `323/323`.
+
+**Do not re-run this investigation.** If you update C-4's pinned numbers, count named
+declarations and executable blocks, never bare `test {` blocks.
+
+---
+
+## 1. The commit that landed
+
+`d5c1d8f` — `feat(cli): command lifecycles, feature gates and real platform modules`.
+53 paths: 43 modified, 4 added (`HANDOVER.md`, `ROADMAP.md`,
+`lib/cli/platform/{state,self_exe}.zig`), 6 renames (`lib/cfg_ops/*` →
+`app/cfg/lib/ops/*`, content-identical `R100`), 1 deleted (`lib/cli/version.zig`).
+
+It went out as **one** commit, not the two ROADMAP C-3 asked for: by the time the
+tree was green the change was a reviewed session rather than an "as-found" dump, and
+C-2's formatting fix was already folded into the files it touched. C-3 records that
+deviation and why. Read the commit body — it is the detailed record of every feature,
+defect and measurement from this session.
+
 
 ## 2. What already landed in this session — do not redo it
 
@@ -72,15 +116,9 @@ B-2/B-3/B-4/B-5/B-6 carry their measured resolutions.
 
 ## 3. Open work, in the order I would take it
 
-1. **Find the one dead test in `lib/`.** Measured: `lib/` has 479 test declarations
-   (471 named + 8 anonymous `test {` blocks) but only **478 run** (util 31 + cfg 124 +
-   cli 323). `app/` reconciles exactly (110 = 110), so this is a `lib/` problem. Method:
-   capture the suite's emitted names (`N/588 test.<module>.test.<Name>…OK`), extract the
-   declared names with `^\s*test "([^"]+)"`, and diff the sets. A test inside a **generic
-   container** that is never instantiated does not run — `lib/cli/render/tea.zig:313` is
-   such a test and only runs because its instantiation is reached — so check for that as
-   well as for a file no aggregator reaches. This is the same failure mode as the roadmap's
-   opening item (C-1: 91 dead tests), so it is worth the hour.
+1. ~~**Find the one dead test in `lib/`.**~~ **Resolved — see §0. There is no dead
+   test; the 479-vs-478 gap was a body-less `refAllDecls` aggregator in
+   `lib/cli/test/root.zig`, which is not a lost test.** Do not repeat the search.
 2. **`lib/util/mmap.zig`'s POSIX port** (the whole residue of B-6). Three dead APIs:
    `std.posix.open` → `std.posix.openat(std.posix.AT.FDCWD, …)` (works),
    `std.posix.close` → `std.posix.system.close(fd)` (works; its result is an error *code*,
@@ -137,6 +175,20 @@ then you must re-run a plain `zig build` before the Windows binaries work again.
   output. `ROADMAP.md` §0.3 defines the status markers; §0.4 lists items that name paths this
   repository does not contain (`lib/resp`, `app/kvs`, `app/scp`, `app/bus`, `src/zig`,
   `lib/util/slab.zig`) — those are design history, not a backlog.
+* **A test count is a count of two different things.** Zig's compiler and Zig's test
+  runner disagree by one on this tree, and both are right. A bare `test { refAllDecls(…) }`
+  block has no body, so the runner never names it — but it still counts as a declaration.
+  Counting bare `test {` blocks as tests manufactured the "479 declared, 478 run" gap that
+  cost the previous session an audit. When a count drives a search, *prove* the missing
+  item exists (a failing test, a compiler error, a control experiment) before hunting it.
+  See ROADMAP C-6.
+* **This session's own measurement bug is the cautionary tale for the above.** The first
+  extraction of executed test names reported 322 of 323 tests and only four of the five
+  anonymous blocks, because PowerShell had wrapped the *first* line (`zig : 1/323
+  root.test_0...OK`) in an error record, and the `>` redirect had written UTF-16. A
+  scope-blind comparison then "found" 259 unexecuted declarations that were simply in
+  other modules. Two wrong analyses, both confident, both from *how the data was
+  captured* rather than what it said. Check the capture before trusting the conclusion.
 
 ## 6. Zig 0.16 spellings this session had to discover
 

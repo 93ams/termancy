@@ -206,18 +206,59 @@ broken was worse.
 *Note:* `app/cfg/lib/cfg.zig` was among the 39 and was reformatted, but it **still
 does not compile** — formatting it does not fix `.Slice`. See §5.1.
 
-### C-3 · `high` · Commit the 63 untracked files · **[planned — owner action]**
+### C-3 · `high` · Commit the 63 untracked files · **[done]**
 
-`lib/cli` is 63 untracked files plus 2 modified ones. Until this lands there is
-no history for any of it, so C-2's diff and every later refactor are
-unreviewable. Commit **in two commits, in this order**, so the history is
-readable:
+*Landed as one commit, `d5c1d8f`, not the two this item asked for.* The item's
+reasoning for splitting - a reviewable "as-found" baseline - assumed the 63 files
+were an unreviewed dump. By the time the tree was green, the change was a reviewed
+session of features, fixes and a module move, and the formatting fix (C-2) had long
+since been folded into the files it touched, so no whitespace-only commit was
+recoverable. One commit with a body that names every feature, defect and measurement
+is more useful to `git blame` here than an artificial split. The renames
+(`lib/cfg_ops/*` to `app/cfg/lib/ops/*`) are `R100`, so they survive as renames.
 
-1. **The code as it stands** — all 63 files, no edits. This is the "as-found"
-   baseline and it is the commit that makes `git blame` possible.
-2. **The formatting fix** (C-2) — whitespace only, so a reader can skip it.
+### C-6 · `medium` · The "one dead test in `lib/`" was an accounting artifact · **[resolved, no defect]**
 
-Do not fold functional work into either commit.
+This item records an investigation rather than a fix, because the finding is that
+there was nothing to fix and the number that motivated the search cannot be
+reproduced. It exists so the next session does not run the same hour again.
+
+*The claim.* The handover asserted `lib/` declares **479** tests but runs **478**
+(util 31 + cfg 124 + cli 323), with `app/` reconciling exactly at 110, and
+nominated `render/tea.zig:313` as the place to look.
+
+*What was measured.* Every named declaration in `lib/` executes. The three module
+roots were run directly - the only way to see per-test names, since
+`zig build test --summary all` does not reprint cached steps - and each declaration
+was paired with the executed name that served it, allowing for the
+instantiation-qualified prefix a test inside a generic container runs under
+(`render.tea.Program(...).test....`). Result: **471 named declarations, 471 executed,
+0 missing**, in every module. `tea.zig:313` runs (`323/323`, `...OK`), as does its
+`i18n`-style sibling under an instantiation prefix.
+
+*The arithmetic.* 479 does reproduce, exactly: **471 named** declarations (cli 318,
+cfg 123, util 30) **+ 8 bare `test { ... }` blocks**. The runner executes **478**:
+471 named plus **7** of those 8 blocks. The eight blocks are `lib/cli/root.zig`,
+`lib/cli/test/root.zig`, and one in each of `render/`, `interact/`, `secrets/` and
+`platform/`, plus one each in the `cfg` and `util` roots. Every one of them is a
+collector whose body is nothing but `refAllDecls` calls - there is no test body
+anywhere in the eight - so the off-by-one is *which collector the runner names*,
+not a test with a body that never runs.
+
+*The one that does not run*, isolated by control experiment: the block in
+`lib/cli/test/root.zig`. Adding `_ = 1;` to it leaves the runner at `323/323`, and
+so does the same edit to `lib/cli/root.zig`'s. `lib/cli/root.zig` imports
+`test/cli_test.zig` directly, so `test/root.zig` is a second entry point nothing
+reaches - its own header comment says as much. It is the entire "dead test" in
+`lib/`, and it has no body to lose, so nothing is untested.
+
+*And no file is unreachable.* A static check over all 100 `lib/` sources found 60
+files declaring tests, none a `root.zig`, and **zero** that no other file imports by
+name - so there is no orphaned suite of the kind C-1 found. The reachability risk
+that made this worth checking is real; the instance was not. Verdict: **the "one
+dead test" is the counting of a body-less aggregator, not a lost test.** If C-4's
+pinned numbers are ever updated, count named declarations and executable blocks -
+never bare `test {` blocks.
 
 ### C-4 · `medium` · Pin the test count so a lost suite fails loudly · **[done]**
 
