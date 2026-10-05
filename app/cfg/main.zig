@@ -20,9 +20,20 @@
 //! file exists to root the artifact and nothing more.
 
 const std = @import("std");
+const cli = @import("cli");
 const cfg_cmd = @import("cmd/root.zig");
 
+/// The panic handler for this binary. See `app/cli/main.zig` for what it prints and
+/// why the JSON report carries no argv or environment.
+pub const panic = cli.crash.Panic(.{
+    .app_name = "cfg",
+    .report_dir = ".cache",
+});
+
 pub fn main(init: std.process.Init) !void {
+    // Arms the crash reporter before anything else can panic.
+    cli.crash.install(init.io);
+
     var state = cfg_cmd.State{};
     try cfg_cmd.CfgApp.run(&state, cfg_cmd.RootCmd, init);
 }

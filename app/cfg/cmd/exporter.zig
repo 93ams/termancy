@@ -1,7 +1,7 @@
 //! `config export` - write the resolved configuration as environment variables.
 //!
 //! Renders either a `.env` file or a systemd unit. All the work happens in
-//! `app/cfg/lib/cfg_ops/exporter.zig`; this file parses flags and calls it.
+//! `app/cfg/lib/ops/exporter.zig`; this file parses flags and calls it.
 //!
 //! ## Why `ConfigT` is a parameter here
 //!
@@ -12,7 +12,7 @@
 
 const std = @import("std");
 const cfg = @import("cfg");
-const ops = @import("app_cfg_ops");
+const ops = @import("../lib/ops/root.zig");
 
 /// Flags for `config export`.
 pub const ExportFlags = struct {

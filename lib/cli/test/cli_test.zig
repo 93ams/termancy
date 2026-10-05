@@ -190,7 +190,9 @@ test "Help Text: Passing --help triggers comptime-generated usage string" {
     const output = out_buf[0 .. out_buf.len - out.unusedCapacityLen()];
     try testing.expect(std.mem.indexOf(u8, output, "Usage: mycli [command]") != null);
     try testing.expect(std.mem.indexOf(u8, output, "Root command") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "auth\tAuthentication commands") != null);
+    // Aligned rows rather than tab-separated ones: the descriptions of two commands
+    // now start in the same column, which a tab stop cannot guarantee.
+    try testing.expect(std.mem.indexOf(u8, output, "  auth  Authentication commands") != null);
     try testing.expect(std.mem.indexOf(u8, output, "--verbose, -v") != null);
 
     var out2_buf: [4096]u8 = undefined;
@@ -755,8 +757,10 @@ test "Hidden / Deprecated Flag Lifecycle" {
     try App.execute(DepCmd, help_ctx, &help_args, &chain_help);
 
     const help_output = out_help_buf[0 .. out_help_buf.len - out_help.unusedCapacityLen()];
-    try testing.expect(std.mem.indexOf(u8, help_output, "--old_flag") == null);
-    try testing.expect(std.mem.indexOf(u8, help_output, "--new_flag") != null);
+    // Help renders the command-line spelling, so a field named `new_flag` is
+    // advertised as `--new-flag`; the underscore spelling still parses.
+    try testing.expect(std.mem.indexOf(u8, help_output, "--old-flag") == null);
+    try testing.expect(std.mem.indexOf(u8, help_output, "--new-flag") != null);
 }
 
 test "Typo Correction: Levenshtein distance suggestions on UnknownCommand" {
@@ -1227,7 +1231,14 @@ test "Doc generation: markdown and man page" {
         try testing.expect(std.mem.indexOf(u8, result, ".TH mycli 1") != null);
         try testing.expect(std.mem.indexOf(u8, result, ".SH NAME") != null);
         try testing.expect(std.mem.indexOf(u8, result, ".SH SYNOPSIS") != null);
-        try testing.expect(std.mem.indexOf(u8, result, ".SH SUBCOMMANDS") != null);
+        // The section is COMMANDS, and each subcommand gets its own `.SS` entry rather
+        // than only being listed - a man page that stops at depth one hides a nested
+        // CLI's whole structure.
+        try testing.expect(std.mem.indexOf(u8, result, ".SH COMMANDS") != null);
+        try testing.expect(std.mem.indexOf(u8, result, ".SS login") != null);
+        // `mycli`'s root declares `--verbose`, so the page has an OPTIONS section.
+        try testing.expect(std.mem.indexOf(u8, result, ".SH OPTIONS") != null);
+        try testing.expect(std.mem.indexOf(u8, result, ".B --verbose, -v") != null);
     }
 }
 
@@ -1972,10 +1983,15 @@ test "Data Flow: DryRunLedger mutation tracking and diff rendering" {
 
     var diff_buf: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&diff_buf);
-    try ledger.renderDiff(&writer);
+    // The colour decision is the caller's, and a test is a stream that is not a terminal,
+    // so this is the no-escapes render.
+    try ledger.renderDiff(&writer, false);
     const out = diff_buf[0 .. diff_buf.len - writer.unusedCapacityLen()];
 
     try testing.expect(std.mem.indexOf(u8, out, "=== DRY RUN: Proposed Mutations ===") != null);
+    // The property the parameter exists for: a ledger piped into a file or through `grep`
+    // must not carry escape codes.
+    try testing.expect(std.mem.indexOfScalar(u8, out, 0x1b) == null);
     try testing.expect(std.mem.indexOf(u8, out, "[+CREATE]") != null);
     try testing.expect(std.mem.indexOf(u8, out, "/etc/tigershark.conf") != null);
     try testing.expect(std.mem.indexOf(u8, out, "[-DELETE]") != null);
@@ -2470,41 +2486,2510 @@ test "rejection suggests the nearest subcommand" {
 
 // --- Kebab-case flags for snake_case fields ----------------------------------
 
-/// Resolves a flag field's name the way the parser does: `-` becomes `_`.
-///
-/// Mirrors the normalisation in `cli.zig`''s `assignFlag`. Reproduced here rather than
-/// driven through a command because the executable assertion is the *parse* behaviour, and
-/// building a whole inline `App` to reach it tests more plumbing than the thing at issue.
-fn resolveFlagName(comptime FlagsType: type, key: []const u8) ?[]const u8 {
-    var buf: [128]u8 = undefined;
-    var effective = key;
-    if (std.mem.indexOfScalar(u8, key, '-') != null) {
-        for (key, 0..) |c, i| buf[i] = if (c == '-') '_' else c;
-        effective = buf[0..key.len];
-    }
-    inline for (std.meta.fields(FlagsType)) |field| {
-        if (std.mem.eql(u8, effective, field.name)) return field.name;
-    }
-    return null;
-}
-
-test "a dashed flag resolves to the snake_case field" {
-    // A Zig field cannot contain `-`, so `dry_run` was reachable only as `--dry_run`. The
-    // convention a user expects is `--dry-run`, and the mismatch surfaced as
-    // `Unknown flag 'dry-run'` - measured on `config format --dry-run`. Both spellings now
-    // resolve, so nothing that worked stops working.
+test "a dashed flag resolves to the snake_case field, through the parser" {
+    // A Zig field cannot contain `-`, so `dry_run` was reachable only as `--dry_run`.
+    // The convention a user expects is `--dry-run`, and the mismatch surfaced as
+    // `Unknown flag 'dry-run'` - measured on `config format --dry-run`.
+    //
+    // This drives the real parser. An earlier version of this test re-implemented the
+    // normalisation locally and asserted against its own copy, so it passed while the
+    // feature was absent - the failure mode a test is supposed to prevent.
     const DashFlags = struct {
         dry_run: bool = false,
         no_align: bool = false,
         port: u16 = 0,
     };
 
-    try testing.expectEqualStrings("dry_run", resolveFlagName(DashFlags, "dry-run").?);
-    try testing.expectEqualStrings("no_align", resolveFlagName(DashFlags, "no-align").?);
-    // The underscore spelling is unchanged.
-    try testing.expectEqualStrings("dry_run", resolveFlagName(DashFlags, "dry_run").?);
-    // A name with no dash is untouched, and an unknown name still misses.
-    try testing.expectEqualStrings("port", resolveFlagName(DashFlags, "port").?);
-    try testing.expect(resolveFlagName(DashFlags, "dry-run-extra") == null);
-    try testing.expect(resolveFlagName(DashFlags, "nope") == null);
+    const Cmd = comptime App.command(.{ .name = "dash", .flags = DashFlags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(DashFlags)) !void {
+            try ctx.out.print("{}|{}|{d}", .{ flags.dry_run, flags.no_align, flags.port });
+        }
+    }.run);
+
+    var out_buf: [256]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var err_buf: [256]u8 = undefined;
+    var err = std.Io.Writer.fixed(&err_buf);
+    var env_map = std.process.Environ.Map.init(testing.allocator);
+    defer env_map.deinit();
+
+    var args = [_][]const u8{ "--dry-run", "--no-align", "--port=7" };
+    try runCmd(App, @TypeOf(Cmd), &args, &out, &err, &env_map);
+    try testing.expectEqualStrings("true|true|7", out.buffered());
+
+    // The underscore spelling keeps working, and a near-miss is still unknown.
+    out = std.Io.Writer.fixed(&out_buf);
+    var args2 = [_][]const u8{ "--dry_run", "--port", "9" };
+    try runCmd(App, @TypeOf(Cmd), &args2, &out, &err, &env_map);
+    try testing.expectEqualStrings("true|false|9", out.buffered());
+
+    out = std.Io.Writer.fixed(&out_buf);
+    var args3 = [_][]const u8{"--dry-run-extra"};
+    try testing.expectError(error.UnknownFlag, runCmd(App, @TypeOf(Cmd), &args3, &out, &err, &env_map));
+}
+
+// --- Ergonomic registration: `App.command(meta, run)` ------------------------
+//
+// The metadata lives in one object and the body in another. The body's own shape
+// decides which of these it is, so an author writes the parameters they want:
+//
+//   fn (ctx)                 fn (ctx, flags)        fn (ctx, args)
+//   fn (ctx, flags, args)    fn (ctx, args, flags)
+//
+// Where a test needs a different framework configuration (a config file, a help
+// renderer, a built-in version), it declares its own `App` and uses that instance
+// consistently - a command is specialised to the app it was built from.
+
+/// Runs one command *type* through `AppT`, with in-memory streams.
+///
+/// The type rather than a value, because `App.command` produces a command whose every
+/// field has a default: `CmdT{}` is the command. Passing a value would need the value
+/// itself to be comptime-known, which a `const` local inside a test body is not.
+fn runCmd(
+    comptime AppT: type,
+    comptime CmdT: type,
+    args: []const []const u8,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    env_map: *std.process.Environ.Map,
+) !void {
+    var state: usize = 0;
+    return runCmdState(AppT, CmdT, args, out, err, env_map, &state);
+}
+
+/// `runCmd`, with the state value the caller owns - for a body that records
+/// something where the assertion can see it.
+fn runCmdState(
+    comptime AppT: type,
+    comptime CmdT: type,
+    args: []const []const u8,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    env_map: *std.process.Environ.Map,
+    state: *usize,
+) !void {
+    var in_buf: [64]u8 = undefined;
+    var in_reader = std.Io.Reader.fixed(&in_buf);
+    const ctx = AppT.Ctx{
+        .allocator = testing.allocator,
+        .in = &in_reader,
+        .out = out,
+        .err = err,
+        .state = state,
+        .env_map = env_map,
+        // A real `Io`, not `undefined`: several tests below read config files, and a
+        // command under the harness should do platform I/O rather than walk into
+        // undefined behaviour.
+        .io = std.testing.io,
+    };
+    const cmd: CmdT = .{};
+    var chain = try AppT.ExecutionChain.init(testing.allocator, args.len + 8);
+    defer chain.deinit(testing.allocator);
+    try AppT.execute(cmd, ctx, args, &chain);
+}
+
+/// The in-memory rig the tests below share: two writers and an environment map.
+///
+/// The buffers are fields so nothing is allocated, and `reset` puts the writers back
+/// at the start so one test can drive several invocations and inspect each one.
+const Rig = struct {
+    out_buf: [8192]u8 = undefined,
+    err_buf: [8192]u8 = undefined,
+    out: std.Io.Writer = undefined,
+    err: std.Io.Writer = undefined,
+    env: std.process.Environ.Map = undefined,
+
+    fn init(self: *Rig) void {
+        self.out = std.Io.Writer.fixed(&self.out_buf);
+        self.err = std.Io.Writer.fixed(&self.err_buf);
+        self.env = std.process.Environ.Map.init(testing.allocator);
+    }
+
+    fn deinit(self: *Rig) void {
+        self.env.deinit();
+    }
+
+    fn reset(self: *Rig) void {
+        self.out = std.Io.Writer.fixed(&self.out_buf);
+        self.err = std.Io.Writer.fixed(&self.err_buf);
+    }
+
+    fn stdout(self: *Rig) []const u8 {
+        return self.out.buffered();
+    }
+
+    fn stderr(self: *Rig) []const u8 {
+        return self.err.buffered();
+    }
+};
+
+test "command: fn(ctx, flags, args) keeps positionals out of the flags" {
+    const Flags = struct { loud: bool = false };
+    const Args = struct { name: []const u8 = "" };
+
+    const Cmd = comptime App.command(.{
+        .name = "greet",
+        .description = "Greet someone",
+        .flags = Flags,
+        .args = Args,
+    }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags), args: Args) !void {
+            try ctx.out.print("{s}{s}", .{ args.name, if (flags.loud) "!" else "" });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "greet", "world", "--loud" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("world!", rig.stdout());
+
+    // The same argument with the flag first: order on the command line is the user's.
+    rig.reset();
+    var args2 = [_][]const u8{ "--loud", "there" };
+    try runCmd(App, @TypeOf(Cmd), &args2, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("there!", rig.stdout());
+}
+
+test "command: fn(ctx, args, flags) is detected too" {
+    const Flags = struct { repeat: u8 = 1 };
+    const Args = struct { word: []const u8 = "" };
+
+    const Cmd = comptime App.command(.{
+        .name = "echo",
+        .flags = Flags,
+        .args = Args,
+    }, struct {
+        fn run(ctx: App.Ctx, args: Args, flags: App.Flags(Flags)) !void {
+            var i: u8 = 0;
+            while (i < flags.repeat) : (i += 1) try ctx.out.print("{s}", .{args.word});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "hi", "--repeat", "3" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("hihihi", rig.stdout());
+}
+
+test "command: a body may also take only the context, or only the flags" {
+    const Simple = struct { n: u8 = 0 };
+
+    const CtxOnly = comptime App.command(.{ .name = "ctx_only" }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("ctx");
+        }
+    }.run);
+
+    const FlagsOnly = comptime App.command(.{ .name = "flags_only", .flags = Simple }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Simple)) !void {
+            try ctx.out.print("{d}", .{flags.n});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{};
+    try runCmd(App, @TypeOf(CtxOnly), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("ctx", rig.stdout());
+
+    // The two-parameter form with no `args` in the metadata is `(ctx, flags)`.
+    rig.reset();
+    var args2 = [_][]const u8{ "--n", "5" };
+    try runCmd(App, @TypeOf(FlagsOnly), &args2, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("5", rig.stdout());
+}
+
+test "command: a returned value is rendered, as CommandWithReturn did" {
+    const Row = struct { name: []const u8, size: u32 };
+
+    const Cmd = comptime App.command(.{ .name = "row" }, struct {
+        fn run(ctx: App.Ctx) !Row {
+            _ = ctx;
+            return .{ .name = "alpha", .size = 3 };
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // `--output json` reaches the body as `output_format`, and the framework renders
+    // the returned struct.
+    var args = [_][]const u8{"--output=json"};
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "\"name\":\"alpha\"") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "\"size\":3") != null);
+}
+
+test "command: a body-less command routes and prints its help" {
+    const Child = comptime App.command(.{ .name = "child", .description = "A child" }, null);
+    const Root = comptime App.command(.{
+        .name = "root",
+        .description = "A root",
+        .subcommands = .{Child},
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{"child"};
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Usage: child") != null);
+}
+
+test "command: the metadata object may be a named constant" {
+    const Flags = struct { level: u8 = 0 };
+    const meta = .{
+        .name = "named",
+        .description = "Registered from a named metadata object",
+        .flags = Flags,
+        .aliases = &.{"n"},
+    };
+
+    const Cmd = comptime App.command(meta, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("level={d}", .{flags.level});
+        }
+    }.run);
+
+    // Reached through a parent, which is where an alias means anything: the token that
+    // selects a command is matched against its name *or* its aliases.
+    const Parent = comptime App.command(.{
+        .name = "parent",
+        .subcommands = .{Cmd},
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "n", "--level", "2" };
+    try runCmd(App, @TypeOf(Parent), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("level=2", rig.stdout());
+}
+
+// --- Parsing -----------------------------------------------------------------
+
+test "short-flag grouping assigns every letter, and a value flag ends the group" {
+    const Flags = struct {
+        force: bool = false,
+        all: bool = false,
+        verbose: u8 = 0,
+        tag: []const u8 = "",
+        pub const meta = .{
+            .force = .{ .short = 'f' },
+            .all = .{ .short = 'a' },
+            .verbose = .{ .short = 'v', .count = true },
+            .tag = .{ .short = 't' },
+        };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "grp", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{}|{}|{d}|{s}", .{ flags.force, flags.all, flags.verbose, flags.tag });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // `-favv` is four flags; each letter that is a boolean is set, and the count
+    // accumulates per occurrence.
+    var args = [_][]const u8{"-favv"};
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("true|true|2|", rig.stdout());
+
+    // A value-taking flag ends the cluster: `-tvalue` is `-t value`, so `value` is
+    // not read as more flags.
+    rig.reset();
+    var args2 = [_][]const u8{"-tvalue"};
+    try runCmd(App, @TypeOf(Cmd), &args2, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("false|false|0|value", rig.stdout());
+
+    // And after a boolean cluster: `-fat=tagged`.
+    rig.reset();
+    var args3 = [_][]const u8{"-fat=tagged"};
+    try runCmd(App, @TypeOf(Cmd), &args3, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("true|true|0|tagged", rig.stdout());
+}
+
+test "long flags accept both --flag=value and --flag value" {
+    const Flags = struct {
+        host: []const u8 = "",
+        port: u16 = 0,
+    };
+
+    const Cmd = comptime App.command(.{ .name = "net", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{s}:{d}", .{ flags.host, flags.port });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "--host=a.example", "--port", "8080" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("a.example:8080", rig.stdout());
+}
+
+test "repeated flags collect every occurrence into a slice" {
+    const Flags = struct {
+        header: []const []const u8 = &.{},
+        include: []const u16 = &.{},
+        pub const meta = .{
+            .header = .{ .short = 'H', .help = "An HTTP header" },
+            .include = .{ .short = 'i' },
+        };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "fetch", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            for (flags.header, 0..) |h, i| {
+                if (i > 0) try ctx.out.writeAll(",");
+                try ctx.out.writeAll(h);
+            }
+            try ctx.out.writeAll("|");
+            for (flags.include, 0..) |n, i| {
+                if (i > 0) try ctx.out.writeAll(",");
+                try ctx.out.print("{d}", .{n});
+            }
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "-H", "Accept: json", "--header=Auth: x", "-i", "3", "--include", "7" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("Accept: json,Auth: x|3,7", rig.stdout());
+
+    // Nothing given: empty lists, not undefined values.
+    rig.reset();
+    var args2 = [_][]const u8{};
+    try runCmd(App, @TypeOf(Cmd), &args2, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("|", rig.stdout());
+}
+
+test "positional arguments: required ones are refused when missing, variadic ones are collected" {
+    const Args = struct {
+        first: []const u8,
+        rest: []const []const u8 = &.{},
+    };
+
+    const Cmd = comptime App.command(.{ .name = "collect", .args = Args }, struct {
+        fn run(ctx: App.Ctx, args: Args) !void {
+            try ctx.out.print("{s}|{d}", .{ args.first, args.rest.len });
+            for (args.rest) |r| try ctx.out.print("|{s}", .{r});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "a", "b", "c" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("a|2|b|c", rig.stdout());
+
+    // No argument at all: the first positional has no default, so it is required.
+    // (The error is what a non-interactive caller sees; the harness is not a TTY.)
+    rig.reset();
+    var none = [_][]const u8{};
+    try testing.expectError(
+        error.MissingRequiredPositionalArgument,
+        runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env),
+    );
+}
+
+test "mutually exclusive groups are declared once, on the command" {
+    const Flags = struct {
+        use_tcp: bool = false,
+        use_udp: bool = false,
+        use_quic: bool = false,
+    };
+
+    const Cmd = comptime App.command(.{
+        .name = "transport",
+        .flags = Flags,
+        .mutually_exclusive = &.{&.{ "use_tcp", "use_udp", "use_quic" }},
+    }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{}-{}-{}", .{ flags.use_tcp, flags.use_udp, flags.use_quic });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // One of the three is fine.
+    var ok = [_][]const u8{"--use-tcp"};
+    try runCmd(App, @TypeOf(Cmd), &ok, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("true-false-false", rig.stdout());
+
+    // Two is a usage error, and the message names both.
+    rig.reset();
+    var bad = [_][]const u8{ "--use-tcp", "--use-quic" };
+    try testing.expectError(error.ConflictingFlags, runCmd(App, @TypeOf(Cmd), &bad, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "cannot be used with") != null);
+}
+
+test "environment fallback: default, then environment, then the command line" {
+    const Flags = struct {
+        port: u16 = 3000,
+        pub const meta = .{ .port = .{ .env = "APP_PORT" } };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "env_cmd", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{d}", .{flags.port});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // Nothing anywhere: the struct's default.
+    var none = [_][]const u8{};
+    try runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("3000", rig.stdout());
+
+    // The environment supplies it.
+    try rig.env.put("APP_PORT", "8080");
+    rig.reset();
+    try runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("8080", rig.stdout());
+
+    // The command line wins over the environment, which is the whole point of an
+    // explicit flag.
+    rig.reset();
+    var given = [_][]const u8{ "--port", "9999" };
+    try runCmd(App, @TypeOf(Cmd), &given, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("9999", rig.stdout());
+}
+
+test "environment fallback satisfies a flag that has no default" {
+    // A required flag is one with no default; the environment must be able to answer
+    // it, or `meta.<field>.env` is a promise the framework does not keep.
+    const Flags = struct {
+        token: []const u8,
+        pub const meta = .{ .token = .{ .env = "APP_TOKEN" } };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "auth_cmd", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{s}", .{flags.token});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var none = [_][]const u8{};
+    try testing.expectError(
+        error.MissingRequiredFlag,
+        runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env),
+    );
+
+    try rig.env.put("APP_TOKEN", "from-env");
+    rig.reset();
+    try runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-env", rig.stdout());
+}
+
+test "a repeated flag can be supplied from the environment as a comma-separated list" {
+    const Flags = struct {
+        host: []const []const u8 = &.{},
+        pub const meta = .{ .host = .{ .env = "APP_HOSTS" } };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "hosts_cmd", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            for (flags.host, 0..) |h, i| {
+                if (i > 0) try ctx.out.writeAll(",");
+                try ctx.out.writeAll(h);
+            }
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    try rig.env.put("APP_HOSTS", "a.example, b.example");
+
+    var none = [_][]const u8{};
+    try runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("a.example,b.example", rig.stdout());
+}
+
+// --- Type safety: custom parsers and validation ------------------------------
+
+test "a per-field `parse` declaration is reachable" {
+    // The lookup used to happen on the *merged* flags type, which `MergeFlags`
+    // synthesizes with fields and no declarations - so a custom parser was invisible
+    // and every value fell through to the built-in coercions. This asserts the
+    // declaration actually runs, by using a type the built-ins cannot parse.
+    const Ipv4 = struct { text: []const u8 };
+
+    const parseIpv4 = struct {
+        fn parse(text: []const u8) !Ipv4 {
+            if (std.mem.indexOfScalar(u8, text, '.') == null) return error.NotAnAddress;
+            return .{ .text = text };
+        }
+    }.parse;
+
+    const Flags = struct {
+        address: Ipv4 = .{ .text = "0.0.0.0" },
+        pub const parse = .{ .address = parseIpv4 };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "dial", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{s}", .{flags.address.text});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "--address", "10.0.0.1" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("10.0.0.1", rig.stdout());
+
+    // The parser's own error is what the caller sees, not a generic one.
+    rig.reset();
+    var bad = [_][]const u8{ "--address", "not-an-address" };
+    try testing.expectError(error.NotAnAddress, runCmd(App, @TypeOf(Cmd), &bad, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Invalid format") != null);
+}
+
+test "a `validation` rules block is enforced" {
+    // The same declaration-visibility bug as `parse`: the block was read off the
+    // synthesized type, so it never ran.
+    const Flags = struct {
+        count: u32 = 5,
+        mode: []const u8 = "fast",
+
+        pub const validation = .{
+            .count = .{ .min = 1, .max = 10 },
+            .mode = .{ .in = &.{ "fast", "slow" } },
+        };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "bounded", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{d}:{s}", .{ flags.count, flags.mode });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var ok = [_][]const u8{ "--count", "3", "--mode", "slow" };
+    try runCmd(App, @TypeOf(Cmd), &ok, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("3:slow", rig.stdout());
+
+    rig.reset();
+    var too_big = [_][]const u8{ "--count", "99" };
+    try testing.expectError(error.ValidationFailed, runCmd(App, @TypeOf(Cmd), &too_big, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "greater than maximum") != null);
+
+    rig.reset();
+    var not_allowed = [_][]const u8{ "--mode", "sideways" };
+    try testing.expectError(error.ValidationFailed, runCmd(App, @TypeOf(Cmd), &not_allowed, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "not in allowed list") != null);
+}
+
+// --- Routing, help and the UX surface ----------------------------------------
+
+test "hidden commands are routable but not advertised anywhere" {
+    const Visible = comptime App.command(.{ .name = "visible", .description = "Shown" }, null);
+    const Secret = comptime App.command(.{
+        .name = "secret",
+        .description = "Not shown",
+        .hidden = true,
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("secret ran");
+        }
+    }.run);
+    const Root = comptime App.command(.{
+        .name = "hroot",
+        .description = "Root",
+        .subcommands = .{ Visible, Secret },
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // Routable.
+    var run_args = [_][]const u8{"secret"};
+    try runCmd(App, @TypeOf(Root), &run_args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("secret ran", rig.stdout());
+
+    // Absent from --help.
+    rig.reset();
+    var help_args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Root), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "visible") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "secret") == null);
+
+    // Absent from the completion list.
+    rig.reset();
+    var comp_args = [_][]const u8{"__complete"};
+    try runCmd(App, @TypeOf(Root), &comp_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "visible") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "secret") == null);
+
+    // Absent from the generated documentation.
+    rig.reset();
+    var doc_args = [_][]const u8{ "generate-docs", "markdown" };
+    try runCmd(App, @TypeOf(Root), &doc_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "**visible**") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "**secret**") == null);
+
+    // And never suggested as a correction, which would advertise it just as loudly.
+    rig.reset();
+    var typo_args = [_][]const u8{"secre"};
+    try testing.expectError(error.UnknownCommand, runCmd(App, @TypeOf(Root), &typo_args, &rig.out, &rig.err, &rig.env));
+}
+
+test "a command alias routes, and is listed in help and completions" {
+    const Deploy = comptime App.command(.{
+        .name = "deploy",
+        .description = "Deploy the thing",
+        .aliases = &.{"d"},
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("deployed");
+        }
+    }.run);
+    const Root = comptime App.command(.{
+        .name = "aroot",
+        .description = "Root",
+        .subcommands = .{Deploy},
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{"d"};
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("deployed", rig.stdout());
+
+    rig.reset();
+    var help_args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Root), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "deploy (d)") != null);
+
+    rig.reset();
+    var comp_args = [_][]const u8{"__complete"};
+    try runCmd(App, @TypeOf(Root), &comp_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "deploy") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "d\n") != null);
+}
+
+test "commands nest to depth three and the leaf still gets its flags" {
+    const LeafFlags = struct { tag: []const u8 = "" };
+    const LeafRig = struct {
+        var seen: []const u8 = "";
+    };
+
+    const Leaf = comptime App.command(.{ .name = "leaf", .flags = LeafFlags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(LeafFlags)) !void {
+            _ = ctx;
+            LeafRig.seen = flags.tag;
+        }
+    }.run);
+
+    const Mid = comptime App.command(.{ .name = "mid", .subcommands = .{Leaf} }, null);
+    const Root = comptime App.command(.{ .name = "depthroot", .subcommands = .{Mid} }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "mid", "leaf", "--tag", "value" };
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("value", LeafRig.seen);
+    try testing.expectEqualStrings("", rig.stderr());
+}
+
+test "pre_run and post_run hooks run around the body, root first for pre" {
+    // `pre_runs` was collected and never called anywhere in the framework: a hook that
+    // looked supported and did nothing.
+    const order = struct {
+        var trace: [8]u8 = [_]u8{0} ** 8;
+        var len: usize = 0;
+
+        fn pre(ctx: App.Ctx) App.Error!void {
+            trace[len] = 'p';
+            len += 1;
+            _ = ctx;
+        }
+
+        fn post(ctx: App.Ctx) App.Error!void {
+            trace[len] = 'P';
+            len += 1;
+            _ = ctx;
+        }
+    };
+
+    const Child = comptime App.command(.{
+        .name = "child",
+        .pre_run = order.pre,
+        .post_run = order.post,
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            order.trace[order.len] = 'b';
+            order.len += 1;
+            _ = ctx;
+        }
+    }.run);
+
+    const Root = comptime App.command(.{
+        .name = "hookroot",
+        .pre_run = order.pre,
+        .post_run = order.post,
+        .subcommands = .{Child},
+    }, null);
+
+    order.len = 0;
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{"child"};
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+
+    // Root pre, leaf pre, body, leaf post, root post - the two hooks bracket the body
+    // in the order a middleware would.
+    try testing.expectEqualSlices(u8, "ppbPP", order.trace[0..5]);
+}
+
+test "help aligns its columns, shows defaults, arguments and dashed spellings" {
+    const Flags = struct {
+        dry_run: bool = false,
+        retries: u8 = 3,
+        tag: []const u8 = "none",
+        pub const meta = .{
+            .dry_run = .{ .help = "Do not write" },
+            .retries = .{ .short = 'r', .help = "Attempts" },
+            .tag = .{ .help = "A label" },
+        };
+    };
+    const Args = struct {
+        target: []const u8 = "",
+        pub const meta = .{ .target = .{ .help = "What to act on" } };
+    };
+
+    const Cmd = comptime App.command(.{
+        .name = "aligned",
+        .description = "A command with everything to show",
+        .flags = Flags,
+        .args = Args,
+    }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags), args: Args) !void {
+            _ = ctx;
+            _ = flags;
+            _ = args;
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    const text = rig.stdout();
+
+    // Usage names both capabilities, because the command has both.
+    try testing.expect(std.mem.indexOf(u8, text, "Usage: aligned [args]") != null);
+    // Arguments have a section of their own, documented from the args struct's meta.
+    try testing.expect(std.mem.indexOf(u8, text, "Arguments:") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "target") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "What to act on") != null);
+    // A snake_case field is advertised with dashes, and the default is shown.
+    try testing.expect(std.mem.indexOf(u8, text, "--dry-run") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Do not write") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "--retries, -r") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "[default: 3]") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "[default: none]") != null);
+    // `--tag` has no default of its own? It has one, so it is not marked required.
+    try testing.expect(std.mem.indexOf(u8, text, "[required]") == null);
+}
+
+test "help can be replaced per command, and for the whole app" {
+    const Custom = struct {
+        pub fn render(ctx: anytype, cmd: anytype) !void {
+            try ctx.out.print("CUSTOM {s}\n", .{cmd.name});
+        }
+    };
+
+    const Cmd = comptime App.command(.{ .name = "over", .help = Custom }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("CUSTOM over\n", rig.stdout());
+
+    // The application-level override applies to commands that do not declare one.
+    const HelpApp = cli.App(usize, .{ .help_renderer = Custom });
+    const Plain = comptime HelpApp.command(.{ .name = "plain" }, null);
+
+    var help_rig: Rig = .{};
+    help_rig.init();
+    defer help_rig.deinit();
+    var plain_args = [_][]const u8{"--help"};
+    try runCmd(HelpApp, @TypeOf(Plain), &plain_args, &help_rig.out, &help_rig.err, &help_rig.env);
+    try testing.expectEqualStrings("CUSTOM plain\n", help_rig.stdout());
+}
+
+test "the built-in --version and -V print the configured version" {
+    const VersionApp = cli.App(usize, .{ .version = "9.9.9" });
+
+    const Cmd = comptime VersionApp.command(.{ .name = "vprog" }, struct {
+        fn run(ctx: VersionApp.Ctx) !void {
+            try ctx.out.writeAll("body ran");
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var long = [_][]const u8{"--version"};
+    try runCmd(VersionApp, @TypeOf(Cmd), &long, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("vprog 9.9.9\n", rig.stdout());
+
+    rig.reset();
+    var short = [_][]const u8{"-V"};
+    try runCmd(VersionApp, @TypeOf(Cmd), &short, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("vprog 9.9.9\n", rig.stdout());
+
+    // The body never runs; with no version configured the built-in is inert, so
+    // `--version` is simply an unknown flag to that app.
+    rig.reset();
+    var plain = [_][]const u8{"--version"};
+    try testing.expectError(error.UnknownFlag, runCmd(App, @TypeOf(Cmd), &plain, &rig.out, &rig.err, &rig.env));
+    try testing.expectEqualStrings("", rig.stdout());
+}
+
+test "an unknown flag suggests the nearest one" {
+    const Flags = struct {
+        verbose: bool = false,
+        cache: bool = false,
+        dry_run: bool = false,
+        pub const meta = .{ .verbose = .{ .short = 'v' } };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "typo_flag", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            _ = ctx;
+            _ = flags;
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{"--verbos"};
+    try testing.expectError(error.UnknownFlag, runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Error: Unknown flag 'verbos'.") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Did you mean '--verbose'?") != null);
+
+    // A dashed typo is measured against the field, not charged for the dash as well.
+    rig.reset();
+    var dashed = [_][]const u8{"--dry-rnu"};
+    try testing.expectError(error.UnknownFlag, runCmd(App, @TypeOf(Cmd), &dashed, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Did you mean '--dry-run'?") != null);
+
+    // Nothing close enough: no suggestion rather than a wrong one.
+    rig.reset();
+    var far = [_][]const u8{"--zzzzzz"};
+    try testing.expectError(error.UnknownFlag, runCmd(App, @TypeOf(Cmd), &far, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Did you mean") == null);
+}
+
+test "shell completions: the zsh script and the __complete protocol" {
+    const Alpha = comptime App.command(.{ .name = "alpha", .description = "A" }, null);
+    const Beta = comptime App.command(.{ .name = "beta", .description = "B" }, null);
+    const Root = comptime App.command(.{
+        .name = "comproot",
+        .subcommands = .{ Alpha, Beta },
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // The zsh arm used to be shadowed by a hardcoded duplicate earlier in the
+    // dispatcher, so `emitZshCompletions` was unreachable.
+    var zsh = [_][]const u8{ "generate-completions", "zsh" };
+    try runCmd(App, @TypeOf(Root), &zsh, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.startsWith(u8, rig.stdout(), "#compdef comproot"));
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "compdef _comproot comproot") != null);
+
+    // The runtime protocol lists subcommands.
+    rig.reset();
+    var complete = [_][]const u8{"__complete"};
+    try runCmd(App, @TypeOf(Root), &complete, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("alpha\nbeta\n", rig.stdout());
+
+    // argv-style, where args[0] is the program's own name: the interceptors used to
+    // read args[0] and route `comproot __complete` as a command called `comproot`.
+    rig.reset();
+    var argv_style = [_][]const u8{ "comproot", "__complete" };
+    try runCmd(App, @TypeOf(Root), &argv_style, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("alpha\nbeta\n", rig.stdout());
+
+    // The other three shells still emit their own scripts.
+    for ([_][]const u8{ "bash", "fish", "powershell" }) |shell| {
+        rig.reset();
+        var shell_args = [_][]const u8{ "generate-completions", shell };
+        try runCmd(App, @TypeOf(Root), &shell_args, &rig.out, &rig.err, &rig.env);
+        try testing.expect(std.mem.indexOf(u8, rig.stdout(), "comproot") != null);
+    }
+}
+
+test "man pages and markdown list arguments, and markdown carries the flags table" {
+    const Flags = struct {
+        force: bool = false,
+        pub const meta = .{ .force = .{ .help = "Force it" } };
+    };
+    const Args = struct {
+        target: []const u8 = "",
+        pub const meta = .{ .target = .{ .help = "The target" } };
+    };
+
+    const Cmd = comptime App.command(.{
+        .name = "doccmd",
+        .description = "Documented",
+        .flags = Flags,
+        .args = Args,
+    }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags), args: Args) !void {
+            _ = ctx;
+            _ = flags;
+            _ = args;
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var md = [_][]const u8{ "generate-docs", "markdown" };
+    try runCmd(App, @TypeOf(Cmd), &md, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "# doccmd") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "| --force |") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "### Arguments") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "| target |") != null);
+
+    rig.reset();
+    var man = [_][]const u8{ "generate-docs", "man" };
+    try runCmd(App, @TypeOf(Cmd), &man, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), ".TH doccmd 1") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), ".SH NAME") != null);
+}
+
+// --- Environment and configuration files -------------------------------------
+
+/// Writes `text` to `path`, so a test can point a config file at it.
+fn writeTestFile(path: []const u8, text: []const u8) !void {
+    const file = try std.Io.Dir.cwd().createFile(std.testing.io, path, .{ .truncate = true });
+    defer file.close(std.testing.io);
+    try file.writePositionalAll(std.testing.io, text, 0);
+}
+
+test "config file: the CLI beats the environment, which beats the file, which beats the default" {
+    const path = "test_cli_layers.json";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    try writeTestFile(path, "{\"host\": \"from-file\", \"port\": 9100}");
+
+    const FileApp = cli.App(usize, .{ .config_file = .{ .path = path } });
+
+    // `host` declares an environment binding and a file key; `port` is set from the
+    // file with no metadata at all, which is what makes the layer seamless.
+    const Flags = struct {
+        host: []const u8 = "from-default",
+        port: u16 = 1,
+        pub const meta = .{
+            .host = .{ .env = "SNEK_TEST_HOST", .config = "host" },
+        };
+    };
+
+    const Cmd = comptime FileApp.command(.{ .name = "svc", .flags = Flags }, struct {
+        fn run(ctx: FileApp.Ctx, flags: FileApp.Flags(Flags)) !void {
+            try ctx.out.print("{s}:{d}", .{ flags.host, flags.port });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var none = [_][]const u8{};
+
+    // File only: both values come from it, and the default is not used.
+    try runCmd(FileApp, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-file:9100", rig.stdout());
+
+    // The environment beats the file for `host`; `port` still comes from the file.
+    try rig.env.put("SNEK_TEST_HOST", "from-env");
+    rig.reset();
+    try runCmd(FileApp, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-env:9100", rig.stdout());
+
+    // The command line beats the environment.
+    rig.reset();
+    var given = [_][]const u8{ "--host", "from-cli" };
+    try runCmd(FileApp, @TypeOf(Cmd), &given, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-cli:9100", rig.stdout());
+
+    // With the file gone, the field default is the last resort.
+    const MissingApp = cli.App(usize, .{ .config_file = .{ .path = "test_cli_no_such_file.json" } });
+    const MissingCmd = comptime MissingApp.command(.{ .name = "svc", .flags = Flags }, struct {
+        fn run(ctx: MissingApp.Ctx, flags: MissingApp.Flags(Flags)) !void {
+            try ctx.out.print("{s}:{d}", .{ flags.host, flags.port });
+        }
+    }.run);
+    var missing_rig: Rig = .{};
+    missing_rig.init();
+    defer missing_rig.deinit();
+    try runCmd(MissingApp, @TypeOf(MissingCmd), &none, &missing_rig.out, &missing_rig.err, &missing_rig.env);
+    try testing.expectEqualStrings("from-default:1", missing_rig.stdout());
+}
+
+test "config file: TOML tables flatten to dotted keys, prefixed per app" {
+    const path = "test_cli_layers.toml";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    // A comment, a table and a quoted string: the TOML arm of the format dispatcher.
+    try writeTestFile(path,
+        \\# the service
+        \\[svc]
+        \\port = 4321
+        \\name = "from-toml"
+        \\
+    );
+
+    const TomlApp = cli.App(usize, .{
+        .config_file = .{ .path = path, .prefix = "svc" },
+    });
+
+    const Flags = struct {
+        port: u16 = 1,
+        name: []const u8 = "default",
+    };
+
+    const Cmd = comptime TomlApp.command(.{ .name = "svc", .flags = Flags }, struct {
+        fn run(ctx: TomlApp.Ctx, flags: TomlApp.Flags(Flags)) !void {
+            try ctx.out.print("{s}:{d}", .{ flags.name, flags.port });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var none = [_][]const u8{};
+    try runCmd(TomlApp, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-toml:4321", rig.stdout());
+}
+
+test "config file: a file with no recognised extension is read as KEY=value" {
+    const path = "test_cli_layers.env";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    try writeTestFile(path, "PORT=1234\nNAME=from-dotenv\n");
+
+    const DotenvApp = cli.App(usize, .{ .config_file = .{ .path = path } });
+
+    const Flags = struct {
+        port: u16 = 1,
+        name: []const u8 = "default",
+    };
+
+    const Cmd = comptime DotenvApp.command(.{ .name = "svc", .flags = Flags }, struct {
+        fn run(ctx: DotenvApp.Ctx, flags: DotenvApp.Flags(Flags)) !void {
+            try ctx.out.print("{s}:{d}", .{ flags.name, flags.port });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var none = [_][]const u8{};
+    try runCmd(DotenvApp, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-dotenv:1234", rig.stdout());
+}
+
+test "config file: a malformed file is reported rather than ignored" {
+    const path = "test_cli_layers_bad.json";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    try writeTestFile(path, "{not json");
+
+    const BadApp = cli.App(usize, .{ .config_file = .{ .path = path } });
+    const Flags = struct { port: u16 = 1 };
+
+    const Cmd = comptime BadApp.command(.{ .name = "svc", .flags = Flags }, struct {
+        fn run(ctx: BadApp.Ctx, flags: BadApp.Flags(Flags)) !void {
+            try ctx.out.print("{d}", .{flags.port});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var none = [_][]const u8{};
+    try testing.expectError(error.Malformed, runCmd(BadApp, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "cannot parse config file") != null);
+}
+
+test "config file: a custom loader replaces the built-in dispatcher" {
+    // The loader is a parser, not a reader: the framework opens the file, so a loader
+    // never has to deal with a missing path or an unreadable stream.
+    const Loader = struct {
+        fn load(
+            arena: std.mem.Allocator,
+            path: []const u8,
+            text: []const u8,
+        ) anyerror!std.StringHashMapUnmanaged([]const u8) {
+            _ = path;
+            var values: std.StringHashMapUnmanaged([]const u8) = .empty;
+            // A deliberately trivial grammar: `key:value` per line.
+            var lines = std.mem.splitScalar(u8, text, '\n');
+            while (lines.next()) |line| {
+                const trimmed = std.mem.trim(u8, line, " \r\t");
+                if (trimmed.len == 0) continue;
+                const colon = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+                try values.put(arena, trimmed[0..colon], trimmed[colon + 1 ..]);
+            }
+            return values;
+        }
+    };
+
+    const path = "test_cli_layers_custom.conf";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    try writeTestFile(path, "port:7777\n");
+
+    const CustomApp = cli.App(usize, .{
+        .config_file = .{ .path = path, .loader = @as(cli.ConfigFile.Loader, Loader.load) },
+    });
+    const Flags = struct { port: u16 = 1 };
+
+    const Cmd = comptime CustomApp.command(.{ .name = "svc", .flags = Flags }, struct {
+        fn run(ctx: CustomApp.Ctx, flags: CustomApp.Flags(Flags)) !void {
+            try ctx.out.print("{d}", .{flags.port});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var none = [_][]const u8{};
+    try runCmd(CustomApp, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("7777", rig.stdout());
+}
+
+test "confirmation gate: a command that requires confirmation refuses without --yes" {
+    const Cmd = comptime App.command(.{
+        .name = "dangerous",
+        .requires_confirmation = true,
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("did it");
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // Not a TTY, so the framework refuses rather than assuming consent.
+    var none = [_][]const u8{};
+    try testing.expectError(
+        error.ConfirmationRequired,
+        runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env),
+    );
+
+    // `--yes` is a global flag, so it is accepted on any command that asks.
+    rig.reset();
+    var confirmed = [_][]const u8{"--yes"};
+    try runCmd(App, @TypeOf(Cmd), &confirmed, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("did it", rig.stdout());
+}
+
+// --- The interactive prompt path ---------------------------------------------
+//
+// Every branch below is guarded by `ctx.is_tty`, which the plain `runCmd` helper
+// leaves false - so the prompt half of "required and optional fields" had no test at
+// all. `stdin` is a parameter of the harness, so it can be driven.
+
+/// What a test feeds the framework's stdin, and whether it claims to be a terminal.
+const Input = struct {
+    text: []const u8 = "",
+    is_tty: bool = false,
+};
+
+/// `runCmd` with a stdin the prompt can read and an `is_tty` the prompt can trust.
+fn runCmdInput(
+    comptime AppT: type,
+    comptime CmdT: type,
+    args: []const []const u8,
+    input: Input,
+    out: *std.Io.Writer,
+    err: *std.Io.Writer,
+    env_map: *std.process.Environ.Map,
+) !void {
+    var in_reader = std.Io.Reader.fixed(input.text);
+    var state: usize = 0;
+    const ctx = AppT.Ctx{
+        .allocator = testing.allocator,
+        .in = &in_reader,
+        .out = out,
+        .err = err,
+        .state = &state,
+        .env_map = env_map,
+        .io = std.testing.io,
+        .is_tty = input.is_tty,
+    };
+    const cmd: CmdT = .{};
+    var chain = try AppT.ExecutionChain.init(testing.allocator, args.len + 8);
+    defer chain.deinit(testing.allocator);
+    try AppT.execute(cmd, ctx, args, &chain);
+}
+
+test "a prompt fills a required flag, and an empty answer is a refusal" {
+    const Flags = struct { token: []const u8 };
+
+    const Cmd = comptime App.command(.{ .name = "prompted", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("token={s}", .{flags.token});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var none = [_][]const u8{};
+
+    try runCmdInput(
+        App,
+        @TypeOf(Cmd),
+        &none,
+        .{ .text = "abc123\n", .is_tty = true },
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    );
+    // The prompt names the flag, and the answer becomes its value.
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "? token [--token]: ") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "token=abc123") != null);
+
+    // An empty answer is "no value", not an empty string value.
+    rig.reset();
+    try testing.expectError(error.MissingRequiredFlag, runCmdInput(
+        App,
+        @TypeOf(Cmd),
+        &none,
+        .{ .text = "\n", .is_tty = true },
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    ));
+
+    // And the same command on a non-TTY is told, not prompted at.
+    rig.reset();
+    try testing.expectError(error.MissingRequiredFlag, runCmdInput(
+        App,
+        @TypeOf(Cmd),
+        &none,
+        .{ .text = "abc123\n", .is_tty = false },
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    ));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Missing required flag '--token'") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "? token") == null);
+}
+
+test "a prompt fills a required positional, and an empty answer is a refusal" {
+    const Args = struct { target: []const u8 };
+
+    const Cmd = comptime App.command(.{ .name = "prompted_pos", .args = Args }, struct {
+        fn run(ctx: App.Ctx, args: Args) !void {
+            try ctx.out.print("target={s}", .{args.target});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var none = [_][]const u8{};
+
+    try runCmdInput(
+        App,
+        @TypeOf(Cmd),
+        &none,
+        .{ .text = "host-1\n", .is_tty = true },
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    );
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "? target (positional): ") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "target=host-1") != null);
+
+    rig.reset();
+    try testing.expectError(error.MissingRequiredPositionalArgument, runCmdInput(
+        App,
+        @TypeOf(Cmd),
+        &none,
+        .{ .text = "\n", .is_tty = true },
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    ));
+}
+
+// --- The remaining error paths ----------------------------------------------
+
+test "a value flag with no value, and too many positionals, are refused" {
+    const Flags = struct { token: []const u8 = "" };
+    const FlagCmd = comptime App.command(.{ .name = "needs_value", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{s}", .{flags.token});
+        }
+    }.run);
+
+    const Args = struct { first: []const u8 = "" };
+    const PosCmd = comptime App.command(.{ .name = "one_only", .args = Args }, struct {
+        fn run(ctx: App.Ctx, args: Args) !void {
+            try ctx.out.print("{s}", .{args.first});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // `--token` is the last token, so there is nothing to take as its value. The
+    // message names the flag rather than blaming the command line in general.
+    var dangling = [_][]const u8{"--token"};
+    try testing.expectError(error.MissingFlagValue, runCmd(
+        App,
+        @TypeOf(FlagCmd),
+        &dangling,
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    ));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "requires a value") != null);
+
+    // Two arguments for one positional field: a fixed positional list is not a bucket.
+    rig.reset();
+    var overflow = [_][]const u8{ "a", "b" };
+    try testing.expectError(error.TooManyPositionalArguments, runCmd(
+        App,
+        @TypeOf(PosCmd),
+        &overflow,
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    ));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Too many positional arguments") != null);
+}
+
+test "config file: a YAML mapping flattens like the other two formats" {
+    const path = "test_cli_layers.yaml";
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, path) catch {};
+    try writeTestFile(path, "name: from-yaml\nport: 5555\n");
+
+    const YamlApp = cli.App(usize, .{ .config_file = .{ .path = path } });
+
+    const Flags = struct {
+        name: []const u8 = "default",
+        port: u16 = 1,
+    };
+
+    const Cmd = comptime YamlApp.command(.{ .name = "svc", .flags = Flags }, struct {
+        fn run(ctx: YamlApp.Ctx, flags: YamlApp.Flags(Flags)) !void {
+            try ctx.out.print("{s}:{d}", .{ flags.name, flags.port });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var none = [_][]const u8{};
+    try runCmd(YamlApp, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-yaml:5555", rig.stdout());
+}
+
+// --- Flag-value completion ---------------------------------------------------
+//
+// `executeAutocomplete` reads a field's `completion` declaration off the flags type.
+// That lookup had the same `MergeFlags`-copies-no-declarations bug as `parse` and
+// `validation`, so a completion function was invisible - and no test covered it even
+// after the fix, because the completion tests only exercised subcommand names.
+
+test "a flag's completion function supplies its values" {
+    const Flags = struct {
+        role: []const u8 = "",
+        mode: enum { fast, slow } = .fast,
+
+        pub const completion = .{
+            .role = struct {
+                fn complete(ctx: anytype, args: []const []const u8) []const []const u8 {
+                    _ = ctx;
+                    _ = args;
+                    return &.{ "admin", "operator", "viewer" };
+                }
+            }.complete,
+        };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "grant", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("{s}", .{flags.role});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // The shell protocol hands the words typed so far, ending with the empty value the
+    // user is about to complete.
+    var role_args = [_][]const u8{ "__complete", "--role", "" };
+    try runCmd(App, @TypeOf(Cmd), &role_args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("admin\noperator\nviewer\n", rig.stdout());
+
+    // An enum-valued flag needs no declaration: its variants are the candidates.
+    rig.reset();
+    var mode_args = [_][]const u8{ "__complete", "--mode", "" };
+    try runCmd(App, @TypeOf(Cmd), &mode_args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("fast\nslow\n", rig.stdout());
+
+    // Completing the flag *name* lists the flags, with the command-line spelling.
+    rig.reset();
+    var name_args = [_][]const u8{ "__complete", "--r" };
+    try runCmd(App, @TypeOf(Cmd), &name_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "--role") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "--mode") != null);
+}
+
+test "the confirmation gate asks on a terminal, and only a yes proceeds" {
+    const Cmd = comptime App.command(.{
+        .name = "confirm_me",
+        .requires_confirmation = true,
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("did it");
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var none = [_][]const u8{};
+
+    // An explicit yes runs the body.
+    try runCmdInput(
+        App,
+        @TypeOf(Cmd),
+        &none,
+        .{ .text = "y\n", .is_tty = true },
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    );
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Run 'confirm_me'? [y/N] ") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "did it") != null);
+
+    // Anything else - "n", or an empty answer where the user just pressed return - is a
+    // refusal, and a refusal is a cancellation rather than a failure.
+    for ([_][]const u8{ "n\n", "\n" }) |answer| {
+        rig.reset();
+        try testing.expectError(error.UserCancelled, runCmdInput(
+            App,
+            @TypeOf(Cmd),
+            &none,
+            .{ .text = answer, .is_tty = true },
+            &rig.out,
+            &rig.err,
+            &rig.env,
+        ));
+        try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Aborted") != null);
+        try testing.expect(std.mem.indexOf(u8, rig.stdout(), "did it") == null);
+    }
+
+    // `--yes` skips the question entirely, on a terminal as much as off one.
+    rig.reset();
+    var confirmed = [_][]const u8{"--yes"};
+    try runCmdInput(
+        App,
+        @TypeOf(Cmd),
+        &confirmed,
+        .{ .is_tty = true },
+        &rig.out,
+        &rig.err,
+        &rig.env,
+    );
+    try testing.expectEqualStrings("did it", rig.stdout());
+}
+
+// --- Secret redaction --------------------------------------------------------
+
+test "a secret flag is scrubbed from logs, errors and help" {
+    // The chain the framework owns end to end: the metadata marks the value secret, the
+    // parser hands it to the log scrubber, error messages mask it, and `--help` never
+    // prints its default.
+    const Flags = struct {
+        token: []const u8 = "default-token-value",
+        count: u32 = 0,
+        pub const meta = .{
+            .token = .{ .secret = true, .help = "API token" },
+        };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "secure", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            // The kind of line that leaks in practice: a scope and a token pasted into a
+            // message by whoever was debugging.
+            var buf: [512]u8 = undefined;
+            const logger = cli.log.init("secure-cmd");
+            var w = std.Io.Writer.fixed(&buf);
+            try logger.write(&w, .info, "auth", flags.token);
+            try ctx.out.print("{s}", .{w.buffered()});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    cli.log.clearSecrets();
+    defer cli.log.clearSecrets();
+
+    var args = [_][]const u8{ "--token", "s3cr3t-token-xyz" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+
+    // Parsing registered it, and the log line carries the mask rather than the value.
+    try testing.expectEqual(@as(usize, 1), cli.log.registeredSecretCount());
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "s3cr3t-token-xyz") == null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), cli.log.redaction_mask) != null);
+
+    // The JSON form scrubs too.
+    var json_buf: [512]u8 = undefined;
+    var jw = std.Io.Writer.fixed(&json_buf);
+    const json_logger = cli.log.init("secure-cmd").withFormat(.json);
+    try json_logger.write(&jw, .warn, "auth", "token=s3cr3t-token-xyz failed");
+    try testing.expect(std.mem.indexOf(u8, jw.buffered(), "s3cr3t-token-xyz") == null);
+    try testing.expect(std.mem.indexOf(u8, jw.buffered(), cli.log.redaction_mask) != null);
+
+    // A bad value on a secret flag is masked in the error message: a token with a typo is
+    // still a token.
+    cli.log.clearSecrets();
+    rig.reset();
+    var bad = [_][]const u8{ "--count", "not-a-number" };
+    try testing.expectError(error.HandledError, runCmd(App, @TypeOf(Cmd), &bad, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "not-a-number") != null); // not secret
+
+    const SecretInt = struct {
+        pin: u32 = 1234,
+        pub const meta = .{ .pin = .{ .secret = true } };
+    };
+    const PinCmd = comptime App.command(.{ .name = "pin_cmd", .flags = SecretInt }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(SecretInt)) !void {
+            try ctx.out.print("{d}", .{flags.pin});
+        }
+    }.run);
+    rig.reset();
+    var bad_pin = [_][]const u8{ "--pin", "9999abc" };
+    try testing.expectError(error.HandledError, runCmd(App, @TypeOf(PinCmd), &bad_pin, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "9999abc") == null);
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), cli.log.redaction_mask) != null);
+
+    // `--help` prints the flag and never its default.
+    rig.reset();
+    var help_args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Cmd), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "--token") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "default-token-value") == null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), cli.log.redaction_mask) != null);
+
+    // The generated documentation does not leak it either.
+    rig.reset();
+    var doc_args = [_][]const u8{ "generate-docs", "markdown" };
+    try runCmd(App, @TypeOf(Cmd), &doc_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "default-token-value") == null);
+
+    // A crate that logs without the framework's help still gets the value scrubbed once
+    // it has been parsed, because the registry is process-wide.
+    cli.log.registerSecret("standalone-secret");
+    var solo_buf: [256]u8 = undefined;
+    var sw = std.Io.Writer.fixed(&solo_buf);
+    try cli.log.init("solo").write(&sw, .err, "", "value=standalone-secret and standalone-secret again");
+    const solo = sw.buffered();
+    try testing.expect(std.mem.indexOf(u8, solo, "standalone-secret") == null);
+    // Every occurrence, not just the first.
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, solo, cli.log.redaction_mask));
+
+    // Clearing forgets them, so a long-lived process can drop credentials it is done with.
+    cli.log.clearSecrets();
+    try testing.expectEqual(@as(usize, 0), cli.log.registeredSecretCount());
+    var after_buf: [128]u8 = undefined;
+    var aw = std.Io.Writer.fixed(&after_buf);
+    try cli.log.init("solo").write(&aw, .info, "", "value=standalone-secret");
+    try testing.expect(std.mem.indexOf(u8, aw.buffered(), "standalone-secret") != null);
+}
+
+// --- The built-in update command ---------------------------------------------
+
+/// A transport that answers from a table, so the update command can be driven without
+/// a network. Registered by URL; anything else is a test failure, not a silent miss.
+/// One route: a URL and the body it answers with. Named because an anonymous struct
+/// type is a different type at every mention, so a table of them cannot be assigned.
+const UpdateRoute = struct { url: []const u8, body: []const u8 };
+
+const UpdateStub = struct {
+    routes: []const UpdateRoute = &.{},
+    calls: usize = 0,
+    /// Recorded *during* the call rather than by keeping the slice: the caller owns the
+    /// URL and frees it when the fetch returns, so a stored slice would dangle - which is
+    /// how the first version of this stub failed its own assertion.
+    saw_release_api: bool = false,
+    saw_checksum: bool = false,
+    saw_binary: bool = false,
+
+    fn fetch(opaque_ctx: ?*anyopaque, allocator: std.mem.Allocator, url: []const u8) anyerror![]u8 {
+        const self: *UpdateStub = @ptrCast(@alignCast(opaque_ctx orelse return error.MissingContext));
+        self.calls += 1;
+        if (std.mem.indexOf(u8, url, "/releases/latest") != null) self.saw_release_api = true;
+        if (std.mem.endsWith(u8, url, ".sha256")) self.saw_checksum = true;
+        if (std.mem.endsWith(u8, url, "tigershark-bin")) self.saw_binary = true;
+        for (self.routes) |route| {
+            if (std.mem.eql(u8, route.url, url)) return allocator.dupe(u8, route.body);
+        }
+        return error.UnexpectedUrl;
+    }
+
+    fn fetcher(self: *UpdateStub) cli.update.Fetcher {
+        return .{ .ctx = @ptrCast(self), .fetch = fetch };
+    }
+};
+
+/// The stub the update command's comptime `fetcher_factory` reaches at run time.
+///
+/// The metadata is comptime, so the factory must be a function pointer; the routing
+/// table it answers from is ordinary runtime state. That split is the whole reason
+/// `UpdateMeta` carries a factory rather than a `Fetcher` value.
+const UpdateStubState = struct {
+    var stub: UpdateStub = .{};
+
+    fn make() cli.update.Fetcher {
+        return stub.fetcher();
+    }
+};
+
+test "the update command: up to date, --check, refusal, install, and a bad checksum" {
+    const tmp = "test_update_target.bin";
+    const asset_url = "https://example.invalid/tigershark-bin";
+    const checksum_url = asset_url ++ ".sha256";
+    const binary_new = "the-new-binary";
+
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, tmp) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, tmp ++ ".old") catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.testing.io, tmp ++ ".new") catch {};
+
+    var url_buf: [cli.update.max_url_len]u8 = undefined;
+    const api_url = try cli.update.releaseApiUrl(&url_buf, "93ams", "snek");
+
+    const digest = try cli.update.sha256Hex(testing.allocator, binary_new);
+    defer testing.allocator.free(digest);
+    const good_checksum = try std.fmt.allocPrint(testing.allocator, "{s}  tigershark-bin\n", .{digest});
+    defer testing.allocator.free(good_checksum);
+    const wrong_checksum = try std.fmt.allocPrint(
+        testing.allocator,
+        "{s}  tigershark-bin\n",
+        .{"0000000000000000000000000000000000000000000000000000000000000000"},
+    );
+    defer testing.allocator.free(wrong_checksum);
+
+    // Two releases: the version this binary already is, and a newer one.
+    const release_same =
+        \\{"tag_name":"v0.1.0","assets":[{"name":"tigershark-bin","size":14,"browser_download_url":"https://example.invalid/tigershark-bin"}]}
+    ;
+    const release_newer =
+        \\{"tag_name":"v0.9.0","assets":[{"name":"tigershark-bin","size":14,"browser_download_url":"https://example.invalid/tigershark-bin"}]}
+    ;
+
+    const UpdateCmd = comptime App.updateCommand(.{
+        .owner = "93ams",
+        .repo = "snek",
+        .asset = "tigershark-bin",
+        .current_version = "0.1.0",
+        .target_path = tmp,
+        .fetcher_factory = UpdateStubState.make,
+    });
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var none = [_][]const u8{};
+
+    const readTarget = struct {
+        fn read(allocator: std.mem.Allocator) ![]u8 {
+            return std.Io.Dir.cwd().readFileAlloc(std.testing.io, tmp, allocator, .limited(256));
+        }
+    }.read;
+
+    // 1. Nothing to do: the release is not newer, so the body stops *before* the prompt -
+    //    which is why this needs neither `--yes` nor a terminal.
+    UpdateStubState.stub = .{ .routes = &.{UpdateRoute{ .url = api_url, .body = release_same }} };
+    try writeTestFile(tmp, "old-binary");
+    try runCmd(App, @TypeOf(UpdateCmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Already up to date") != null);
+    const after_same = try readTarget(testing.allocator);
+    defer testing.allocator.free(after_same);
+    try testing.expectEqualStrings("old-binary", after_same);
+
+    // The routes for the cases that do have an update available.
+    const update_routes = [_]UpdateRoute{
+        .{ .url = api_url, .body = release_newer },
+        .{ .url = asset_url, .body = binary_new },
+        .{ .url = checksum_url, .body = good_checksum },
+    };
+
+    // 2. `--check` reports and stops: the binary and its checksum are never fetched.
+    UpdateStubState.stub = .{ .routes = &update_routes };
+    rig.reset();
+    var check_args = [_][]const u8{"--check"};
+    try runCmd(App, @TypeOf(UpdateCmd), &check_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Update available: 0.1.0 -> 0.9.0") != null);
+    try testing.expectEqual(@as(usize, 1), UpdateStubState.stub.calls);
+    try testing.expect(UpdateStubState.stub.saw_release_api);
+    try testing.expect(!UpdateStubState.stub.saw_binary);
+    const after_check = try readTarget(testing.allocator);
+    defer testing.allocator.free(after_check);
+    try testing.expectEqualStrings("old-binary", after_check);
+
+    // 3. Without `--yes`, on a stream that is not a terminal, it refuses rather than
+    //    assuming consent - and nothing is written.
+    rig.reset();
+    UpdateStubState.stub = .{ .routes = &update_routes };
+    try testing.expectError(
+        error.ConfirmationRequired,
+        runCmd(App, @TypeOf(UpdateCmd), &none, &rig.out, &rig.err, &rig.env),
+    );
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "without --yes") != null);
+    const after_refusal = try readTarget(testing.allocator);
+    defer testing.allocator.free(after_refusal);
+    try testing.expectEqualStrings("old-binary", after_refusal);
+
+    // 4. `--yes` installs: the target is replaced with the verified bytes, and the
+    //    checksum and the payload were both fetched from the release.
+    rig.reset();
+    UpdateStubState.stub = .{ .routes = &update_routes };
+    var yes_args = [_][]const u8{"--yes"};
+    try runCmd(App, @TypeOf(UpdateCmd), &yes_args, &rig.out, &rig.err, &rig.env);
+    const installed = try readTarget(testing.allocator);
+    defer testing.allocator.free(installed);
+    try testing.expectEqualStrings(binary_new, installed);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Updated") != null);
+    try testing.expectEqual(@as(usize, 3), UpdateStubState.stub.calls);
+    try testing.expect(UpdateStubState.stub.saw_release_api);
+    try testing.expect(UpdateStubState.stub.saw_checksum);
+    try testing.expect(UpdateStubState.stub.saw_binary);
+
+    // 5. A checksum that does not match the payload stops the install before any write.
+    //    This is the check that makes a truncated or swapped download a refusal.
+    try writeTestFile(tmp, "old-binary");
+    UpdateStubState.stub = .{ .routes = &.{
+        UpdateRoute{ .url = api_url, .body = release_newer },
+        UpdateRoute{ .url = asset_url, .body = binary_new },
+        UpdateRoute{ .url = checksum_url, .body = wrong_checksum },
+    } };
+    rig.reset();
+    try testing.expectError(
+        error.ChecksumMismatch,
+        runCmd(App, @TypeOf(UpdateCmd), &yes_args, &rig.out, &rig.err, &rig.env),
+    );
+    const after_bad_checksum = try readTarget(testing.allocator);
+    defer testing.allocator.free(after_bad_checksum);
+    try testing.expectEqualStrings("old-binary", after_bad_checksum);
+}
+
+test "a body may take the plain flags type instead of the merged one" {
+    // `App.Flags(X)` is `X` merged with the globals. A body that wants only its own
+    // fields may name `X` directly, and the framework copies the fields it asked for.
+    const Plain = struct { level: u8 = 1 };
+
+    const Cmd = comptime App.command(.{ .name = "plain_flags", .flags = Plain }, struct {
+        fn run(ctx: App.Ctx, flags: Plain) !void {
+            try ctx.out.print("level={d}", .{flags.level});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "--level", "4", "--yes" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    // The global flag is still parsed - it is part of every command's flags - and the
+    // body simply does not see it.
+    try testing.expectEqualStrings("level=4", rig.stdout());
+}
+
+// --- Deprecation, feature gates, error hooks, dry run, REPL ------------------
+
+// --- Structured output, external plugins, HTML docs --------------------------
+
+test "structured output: --output yaml renders the returned value, and json still works" {
+    const Row = struct {
+        name: []const u8,
+        size: u32,
+        tags: []const []const u8,
+        note: ?[]const u8 = null,
+    };
+
+    const Cmd = comptime App.command(.{ .name = "yaml_out" }, struct {
+        fn run(ctx: App.Ctx) !Row {
+            _ = ctx;
+            return .{ .name = "alpha", .size = 3, .tags = &.{ "x", "y" } };
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "--output", "yaml" };
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    const yaml = rig.stdout();
+    // A block mapping, with strings quoted so a value that reads as a number stays a
+    // string, and a nested sequence indented under its key.
+    try testing.expect(std.mem.indexOf(u8, yaml, "name: \"alpha\"\n") != null);
+    try testing.expect(std.mem.indexOf(u8, yaml, "size: 3\n") != null);
+    try testing.expect(std.mem.indexOf(u8, yaml, "tags:\n  - \"x\"\n  - \"y\"\n") != null);
+    // An absent optional is null rather than omitted, so the shape is stable.
+    try testing.expect(std.mem.indexOf(u8, yaml, "note: null\n") != null);
+
+    // The same value as JSON, chosen by the same flag.
+    rig.reset();
+    var json_args = [_][]const u8{ "--output", "json" };
+    try runCmd(App, @TypeOf(Cmd), &json_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "\"name\":\"alpha\"") != null);
+
+    // And the default is still the human table.
+    rig.reset();
+    var text_args = [_][]const u8{};
+    try runCmd(App, @TypeOf(Cmd), &text_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Field") != null);
+
+    // A description that would break the document is escaped, not injected.
+    const Hostile = comptime App.command(.{
+        .name = "hostile",
+        .description = "a <script> & \"quotes\"",
+    }, null);
+    rig.reset();
+    var html_args = [_][]const u8{ "generate-docs", "html" };
+    try runCmd(App, @TypeOf(Hostile), &html_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.startsWith(u8, rig.stdout(), "<!DOCTYPE html>"));
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "&lt;script&gt;") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "<script>") == null);
+}
+
+test "the HTML reference lists arguments, flags and subcommands" {
+    const Flags = struct {
+        force: bool = false,
+        token: []const u8 = "shhh",
+        pub const meta = .{
+            .force = .{ .short = 'f', .help = "Force it" },
+            .token = .{ .secret = true },
+        };
+    };
+    const Args = struct {
+        target: []const u8,
+        pub const meta = .{ .target = .{ .help = "What to act on" } };
+    };
+
+    const Leaf = comptime App.command(.{
+        .name = "leafy",
+        .description = "A leaf",
+        .flags = Flags,
+        .args = Args,
+    }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags), args: Args) !void {
+            _ = ctx;
+            _ = flags;
+            _ = args;
+        }
+    }.run);
+    const Hidden = comptime App.command(.{ .name = "secretcmd", .hidden = true }, null);
+    const Root = comptime App.command(.{
+        .name = "htmlroot",
+        .description = "Root",
+        .subcommands = .{ Leaf, Hidden },
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "generate-docs", "html" };
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+    const html = rig.stdout();
+
+    try testing.expect(std.mem.indexOf(u8, html, "<h1>htmlroot</h1>") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "<h2>leafy</h2>") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "What to act on") != null);
+    try testing.expect(std.mem.indexOf(u8, html, "--force, -f") != null);
+    // A secret's default is redacted here too.
+    try testing.expect(std.mem.indexOf(u8, html, "shhh") == null);
+    try testing.expect(std.mem.indexOf(u8, html, cli.log.redaction_mask) != null);
+    // A hidden command is private: no generated document names it.
+    try testing.expect(std.mem.indexOf(u8, html, "secretcmd") == null);
+}
+
+test "external plugin delegation is off unless asked for, and refuses hostile names" {
+    // Enabled, with a prefix: the framework looks for `<prefix>-<token>` on PATH. None of
+    // these names exist, so the ordinary unknown-command path runs - which is the point:
+    // a missing plugin must not turn into a crash or a silent success.
+    const PluginApp = cli.App(usize, .{ .plugins = .{ .enabled = true, .prefix = "snek-nonexistent" } });
+
+    const Cmd = comptime PluginApp.command(.{
+        .name = "plugroot",
+        .subcommands = .{},
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var args = [_][]const u8{"nosuchplugin"};
+
+    try testing.expectError(
+        error.UnknownCommand,
+        runCmd(PluginApp, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env),
+    );
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Unknown command 'nosuchplugin'") != null);
+
+    // A token that names a path is refused before any lookup, so a command line cannot
+    // reach an arbitrary program through the delegation path.
+    for ([_][]const u8{ "../evil", "dir/evil", "dir\\evil", ".hidden", "C:evil" }) |hostile| {
+        rig.reset();
+        var hostile_args = [_][]const u8{hostile};
+        try testing.expectError(
+            error.UnknownCommand,
+            runCmd(PluginApp, @TypeOf(Cmd), &hostile_args, &rig.out, &rig.err, &rig.env),
+        );
+        // Refused *because* of the name, not because the lookup happened to miss: nothing
+        // was executed, so the only output is the unknown-command message.
+        try testing.expect(std.mem.indexOf(u8, rig.stdout(), hostile) == null);
+    }
+
+    // A dash-prefixed token is a flag, never a subcommand, so it cannot reach the
+    // delegation path at all - it is rejected as a flag of a command with no body. That
+    // is the property worth pinning: the path check inside the plugin runner is the
+    // second line of defence, not the first.
+    rig.reset();
+    var flag_like = [_][]const u8{"-rf"};
+    try testing.expectError(
+        error.CommandNotExecutable,
+        runCmd(PluginApp, @TypeOf(Cmd), &flag_like, &rig.out, &rig.err, &rig.env),
+    );
+
+    // And with delegation off - the default - the same token is simply unknown. This is
+    // the configuration every app gets unless it opts in.
+    var rig_off: Rig = .{};
+    rig_off.init();
+    defer rig_off.deinit();
+    try testing.expectError(
+        error.UnknownCommand,
+        runCmd(App, @TypeOf(Cmd), &args, &rig_off.out, &rig_off.err, &rig_off.env),
+    );
+}
+
+test "a deprecated command warns on use and is not advertised" {
+    const Old = comptime App.command(.{
+        .name = "old",
+        .description = "The old way",
+        .deprecated = "use 'new' instead",
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("old ran");
+        }
+    }.run);
+    const New = comptime App.command(.{ .name = "new", .description = "The new way" }, null);
+    const Root = comptime App.command(.{
+        .name = "deproot",
+        .subcommands = .{ Old, New },
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // It still runs: refusing it would break every script that has not migrated, which
+    // is the opposite of what a deprecation is for.
+    var args = [_][]const u8{"old"};
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("old ran", rig.stdout());
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Command 'old' is deprecated: use 'new' instead") != null);
+
+    // Absent from help ...
+    rig.reset();
+    var help_args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Root), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "new") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "old") == null);
+
+    // ... from completions ...
+    rig.reset();
+    var comp_args = [_][]const u8{"__complete"};
+    try runCmd(App, @TypeOf(Root), &comp_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "old") == null);
+
+    // ... and from typo suggestions, which are an advertisement too.
+    rig.reset();
+    var typo_args = [_][]const u8{"odl"};
+    try testing.expectError(error.UnknownCommand, runCmd(App, @TypeOf(Root), &typo_args, &rig.out, &rig.err, &rig.env));
+    try testing.expect(std.mem.indexOf(u8, rig.stderr(), "Did you mean") == null);
+}
+
+test "a feature gate hides a command until its variable is set" {
+    const Experimental = comptime App.command(.{
+        .name = "beta",
+        .description = "An experiment",
+        .feature = "SNEK_TEST_EXPERIMENTAL",
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("beta ran");
+        }
+    }.run);
+    const Root = comptime App.command(.{
+        .name = "featroot",
+        .subcommands = .{Experimental},
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // Closed: the command does not exist. Not "is hidden" - it is unroutable.
+    var args = [_][]const u8{"beta"};
+    try testing.expectError(error.UnknownCommand, runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env));
+
+    // Closed: not advertised either.
+    rig.reset();
+    var help_args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Root), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "beta") == null);
+
+    // Open: routable and advertised.
+    try rig.env.put("SNEK_TEST_EXPERIMENTAL", "1");
+    rig.reset();
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("beta ran", rig.stdout());
+
+    rig.reset();
+    try runCmd(App, @TypeOf(Root), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "beta") != null);
+
+    // `0` and `false` are the spellings people use for "off".
+    for ([_][]const u8{ "0", "false" }) |off| {
+        try rig.env.put("SNEK_TEST_EXPERIMENTAL", off);
+        rig.reset();
+        try testing.expectError(error.UnknownCommand, runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env));
+    }
+}
+
+test "a feature gate hides a flag, including from the environment and a config file" {
+    const Gated = struct {
+        stable: bool = false,
+        shiny: []const u8 = "off",
+        pub const meta = .{
+            .shiny = .{ .feature = "SNEK_TEST_SHINY", .env = "SNEK_TEST_SHINY_VALUE" },
+        };
+    };
+
+    const Cmd = comptime App.command(.{ .name = "gated", .flags = Gated }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Gated)) !void {
+            try ctx.out.print("{s}", .{flags.shiny});
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // Closed: the flag is unknown, exactly as if it had never been declared.
+    var args = [_][]const u8{ "--shiny", "on" };
+    try testing.expectError(error.UnknownFlag, runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env));
+
+    // Closed: the environment binding does not fire either, so an experimental flag
+    // cannot be switched on by an unrelated variable being present.
+    try rig.env.put("SNEK_TEST_SHINY_VALUE", "from-env");
+    rig.reset();
+    var none = [_][]const u8{};
+    try runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("off", rig.stdout());
+
+    // Closed: not in help.
+    rig.reset();
+    var help_args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Cmd), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "--shiny") == null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "--stable") != null);
+
+    // Open: all three.
+    try rig.env.put("SNEK_TEST_SHINY", "yes");
+    rig.reset();
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("on", rig.stdout());
+
+    rig.reset();
+    try runCmd(App, @TypeOf(Cmd), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "--shiny") != null);
+
+    rig.reset();
+    try runCmd(App, @TypeOf(Cmd), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("from-env", rig.stdout());
+}
+
+test "an on_error hook sees a failed body and not a successful one" {
+    const seen = struct {
+        var count: usize = 0;
+        var last: []const u8 = "";
+
+        fn report(ctx: App.Ctx, err: anyerror) void {
+            _ = ctx;
+            count += 1;
+            last = @errorName(err);
+        }
+    };
+
+    const Failing = comptime App.command(.{
+        .name = "failing",
+        .on_error = seen.report,
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("trying");
+            return error.SomethingBroke;
+        }
+    }.run);
+
+    const Fine = comptime App.command(.{
+        .name = "fine",
+        .on_error = seen.report,
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.writeAll("fine");
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var none = [_][]const u8{};
+
+    seen.count = 0;
+    seen.last = "";
+    try testing.expectError(error.SomethingBroke, runCmd(App, @TypeOf(Failing), &none, &rig.out, &rig.err, &rig.env));
+    try testing.expectEqual(@as(usize, 1), seen.count);
+    try testing.expectEqualStrings("SomethingBroke", seen.last);
+
+    // A success is not an error, so the hook stays quiet - and the error still reaches
+    // the caller, because the hook reports rather than handles.
+    rig.reset();
+    try runCmd(App, @TypeOf(Fine), &none, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqual(@as(usize, 1), seen.count);
+    try testing.expectEqualStrings("fine", rig.stdout());
+}
+
+test "meta.dry_run adds --dry-run and puts the state on the context" {
+    const Cmd = comptime App.command(.{
+        .name = "mutator",
+        .dry_run = true,
+    }, struct {
+        fn run(ctx: App.Ctx) !void {
+            try ctx.out.print("dry_run={}", .{ctx.dry_run});
+            if (ctx.dry_run) return;
+            try ctx.out.writeAll(" (mutating)");
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    // Without the flag the body may mutate.
+    var args = [_][]const u8{};
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("dry_run=false (mutating)", rig.stdout());
+
+    // With it, the state travels on the context - so business logic that only receives a
+    // `Ctx` can honour it without every layer forwarding a boolean.
+    rig.reset();
+    var dry = [_][]const u8{"--dry-run"};
+    try runCmd(App, @TypeOf(Cmd), &dry, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("dry_run=true", rig.stdout());
+
+    // The generated flag is documented like any other.
+    rig.reset();
+    var help_args = [_][]const u8{"--help"};
+    try runCmd(App, @TypeOf(Cmd), &help_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "--dry-run") != null);
+}
+
+test "a command's own dry_run flag reaches the context too" {
+    // The older spelling: the field is the author's, and the framework propagates it
+    // without adding a second one.
+    const Flags = struct { dry_run: bool = false, path: []const u8 = "" };
+
+    const Cmd = comptime App.command(.{ .name = "own_dry", .flags = Flags }, struct {
+        fn run(ctx: App.Ctx, flags: App.Flags(Flags)) !void {
+            try ctx.out.print("ctx={} flag={}", .{ ctx.dry_run, flags.dry_run });
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{"--dry-run"};
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("ctx=true flag=true", rig.stdout());
+}
+
+test "a REPL command with no arguments enters its shell on a terminal, and prints usage otherwise" {
+    const Cmd = comptime App.command(.{
+        .name = "shellish",
+        .description = "A shell",
+        .is_repl = true,
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+    var none = [_][]const u8{};
+
+    // Not a terminal: usage, so a script that runs the binary with no arguments does not
+    // block on a prompt nobody can answer.
+    try runCmdInput(App, @TypeOf(Cmd), &none, .{ .is_tty = false }, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Usage: shellish") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Entering interactive shell") == null);
+
+    // A terminal: the shell. `runShell` announces itself before touching raw mode, which
+    // is what makes this observable without a real console - the mode setup itself fails
+    // under a test runner, and that failure is not the subject here.
+    rig.reset();
+    runCmdInput(App, @TypeOf(Cmd), &none, .{ .is_tty = true }, &rig.out, &rig.err, &rig.env) catch {};
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "Entering interactive shell for shellish") != null);
+}
+
+test "CI disables colour, cursor movement and prompts, and FORCE_COLOR still wins" {
+    var env = std.process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+
+    // A terminal everywhere, so the only variable is CI.
+    const terminal = cli.render.capability.decide(&env, true, true);
+    try testing.expect(terminal.color);
+    try testing.expect(terminal.cursor);
+    try testing.expect(terminal.interactive);
+    try testing.expect(!App.isCiEnvironment(&env));
+
+    try env.put("CI", "true");
+    try testing.expect(App.isCiEnvironment(&env));
+    const in_ci = cli.render.capability.decide(&env, true, true);
+    try testing.expect(!in_ci.color);
+    try testing.expect(!in_ci.cursor);
+    try testing.expect(!in_ci.interactive);
+
+    // An explicit opt-in for a log that can render escapes.
+    try env.put("FORCE_COLOR", "1");
+    const forced = cli.render.capability.decide(&env, true, true);
+    try testing.expect(forced.color);
+    // ... which does not re-enable prompts: a colour preference is not a human present.
+    try testing.expect(!forced.interactive);
+
+    // `CI=false` is a thing people write, and it means off.
+    try env.put("CI", "false");
+    try testing.expect(!App.isCiEnvironment(&env));
+    try env.put("CI", "0");
+    try testing.expect(!App.isCiEnvironment(&env));
+}
+
+test "the documentation generators mark deprecated and gated commands" {
+    // The generators have no `Ctx`, so they cannot evaluate a gate the way routing does.
+    // They describe the whole surface and say which parts are conditional.
+    const Old = comptime App.command(.{
+        .name = "oldie",
+        .description = "Old",
+        .deprecated = "use newie",
+    }, null);
+    const Beta = comptime App.command(.{
+        .name = "betacmd",
+        .description = "Beta",
+        .feature = "SNEK_TEST_GATE",
+    }, null);
+    const Root = comptime App.command(.{
+        .name = "docs_root",
+        .subcommands = .{ Old, Beta },
+    }, null);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{ "generate-docs", "markdown" };
+    try runCmd(App, @TypeOf(Root), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "(deprecated: use newie)") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "(experimental: set SNEK_TEST_GATE)") != null);
+
+    rig.reset();
+    var man_args = [_][]const u8{ "generate-docs", "man" };
+    try runCmd(App, @TypeOf(Root), &man_args, &rig.out, &rig.err, &rig.env);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "(deprecated: use newie)") != null);
+    try testing.expect(std.mem.indexOf(u8, rig.stdout(), "(experimental: set SNEK_TEST_GATE)") != null);
+}
+
+test "the shutdown helpers read the signal the handler recorded" {
+    cli.platform.signal.reset();
+    defer cli.platform.signal.reset();
+
+    try testing.expect(cli.platform.signal.received() == null);
+    try testing.expect(!App.isShuttingDown());
+
+    // Installing is what an app with `Config.install_signal_handlers` opts into, and it
+    // is exercised here rather than only inside the branch that configuration takes.
+    const SigApp = cli.App(usize, .{ .install_signal_handlers = true });
+    const installed = SigApp.installSignalHandlers();
+    if (comptime @import("builtin").os.tag == .windows) {
+        try testing.expectEqual(@as(usize, 2), installed);
+    } else {
+        try testing.expect(installed >= 2);
+    }
+
+    cli.platform.signal.record(.terminate);
+    try testing.expectEqual(@as(?cli.platform.signal.Signal, .terminate), App.shutdownSignal());
+    try testing.expect(App.isShuttingDown());
+
+    // And a command can poll it: this one returns early, the way a long-running
+    // command cleans up on the normal path rather than inside a signal handler.
+    const Cmd = comptime App.command(.{ .name = "polling" }, struct {
+        fn run(ctx: App.Ctx) !void {
+            if (App.isShuttingDown()) {
+                try ctx.out.writeAll("stopping");
+                return;
+            }
+            try ctx.out.writeAll("running");
+        }
+    }.run);
+
+    var rig: Rig = .{};
+    rig.init();
+    defer rig.deinit();
+
+    var args = [_][]const u8{};
+    try runCmd(App, @TypeOf(Cmd), &args, &rig.out, &rig.err, &rig.env);
+    try testing.expectEqualStrings("stopping", rig.stdout());
+}
+
+test "exit codes cover the framework's declared error set" {
+    // Every member is mapped deliberately: a member that fell through to the
+    // `else => 1` arm without anyone deciding that would be an exit status nobody
+    // chose, and two members were added by the routing and flag work.
+    try testing.expectEqual(@as(u8, 127), App.getExitCode(error.UnknownCommand));
+    try testing.expectEqual(@as(u8, 126), App.getExitCode(error.CommandNotExecutable));
+    try testing.expectEqual(@as(u8, 130), App.getExitCode(error.UserCancelled));
+    try testing.expectEqual(@as(u8, 130), App.getExitCode(error.PromptCancelled));
+
+    for ([_]anyerror{
+        error.MissingRequiredFlag,
+        error.MissingRequiredPositionalArgument,
+        error.MissingFlagValue,
+        error.UnknownFlag,
+        error.ConflictingFlags,
+        error.DependentFlagMissing,
+        error.InvalidFlagValue,
+        error.ValidationFailed,
+        error.TooManyPositionalArguments,
+        error.UnknownField,
+        error.InvalidFormat,
+        error.CommandNestingTooDeep,
+    }) |err| {
+        try testing.expectEqual(@as(u8, 2), App.getExitCode(err));
+    }
+
+    try testing.expectEqual(@as(u8, 2), App.getExitCode(error.HandledError));
+    // Not a usage failure and not a success: a refused safeguard is an ordinary failure,
+    // which is the safest status for "I did not do what you asked".
+    try testing.expectEqual(@as(u8, 1), App.getExitCode(error.ConfirmationRequired));
+    try testing.expectEqual(@as(u8, 1), App.getExitCode(error.OutOfMemory));
+
+    // And the entry point's decision: every failure exits with that status, and only the
+    // ones that have *not* already been reported get another line of output. This is the
+    // part of `App.run` a unit test can reach, since `App.run` terminates the process -
+    // and it is the part that was wrong: the binaries returned 1 for everything, and a
+    // bad flag value exited 0.
+    const reported = [_]anyerror{ error.UnknownCommand, error.UnknownFlag, error.MissingFlagValue, error.OutOfMemory };
+    for (reported) |err| {
+        const disposition = App.failureDisposition(err);
+        try testing.expectEqual(App.getExitCode(err), disposition.code);
+        try testing.expect(disposition.report);
+    }
+
+    const silent = [_]anyerror{ error.HandledError, error.UserCancelled, error.PromptCancelled };
+    for (silent) |err| {
+        const disposition = App.failureDisposition(err);
+        try testing.expectEqual(App.getExitCode(err), disposition.code);
+        try testing.expect(!disposition.report);
+    }
+
+    // Concretely: a command line that was wrong is a usage failure, a cancelled prompt is
+    // what a shell reports for an interrupt, and neither prints "Error: <name>".
+    try testing.expectEqual(@as(u8, 2), App.failureDisposition(error.HandledError).code);
+    try testing.expectEqual(@as(u8, 130), App.failureDisposition(error.UserCancelled).code);
+    try testing.expectEqual(@as(u8, 127), App.failureDisposition(error.UnknownCommand).code);
+
+    // A caller-supplied map still wins, which is the only way a domain error gets a
+    // meaningful status without the framework knowing what it means.
+    const Mapped = cli.App(usize, .{ .exit_map = &.{.{ .name = "MyDomainFailure", .code = 77 }} });
+    try testing.expectEqual(@as(u8, 77), Mapped.getExitCode(error.MyDomainFailure));
+    try testing.expectEqual(@as(u8, 77), Mapped.failureDisposition(error.MyDomainFailure).code);
+    try testing.expect(Mapped.failureDisposition(error.MyDomainFailure).report);
+
+    // The declared set is the one the mapping above covers, member for member:
+    // 19 named failures plus the `Count` marker.
+    const declared = @typeInfo(cli.AppError).error_set.?;
+    try testing.expectEqual(@as(usize, 20), declared.len);
 }

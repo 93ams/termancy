@@ -1,16 +1,16 @@
 const std = @import("std");
 const App = @import("root.zig").App;
 
-const InitFlags = struct {};
-
-pub const cmd = App.Command(InitFlags, .{}){
+/// The command's metadata, kept out of the body it describes.
+const meta = .{
     .name = "init",
     .description = "Scaffold a new CLI project",
-    .run = initRun,
 };
 
-fn initRun(ctx: App.Ctx, flags: App.Flags(InitFlags)) !void {
-    _ = flags;
+pub const cmd = App.command(meta, initRun);
+
+/// No flags, so the body takes the context alone.
+fn initRun(ctx: App.Ctx) !void {
     try ctx.out.writeAll("Scaffolding Tigershark CLI project...\n");
 
     try std.Io.Dir.cwd().createDirPath(ctx.io, "src/ui");

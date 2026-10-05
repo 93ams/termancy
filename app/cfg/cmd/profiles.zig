@@ -1,6 +1,6 @@
 //! `config format`, `config profile list`, and `config profile switch`.
 //!
-//! All three operate on a **file**, through `app/cfg/lib/cfg/toml_doc.zig`, and all three are
+//! All three operate on a **file**, through `lib/cfg/toml_doc.zig`, and all three are
 //! whitespace-only or single-value edits - which is what makes them safe to run on a file a
 //! human maintains by hand.
 //!
@@ -19,7 +19,7 @@
 
 const std = @import("std");
 const cfg = @import("cfg");
-const ops = @import("app_cfg_ops");
+const ops = @import("../lib/ops/root.zig");
 
 /// Flags for `config format`.
 pub const FormatFlags = struct {

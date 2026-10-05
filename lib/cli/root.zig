@@ -13,20 +13,56 @@
 //! const App = cli.App(State, cli.Config{});
 //!
 //! const HelloFlags = struct { name: []const u8 = "world" };
+//! const HelloArgs = struct { times: u8 = 1 };
 //!
-//! const HelloCmd = App.Command(HelloFlags, .{}){
+//! const meta = .{
 //!     .name = "hello",
 //!     .description = "Say hello",
-//!     .run = struct {
-//!         fn run(ctx: App.Ctx, flags: App.Flags(HelloFlags)) !void {
-//!             try ctx.out.print("hello {s}\n", .{flags.name});
-//!         }
-//!     }.run,
+//!     .flags = HelloFlags,
+//!     .args = HelloArgs,
 //! };
+//!
+//! pub const HelloCmd = App.command(meta, hello);
+//!
+//! // The body's own parameters say which shape it is; the framework detects it.
+//! // Also accepted: (ctx), (ctx, flags), (ctx, args) and (ctx, args, flags).
+//! fn hello(ctx: App.Ctx, flags: App.Flags(HelloFlags), args: HelloArgs) !void {
+//!     var i: u8 = 0;
+//!     while (i < args.times) : (i += 1) try ctx.out.print("hello {s}\n", .{flags.name});
+//! }
 //! ```
 //!
+//! The metadata is registered as **one object** and the body as another, so a command's
+//! identity, its types and its behaviour are three separable things. `--flags` and
+//! `<arguments>` are separate types too: `flags.positionals.component` is no longer the
+//! only way to reach an argument.
+//!
+//! ## What the framework does for you
+//!
+//! * **Parsing**: long and short flags, short-flag grouping (`-zxvf`) and attached
+//!   short values (`-tvalue`), `--flag=value`, `--no-<bool>`, repeated flags collected
+//!   into a slice (`-H a -H b`), positionals including a variadic tail, `--` to stop
+//!   parsing, required and optional fields, `--`-added count flags (`-vvv`), and
+//!   mutually exclusive groups.
+//! * **Typing**: integers, floats, booleans, enums and strings out of the box, a
+//!   `parse` declaration per field for anything else, `meta.<field>.validate` and a
+//!   `validation` block for rules that are not about type.
+//! * **Resolution**: CLI flag > environment (`meta.<field>.env`) > config file
+//!   (`Config.config_file`, JSON/YAML/TOML or `KEY=value`) > the struct's default. A
+//!   field needs no metadata to be settable from a file.
+//! * **Routing**: nested subcommands at any depth, aliases, hidden commands, hooks
+//!   (`pre_run`/`post_run`), middleware, and a `Ctx` that carries the allocator,
+//!   writers, environment, `Io` and output format.
+//! * **UX**: aligned `--help` with defaults, arguments, aliases and dashed spellings;
+//!   a replaceable help renderer; a built-in `--version`/`-V`; typo suggestions for
+//!   both commands and flags; completion scripts for bash, zsh, fish and PowerShell;
+//!   and markdown or man-page documentation.
+//! * **Execution**: POSIX exit statuses through `Config.exit_map`, all output through
+//!   `Ctx` so commands are testable in memory, and opt-in signal handling with
+//!   `App.shutdownSignal()` for a command that needs to clean up.
+//!
 //! `App(StateT, config)` is a comptime closure: it returns a struct whose
-//! `Command`/`Flags`/`Ctx`/`ExecutionChain`/`execute` are specialised to your
+//! `command`/`Flags`/`Ctx`/`ExecutionChain`/`execute` are specialised to your
 //! `StateT` and framework `config`. Everything the framework needs is reached
 //! through that one type, which is why the declaration below is a function and
 //! not a plain struct.
@@ -93,6 +129,10 @@ pub const App = framework.App;
 /// map.
 pub const Config = framework.Config;
 
+/// Defaults read from a file, and how to read them: the layer between the
+/// environment and a field's own default.
+pub const ConfigFile = framework.ConfigFile;
+
 /// One entry of `Config.exit_map`, mapping an error name to a process exit code.
 pub const ExitMap = framework.ExitMap;
 
@@ -101,37 +141,18 @@ pub const OutputFormat = framework.OutputFormat;
 
 /// The shared error set every command may return. See `ROADMAP.md` item M-3
 /// before changing it: two of its members are reflected out of `std`
-/// signatures at comptime.
+/// signatures at comptime. `App.Error` is the same set.
 pub const AppError = framework.AppError;
 
-/// Historical alias of `AppError`.
-pub const Error = framework.Error;
-
-/// Global flags merged into every command's flag struct.
+/// Global flags merged into every command's flag struct by `App.Flags`.
 pub const GlobalFlags = framework.GlobalFlags;
 
-/// Defines a leaf command type. Shorthand for `Command(T, .{})`.
-pub const LeafCommand = framework.LeafCommand;
-
-/// Defines a command type, optionally with subcommands.
-pub const Command = framework.Command;
-
-/// Like `Command`, but the command's `run` returns a value that the framework
-/// renders according to `OutputFormat`.
-pub const CommandWithReturn = framework.CommandWithReturn;
-
-/// The flags type a command's `run` receives: your flags merged with
-/// `GlobalFlags`.
-pub const Flags = framework.Flags;
-
-/// Merges two flag structs into one. The primitive behind `Flags`.
-pub const MergeFlags = framework.MergeFlags;
-
-/// Per-invocation state threaded through routing, pre/post runs and the shell.
-pub const ExecutionChain = framework.ExecutionChain;
-
-/// In-memory harness for driving a command tree from a unit test.
-pub const TestHarness = framework.TestHarness;
+/// External subcommands, discovered on `PATH`.
+///
+/// A command line that names an unregistered command runs `<prefix>-<name>` when an app
+/// opts in with `Config{ .plugins = .{ .enabled = true, .prefix = "myapp" } }`. Off by
+/// default, because it lets any executable on the path extend the command line.
+pub const Plugins = framework.Plugins;
 
 /// Parses a `--log-level` value.
 pub const parseLogLevel = framework.parseLogLevel;
@@ -142,6 +163,22 @@ pub const extractLogLevel = framework.extractLogLevel;
 /// Renders a flag struct as indented text, honouring each field's
 /// `meta.<field>.secret` flag to redact it.
 pub const formatFlags = framework.formatFlags;
+
+// -- What is deliberately *not* re-exported here ------------------------------
+//
+// `Command`, `CommandWithReturn`, `LeafCommand`, `Flags`, `MergeFlags`,
+// `ExecutionChain` and `TestHarness` are members of the `App` closure, not of this
+// module: each is specialised to the `StateT` and `config` an `App` was created
+// with (`Flags` merges the global flags, `ExecutionChain` carries `Ctx`, a command's
+// `run` takes `Ctx`). They are spelled `App.Command`, `App.Flags`, and so on.
+//
+// This file used to *claim* to re-export them - `pub const Command = framework.Command;`
+// and six siblings - and none of those declarations existed, so `@import("cli").Command`
+// did not compile. Nothing noticed, because Zig analyses a declaration only when
+// something refers to it and no caller or test ever did: every consumer already writes
+// `App.Command`. The guard at the bottom of this file now checks both directions, so a
+// re-export that names something the framework does not have is a build failure rather
+// than a broken promise.
 
 // -- The sub-modules the framework composes ----------------------------------
 //
@@ -158,7 +195,6 @@ pub const platform = framework.platform;
 
 pub const tea = framework.tea;
 pub const style = framework.style;
-pub const version = framework.version;
 pub const zconfig = framework.zconfig;
 pub const mergeJson = framework.mergeJson;
 pub const prompt = framework.prompt;
@@ -176,6 +212,25 @@ pub const vfs = framework.vfs;
 pub const tasks = framework.tasks;
 pub const daemon = framework.daemon;
 pub const xdg = framework.xdg;
+/// Reading and writing state, caches and tokens in the standard directories.
+///
+/// Atomic replace, parent-directory creation and owner-only permissions for secret
+/// material, on top of `xdg`'s per-OS table - which is what an app uses for
+/// `~/.config/app`, `~/.cache/app` and a stored auth token.
+pub const state = framework.state;
+/// The path of the running executable.
+///
+/// `std.process.Init` in Zig 0.16 carries the environment, the arguments, an arena, an
+/// allocator, an `Io` and the preopened directories - and not the program's own path, and
+/// there is no `std.process.selfExePath`. This is the replacement, and it is what an app
+/// passes as `App.updateCommand`'s `resolve_target`.
+pub const self_exe = framework.self_exe;
+/// The crash reporter: a banner, a stack trace and a JSON report on panic.
+///
+/// Reachable as `cli.crash.Panic(.{ … })`, the spelling the module's own documentation
+/// has always told consumers to use; before this re-export only `cli.platform.crash`
+/// resolved, so the documented path did not compile.
+pub const crash = framework.crash;
 pub const process = framework.process;
 pub const signal = framework.signal;
 pub const log = framework.log;
@@ -231,11 +286,11 @@ pub const toml_mutator = framework.toml_mutator;
 pub const config_dryrun = framework.config_dryrun;
 pub const systemd_exporter = framework.systemd_exporter;
 
-/// The library's test suite: 91 tests over the framework and every sub-module.
+/// The library's test suite: the framework and every sub-module.
 ///
 /// This import is what makes the suite run, and it is load-bearing - see the
 /// `test` block below. Before it existed, `cli_test.zig` was unreachable from
-/// any module root and none of its 91 tests had ever executed in this
+/// any module root and none of its tests had ever executed in this
 /// repository, while the code they cover shipped in `tigershark`.
 const suite = @import("test/cli_test.zig");
 
@@ -249,34 +304,56 @@ test {
     // to rediscover it.
     //
     // Measured, because the failure is silent: with the `suite` line removed,
-    // this module reports 1 test instead of 92 and `zig build test-lib` still
-    // exits 0.
+    // this module reports the sub-modules' tests only - a drop of more than two
+    // hundred - and `zig build test` still exits 0.
     std.testing.refAllDecls(framework);
     std.testing.refAllDecls(suite);
 }
 
 // Fails the build if `cli.zig` grows a `pub` declaration this file does not
-// re-export.
+// re-export, **or** if this file re-exports something `cli.zig` does not have.
 //
 // The re-export list above is hand-written, so it is exactly the kind of thing
 // that drifts: someone adds `pub const Foo` to the framework, every test still
 // passes, and `@import("cli").Foo` is suddenly missing for consumers. This
 // turns that into a compile error naming the forgotten declaration.
-test "root.zig re-exports every public declaration of cli.zig" {
+//
+// The second direction is not hypothetical. `AppError` and `Error` were
+// re-exported here for a long time while `cli.zig` declared neither at file
+// scope, so `@import("cli").AppError` did not compile - and nothing noticed,
+// because Zig analyses a declaration only when something references it, and no
+// test did. A dangling re-export is a broken public surface, so it is checked
+// here too.
+test "root.zig and cli.zig declare the same public surface" {
     // `@typeInfo(...).decls` is an array, so the loop is unrollable; the
     // `std.meta.declarations` slice variant is not.
-    const decls = @typeInfo(framework).@"struct".decls;
+    const framework_decls = @typeInfo(framework).@"struct".decls;
+    const root_decls = @typeInfo(@This()).@"struct".decls;
     comptime var missing_names: []const u8 = "";
+    comptime var dangling_names: []const u8 = "";
 
-    inline for (decls) |decl| {
+    inline for (framework_decls) |decl| {
         if (comptime !@hasDecl(@This(), decl.name)) {
             missing_names = missing_names ++ " " ++ decl.name;
+        }
+    }
+
+    inline for (root_decls) |decl| {
+        // `framework` is this file's own handle on the implementation, so it is the
+        // one name that is expected to be absent from it.
+        if (comptime !std.mem.eql(u8, decl.name, "framework")) {
+            if (comptime !@hasDecl(framework, decl.name)) {
+                dangling_names = dangling_names ++ " " ++ decl.name;
+            }
         }
     }
 
     comptime {
         if (missing_names.len > 0) {
             @compileError("app/cli/lib/root.zig is missing re-exports for:" ++ missing_names);
+        }
+        if (dangling_names.len > 0) {
+            @compileError("app/cli/lib/root.zig re-exports declarations cli.zig does not have:" ++ dangling_names);
         }
     }
 }

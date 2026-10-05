@@ -1,11 +1,11 @@
 //! `config dry-run` - validate overrides without applying them.
 //!
 //! Parses `--config-override path=value` (repeatable), checks each against
-//! `ConfigT` via `app/cfg/lib/cfg_ops/dry_run.zig`, prints the matrix, and exits non-zero if
+//! `ConfigT` via `app/cfg/lib/ops/dry_run.zig`, prints the matrix, and exits non-zero if
 //! anything failed. It never writes and never invokes the command's run block.
 
 const std = @import("std");
-const ops = @import("app_cfg_ops");
+const ops = @import("../lib/ops/root.zig");
 
 /// Flags for `config dry-run`.
 pub const DryRunFlags = struct {

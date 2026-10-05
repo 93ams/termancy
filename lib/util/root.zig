@@ -24,7 +24,7 @@
 //! eleven modules must exist here even though nothing calls them directly.
 //!
 //! `trace`, `systemd_exporter` and `spin_lock` are the three that are named
-//! directly, by `platform/*`, `render/progress.zig` and `cfg_ops/exporter.zig`.
+//! directly, by `platform/*`, `render/progress.zig` and `app/cfg/lib/ops/exporter.zig`.
 
 const std = @import("std");
 

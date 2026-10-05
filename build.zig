@@ -8,13 +8,16 @@
 //! * `lib/cli`  - the command framework: routing, flag parsing, render, interact.
 //! * `lib/cfg`  - the configuration framework: loader, TOML document model,
 //!   encrypted config, scalar grammars.
-//! * `lib/cfg_ops` - configuration operations, callable **without** the CLI
-//!   framework. This split is what lets a server binary with no `App` still use
-//!   config management, and it is enforced rather than asserted.
 //! * `lib/util` - a vendored subset of the monorepo's `lib/util`, so that this
 //!   repository depends on nothing outside itself. See its `root.zig` for why the
 //!   copy exists and why it is the closure actually used rather than the whole
 //!   library.
+//!
+//! `app/cfg/lib/ops` is the configuration operations: they import `cfg` and `util`
+//! and never `cli`, so a server binary with no `App` still uses config management.
+//! They are a folder inside the `app_cfg` module, not a module of their own - a
+//! second module would need a second test root and would buy nothing, since the
+//! files are only ever reached through `app/cfg/root.zig`'s `ops` surface.
 //!
 //! The two binaries are `app/cli/main.zig` (installed as `tigershark`) and
 //! `app/cfg/main.zig` (installed as `cfg`).
@@ -50,8 +53,8 @@ pub fn build(b: *std.Build) void {
 
     // -- Shared libraries --
     //
-    // Declared in dependency order: `cfg` and `util` first because `cli` and
-    // `app_cfg_ops` import them.
+    // Declared in dependency order: `cfg` and `util` first because `cli` imports
+    // them.
     const util_mod = b.addModule("util", .{
         .root_source_file = b.path("lib/util/root.zig"),
         .target = target,
@@ -61,19 +64,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("lib/cfg/root.zig"),
         .target = target,
         .optimize = optimize,
-    });
-
-    // The framework-free half. It depends on `cfg` and `util` and deliberately
-    // **not** on `cli`, so a consumer can reach configuration operations without
-    // adopting the command framework.
-    const app_cfg_ops_mod = b.addModule("app_cfg_ops", .{
-        .root_source_file = b.path("lib/cfg_ops/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "cfg", .module = cfg_mod },
-            .{ .name = "util", .module = util_mod },
-        },
     });
 
     // The framework's public surface is `root.zig`, not `cli.zig`; `root.zig` is
@@ -96,7 +86,9 @@ pub fn build(b: *std.Build) void {
     // import table as well as on `cli` because a file inside a module resolves
     // `@import("x")` against the *importing* module's table, and a table that is a
     // subset of what a deeper file needs fails against the deep file rather than
-    // at its declaration.
+    // at its declaration. That covers `app/cfg/lib/ops/*.zig` too: they are files
+    // of this module, reached by relative import, and they import `cfg` and `util`
+    // by name.
     const app_cfg_mod = b.addModule("app_cfg", .{
         .root_source_file = b.path("app/cfg/root.zig"),
         .target = target,
@@ -104,7 +96,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "cli", .module = cli_mod },
             .{ .name = "cfg", .module = cfg_mod },
-            .{ .name = "app_cfg_ops", .module = app_cfg_ops_mod },
             .{ .name = "util", .module = util_mod },
         },
     });
@@ -136,7 +127,6 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "app_cfg", .module = app_cfg_mod },
                 .{ .name = "cfg", .module = cfg_mod },
                 .{ .name = "util", .module = util_mod },
-                .{ .name = "app_cfg_ops", .module = app_cfg_ops_mod },
             },
         }),
     });
@@ -173,7 +163,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "app_cfg", .module = app_cfg_mod },
             .{ .name = "cfg", .module = cfg_mod },
             .{ .name = "util", .module = util_mod },
-            .{ .name = "app_cfg_ops", .module = app_cfg_ops_mod },
         },
     });
 
@@ -186,7 +175,6 @@ pub fn build(b: *std.Build) void {
     targets.addTestRoots(b, test_step, test_direct_step, &.{
         .{ .name = "test-lib-util", .module = util_mod, .target = target, .optimize = optimize },
         .{ .name = "test-lib-cfg", .module = cfg_mod, .target = target, .optimize = optimize },
-        .{ .name = "test-app-cfg-ops", .module = app_cfg_ops_mod, .target = target, .optimize = optimize },
         .{ .name = "test-lib-cli", .module = cli_mod, .target = target, .optimize = optimize },
         .{ .name = "test-app-cfg", .module = app_cfg_mod, .target = target, .optimize = optimize },
         .{ .name = "test-app-cfg-bin", .module = cfg_bin_test_mod, .target = target, .optimize = optimize },

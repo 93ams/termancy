@@ -16,7 +16,7 @@
 
 const std = @import("std");
 const cfg = @import("cfg");
-const ops = @import("app_cfg_ops");
+const ops = @import("../lib/ops/root.zig");
 
 /// Flags for `config keys`.
 pub const KeysFlags = struct {

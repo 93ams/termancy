@@ -16,23 +16,30 @@
 //!
 //! ## TOML
 //!
-//! `error.UnsupportedFormat`. `toml_doc.zig` is a comment-preserving document model
-//! whose `get` returns `?[]const u8`; it is not a nested typed tree, so there is
-//! nothing here to flatten without typing it first. TOML is therefore readable
-//! through `cfg.toml_doc` and not yet through this dispatcher - stated rather than
-//! approximated, because a TOML reader that silently drops tables is worse than one
-//! that says it cannot.
+//! Flattened through `toml_doc.zig`, the comment-preserving line model: a
+//! `[table]` header supplies a prefix and each `key = value` assignment becomes one
+//! entry, so `[server]\nport = 8080` is the same `server.port` -> `"8080"` a YAML
+//! file would produce.
+//!
+//! What this reader will **not** do is guess. `toml_doc` stores anything it does not
+//! recognise verbatim, and a construct this flattening cannot place - an array of
+//! tables (`[[x]]`), an inline table (`a = { b = 1 }`) - is `error.Malformed` rather
+//! than a silently dropped key. A TOML reader that loses a table is worse than one
+//! that says it cannot read the file.
 
 const std = @import("std");
 const assert = std.debug.assert;
 const binder = @import("binder.zig");
 const yaml = @import("yaml.zig");
+const toml_doc = @import("toml_doc.zig");
 
 pub const Format = enum { json, toml, yaml };
 
 pub const Error = error{
     UnknownFormat,
-    /// A format this dispatcher cannot flatten yet. See the module comment.
+    /// Retained for callers that match on this set exhaustively. No format is
+    /// refused today: TOML is flattened through `toml_doc`, so the dispatcher can
+    /// read every extension `detect` recognises.
     UnsupportedFormat,
     Malformed,
     OutOfMemory,
@@ -109,7 +116,7 @@ pub fn load(allocator: std.mem.Allocator, text: []const u8, format: Format) Erro
     switch (format) {
         .json => try loadJson(scratch, &flat.values, text),
         .yaml => try loadYaml(scratch, &flat.values, text),
-        .toml => return error.UnsupportedFormat,
+        .toml => try loadToml(scratch, &flat.values, text),
     }
     return flat;
 }
@@ -196,6 +203,103 @@ fn flattenYaml(
     }
 }
 
+/// Flattens a TOML document: `[table]` headers prefix the keys that follow.
+///
+/// The last writer wins, which is what TOML means by a key defined twice, and the
+/// dotted key a nested table produces (`[a.b]` then `c = 1` gives `a.b.c`) is the
+/// same spelling the JSON and YAML arms emit.
+fn loadToml(
+    scratch: std.mem.Allocator,
+    out: *std.StringHashMapUnmanaged([]const u8),
+    text: []const u8,
+) Error!void {
+    var document = toml_doc.parse(scratch, text) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    // The document's own arena is a child of `scratch`; `deinit` is still called so
+    // the model does not depend on its caller's allocator being an arena.
+    defer document.deinit();
+
+    var table: []const u8 = "";
+    for (document.lines.items) |line| {
+        switch (line.kind) {
+            .blank, .comment => {},
+            .header => {
+                // An array of tables is a list and has no flat spelling: an index
+                // would have to be invented, and inventing one would make two
+                // different files resolve alike. `toml_doc` classifies `[[x]]` with
+                // the inner bracket retained, so a trailing `]` is the signal.
+                if (std.mem.endsWith(u8, line.header_name, "]")) return error.Malformed;
+                const name = std.mem.trim(u8, line.header_name, " \t");
+                if (name.len == 0) return error.Malformed;
+                table = try scratch.dupe(u8, name);
+            },
+            .assignment => {
+                if (line.key.len == 0) return error.Malformed;
+                const key = try joinKey(scratch, table, line.key);
+                try out.put(scratch, key, try tomlScalar(scratch, line.value));
+            },
+            // `toml_doc` stores what it cannot classify verbatim. Refusing is the
+            // documented contract: ignoring it would drop a setting silently.
+            .other => return error.Malformed,
+        }
+    }
+}
+
+/// A TOML value as the scalar text the binder coerces.
+///
+/// A quoted string loses its quotes, and a basic string's escapes are decoded;
+/// everything else keeps its text, because `8080` and `true` are exactly what the
+/// coercions expect. A multi-line string and an inline table both reach here as text
+/// this cannot place, and both are refused rather than passed on as a value no
+/// coercion understands.
+fn tomlScalar(scratch: std.mem.Allocator, raw: []const u8) Error![]const u8 {
+    const text = std.mem.trim(u8, raw, " \t\r");
+    if (text.len == 0) return error.Malformed;
+    if (text[0] == '{') return error.Malformed;
+
+    if (text[0] == '"' or text[0] == '\'') {
+        const quote = text[0];
+        if (text.len < 2 or text[text.len - 1] != quote) return error.Malformed;
+        const inner = text[1 .. text.len - 1];
+        // A literal string's escapes are not escapes - that is the whole difference
+        // between TOML's `'...'` and `"..."`.
+        if (quote == '\'') return scratch.dupe(u8, inner);
+        return unescapeBasic(scratch, inner);
+    }
+    return scratch.dupe(u8, text);
+}
+
+/// Decodes TOML's basic-string escapes, refusing one it does not know.
+///
+/// Refusing rather than reproducing an unknown escape verbatim: `"\q"` has no
+/// meaning in TOML, so a value that reaches a field unchanged would be this reader
+/// inventing one.
+fn unescapeBasic(scratch: std.mem.Allocator, inner: []const u8) Error![]const u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(scratch);
+
+    var i: usize = 0;
+    while (i < inner.len) : (i += 1) {
+        const ch = inner[i];
+        if (ch != '\\') {
+            try out.append(scratch, ch);
+            continue;
+        }
+        i += 1;
+        if (i >= inner.len) return error.Malformed;
+        switch (inner[i]) {
+            'n' => try out.append(scratch, '\n'),
+            't' => try out.append(scratch, '\t'),
+            'r' => try out.append(scratch, '\r'),
+            '"' => try out.append(scratch, '"'),
+            '\\' => try out.append(scratch, '\\'),
+            else => return error.Malformed,
+        }
+    }
+    return out.toOwnedSlice(scratch);
+}
+
 fn putOwned(
     scratch: std.mem.Allocator,
     out: *std.StringHashMapUnmanaged([]const u8),
@@ -204,7 +308,6 @@ fn putOwned(
 ) Error!void {
     try out.put(scratch, try scratch.dupe(u8, key), value);
 }
-
 /// Joins a dotted path, so a nested key is `server.tls.enabled` and an array
 /// element is `hosts.0`.
 fn joinKey(scratch: std.mem.Allocator, prefix: []const u8, segment: []const u8) Error![]const u8 {
@@ -393,12 +496,64 @@ test "a file layer loses to a flag layer put above it, as precedence requires" {
     try testing.expectEqual(@as(u16, 1), binding.value.port);
 }
 
-test "TOML is refused rather than silently dropping its tables" {
-    try testing.expectError(error.UnsupportedFormat, load(
+test "a TOML document flattens to the same dotted keys as JSON and YAML" {
+    var flat = try load(testing.allocator,
+        \\# the server
+        \\[server]
+        \\host = "localhost"
+        \\port = 8080
+        \\
+        \\[server.tls]
+        \\enabled = true
+        \\cert = "/c.pem"
+        \\
+    , .toml);
+    defer flat.deinit();
+
+    try testing.expectEqualStrings("localhost", flat.get("server.host").?);
+    try testing.expectEqualStrings("8080", flat.get("server.port").?);
+    try testing.expectEqualStrings("true", flat.get("server.tls.enabled").?);
+    // A quoted string loses its quotes, or every coercion downstream would see them.
+    try testing.expectEqualStrings("/c.pem", flat.get("server.tls.cert").?);
+}
+
+test "a TOML literal string keeps its backslashes and a basic string decodes them" {
+    var flat = try load(testing.allocator,
+        \\literal = 'C:\path\n'
+        \\basic = "a\tb"
+        \\
+    , .toml);
+    defer flat.deinit();
+
+    try testing.expectEqualStrings("C:\\path\\n", flat.get("literal").?);
+    try testing.expectEqualStrings("a\tb", flat.get("basic").?);
+}
+
+test "a TOML top-level key needs no table header" {
+    var flat = try load(testing.allocator, "debug = true\nempty = \"\"\n", .toml);
+    defer flat.deinit();
+
+    try testing.expectEqualStrings("true", flat.get("debug").?);
+    // An empty string is a value, not an absence - the same distinction the JSON
+    // null test pins.
+    try testing.expectEqualStrings("", flat.get("empty").?);
+}
+
+test "TOML constructs without a flat spelling are refused, not dropped" {
+    // An array of tables is a list; flattening it would have to invent an index.
+    try testing.expectError(error.Malformed, load(
         testing.allocator,
-        "[server]\nhost = \"localhost\"\n",
+        "[[servers]]\nhost = \"a\"\n",
         .toml,
     ));
+    // An inline table is a nested object on one line.
+    try testing.expectError(error.Malformed, load(
+        testing.allocator,
+        "server = { host = \"a\" }\n",
+        .toml,
+    ));
+    // And a parse failure is still a parse failure.
+    try testing.expectError(error.Malformed, load(testing.allocator, "[server\nhost = 1\n", .toml));
 }
 
 test "a YAML construct outside the subset surfaces as Malformed, not a wrong value" {

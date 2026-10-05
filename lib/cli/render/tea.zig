@@ -1,5 +1,40 @@
 const std = @import("std");
 
+/// How many terminal lines a rendered view occupies.
+///
+/// The erase loop emits one `\x1b[A\x1b[2K\r` per line of the *previous* frame, so this
+/// count decides whether a re-render leaves the old frame on screen. It used to be
+/// `std.mem.count(u8, view, "\n")`, which is one short for the normal case - a view whose
+/// lines each end in a newline - so every re-render left the previous frame's last line
+/// behind. The rule: one line per newline, plus one for a final line that the view did not
+/// terminate, and nothing at all for an empty view (which occupies no lines to erase).
+pub fn renderedLineCount(view: []const u8) usize {
+    if (view.len == 0) return 0;
+    const line_breaks = std.mem.count(u8, view, "\n");
+    return line_breaks + @intFromBool(view[view.len - 1] != '\n');
+}
+
+test "the rendered line count matches what the terminal shows" {
+    // A single unterminated line: one row, no line break to erase.
+    try std.testing.expectEqual(@as(usize, 1), renderedLineCount("Menu"));
+    // Two terminated lines: two rows. The old `count` returned 1 here, which is the
+    // off-by-one that left a stale frame behind on every re-render.
+    try std.testing.expectEqual(@as(usize, 2), renderedLineCount("Menu\nChoice\n"));
+    // A final line without a terminator still occupies a row.
+    try std.testing.expectEqual(@as(usize, 3), renderedLineCount("a\nb\nc"));
+    // Empty: nothing was drawn, so there is nothing to erase. Erasing here would move the
+    // cursor up over a line this program never wrote.
+    try std.testing.expectEqual(@as(usize, 0), renderedLineCount(""));
+    // A view that is only a terminator drew one (blank) row.
+    try std.testing.expectEqual(@as(usize, 1), renderedLineCount("\n"));
+    // And the count is never below the number of line breaks it must erase, which is the
+    // property the erase loop depends on.
+    const views = [_][]const u8{ "Menu", "Menu\n", "a\nb", "a\nb\n", "\n", "" };
+    for (views) |view| {
+        try std.testing.expect(renderedLineCount(view) >= std.mem.count(u8, view, "\n"));
+    }
+}
+
 pub const Key = enum {
     up,
     down,
@@ -101,18 +136,50 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
         const CmdT = Command(CustomMsgT);
 
         model: ModelT,
-        channel: *Channel(MsgT),
+        io: std.Io,
 
-        pub fn init(model: ModelT, channel: *Channel(MsgT)) Self {
-            return .{ .model = model, .channel = channel };
+        pub fn init(model: ModelT, io: std.Io) Self {
+            return .{ .model = model, .io = io };
         }
 
+        /// What the reader thread is allowed to touch, and for how long.
+        ///
+        /// Ownership rule: the thread owns nothing that its spawner can free. The context
+        /// and the channel it points at are allocated by `startReader` and are never
+        /// released, because a thread blocked in a stdin read cannot observe a stop flag
+        /// - the flag is only reachable between reads, and the read blocks until a byte
+        /// arrives, which on the quit path may be never. Hence the other half of the
+        /// rule: whoever starts a reader thread must keep the context and channel alive
+        /// for the thread, and must not free them while it runs. `startReader` takes the
+        /// allocator, so a test can use `std.testing.allocator` and assert the exact
+        /// inverse on a source that reaches end of stream: there the thread does stop on
+        /// its own, and there joining it before `free` is what proves nothing was freed
+        /// early. `run` uses `std.heap.page_allocator` and deliberately never frees.
+        ///
+        /// This is not hypothetical. The context used to be a `run` local while the
+        /// thread held its address, and `prompt.zig` `defer`red `channel.deinit()` on the
+        /// quit path while the thread was still pushing into that queue.
         const StdinContext = struct {
+            /// A copy of the input interface. The thread reads the byte source the
+            /// interface points at; the interface itself is owned here, so it cannot be
+            /// freed out from under the reader either.
             in: std.Io.Reader,
             channel: *Channel(MsgT),
         };
 
+        /// Reads the input source into `ctx_ptr.channel` until end of stream or a read
+        /// error, then returns.
+        ///
+        /// The thread's lifetime is the source's lifetime. Nothing here may free the
+        /// context, the channel, or the input's backing buffer: see the ownership rule on
+        /// `StdinContext`. The loop is bounded by the source: a source that reaches end of
+        /// stream returns zero bytes, which ends the loop, which lets an owner that owns a
+        /// finite source join this thread and then free in either order.
         fn stdinReaderThread(ctx_ptr: *StdinContext) void {
+            // Nothing else may hold the queue's lock before this thread reads, and the
+            // reader needs a buffer for the bytes it is about to request.
+            std.debug.assert(ctx_ptr.channel.mutex.state.load(.monotonic) == .unlocked);
+            std.debug.assert(ctx_ptr.in.buffer.len > 0);
             var buf: [16]u8 = undefined;
             while (true) {
                 var vecs = [_][]u8{buf[0..]};
@@ -124,6 +191,43 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
 
                 ctx_ptr.channel.push(.{ .key = key_msg }) catch return;
             }
+        }
+
+        /// Allocates the reader's context and channel together and starts the reader
+        /// thread, returning the thread with the context it reads through.
+        ///
+        /// The caller owns both allocations through `Reader.ctx` and must keep them alive
+        /// for as long as the thread runs (see `StdinContext`). `Reader.ctx` is returned so
+        /// an owner with a finite source can join the thread and then release the channel,
+        /// in that order. Spawning only fails on `error.ThreadQuota`/`error.SystemResources`,
+        /// in which case the storage is freed again - there is no thread to outlive it.
+        const Reader = struct {
+            thread: std.Thread,
+            ctx: *StdinContext,
+        };
+
+        fn startReader(
+            allocator: std.mem.Allocator,
+            io: std.Io,
+            in: std.Io.Reader,
+        ) !Reader {
+            // The channel starts empty: it is the reader's only queue, so a non-empty one
+            // would mean another producer is already pushing into it.
+            const channel = try allocator.create(Channel(MsgT));
+            errdefer allocator.destroy(channel);
+            channel.* = Channel(MsgT).init(allocator, io);
+            std.debug.assert(channel.queue.items.len == 0);
+
+            const ctx = try allocator.create(StdinContext);
+            errdefer allocator.destroy(ctx);
+            ctx.* = .{ .in = in, .channel = channel };
+            // The reader pushes into the very channel this context carries, so the two
+            // allocations the caller must keep alive are the two the thread reaches.
+            std.debug.assert(ctx.channel == channel);
+            std.debug.assert(ctx.in.buffer.ptr == in.buffer.ptr);
+
+            const thread = try std.Thread.spawn(.{}, stdinReaderThread, .{ctx});
+            return .{ .thread = thread, .ctx = ctx };
         }
 
         const ExecContext = struct {
@@ -144,26 +248,33 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             try writer.writeAll("\x1b[?25l"); // Hide cursor
             defer writer.writeAll("\x1b[?25h") catch {}; // Show cursor
 
-            // Spawn Stdin reader thread
-            // Note: ctx.in is passed in generic format. For std.fs.File, we can spawn a thread.
-            var stdin_ctx = StdinContext{ .in = ctx.in.*, .channel = self.channel };
-            const stdin_thread = try std.Thread.spawn(.{}, stdinReaderThread, .{&stdin_ctx});
-            _ = stdin_thread; // We detach or let it block (actually we should terminate it cleanly, but stdin read blocks)
+            // The process-lifetime allocator and the missing join are one decision, not two
+            // oversights. The reader thread cannot be stopped (see `StdinContext`), so it is
+            // never joined, so its context and the channel it pushes into must outlive every
+            // frame that could free them. `prompt.zig` used to own the channel on its own
+            // frame and `defer` its `deinit`, which could free the queue while the thread was
+            // pushing into it. The leak is bounded - one context and one channel per prompt,
+            // in a process that exits as soon as the prompt's command returns - and the
+            // alternative is a use-after-free.
+            const reader = try startReader(std.heap.page_allocator, self.io, ctx.in.*);
+            // `readVec` requires a buffer to read into; the reader thread asserts the same
+            // precondition from its side, before it reads anything.
+            std.debug.assert(reader.ctx.in.buffer.len > 0);
 
             var prev_lines: usize = 0;
 
             // Initial view
-            var aw = std.Io.Writer.Allocating.init(self.channel.allocator);
+            var aw = std.Io.Writer.Allocating.init(reader.ctx.channel.allocator);
             try self.model.view(&aw.writer);
             var view_bytes = aw.writer.buffer[0..aw.writer.end];
             try writer.writeAll(view_bytes);
-            prev_lines = std.mem.count(u8, view_bytes, "\n");
-            self.channel.allocator.free(aw.writer.buffer);
+            prev_lines = renderedLineCount(view_bytes);
+            reader.ctx.channel.allocator.free(aw.writer.buffer);
 
             // Event Loop
             while (true) {
                 // 1. Wait for input or background task message
-                const msg = self.channel.pop();
+                const msg = reader.ctx.channel.pop();
 
                 // 2. Update phase
                 const cmd = try self.model.update(msg);
@@ -172,12 +283,12 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
                     if (prev_lines > 0) {
                         for (0..prev_lines) |_| try writer.writeAll("\x1b[A\x1b[2K\r");
                     }
-                    var aw_final = std.Io.Writer.Allocating.init(self.channel.allocator);
+                    var aw_final = std.Io.Writer.Allocating.init(reader.ctx.channel.allocator);
                     try self.model.view(&aw_final.writer);
                     view_bytes = aw_final.writer.buffer[0..aw_final.writer.end];
                     try writer.writeAll(view_bytes);
                     try writer.writeAll("\n");
-                    self.channel.allocator.free(aw_final.writer.buffer);
+                    reader.ctx.channel.allocator.free(aw_final.writer.buffer);
                     break;
                 } else if (cmd == .exec) {
                     // Spawn background task
@@ -190,13 +301,48 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
                     for (0..prev_lines) |_| try writer.writeAll("\x1b[A\x1b[2K\r");
                 }
 
-                var aw_next = std.Io.Writer.Allocating.init(self.channel.allocator);
+                var aw_next = std.Io.Writer.Allocating.init(reader.ctx.channel.allocator);
                 try self.model.view(&aw_next.writer);
                 view_bytes = aw_next.writer.buffer[0..aw_next.writer.end];
                 try writer.writeAll(view_bytes);
-                prev_lines = std.mem.count(u8, view_bytes, "\n");
-                self.channel.allocator.free(aw_next.writer.buffer);
+                prev_lines = renderedLineCount(view_bytes);
+                reader.ctx.channel.allocator.free(aw_next.writer.buffer);
             }
+        }
+
+        test "the reader thread stops at end of stream, so joining it before freeing is safe" {
+            // This drives the reader thread with an injected source rather than a real
+            // stdin: the source is a byte slice, so it reaches end of stream and the
+            // thread returns on its own. Nothing here can block, so nothing here can hang
+            // `zig build test`.
+            //
+            // The test is the inverse of the rule the fix implements. `startReader` puts
+            // the context and channel behind the caller's allocator, so `std.testing.allocator`
+            // reports a leak if the thread touches anything after the test frees it - and a
+            // double free or a dangling push aborts the run outright.
+            const testing = std.testing;
+
+            // One byte is enough to prove the thread reads and pushes: `parseAnsi` maps a
+            // lone `h` to a character key, and the next read reaches end of stream and ends
+            // the loop, so this test never waits on an input that is not coming.
+            var source_bytes: [1]u8 = .{'h'};
+            const source = std.Io.Reader.fixed(&source_bytes);
+
+            const reader = try startReader(testing.allocator, testing.io, source);
+            reader.thread.join(); // Ends at end of stream; see the source above.
+
+            const message = reader.ctx.channel.pop();
+            try testing.expect(message == .key);
+            try testing.expectEqual(Key.char, message.key.key);
+            try testing.expectEqual(@as(?u8, 'h'), message.key.char);
+
+            // The thread is joined and the source is drained, so the queue holds nothing
+            // else and releasing it now cannot race the reader. `deinit` frees the queue's
+            // storage and not just the channel struct, and this order - join, then deinit,
+            // then destroy - is what makes `testing.allocator` report no leak.
+            reader.ctx.channel.deinit();
+            testing.allocator.destroy(reader.ctx.channel);
+            testing.allocator.destroy(reader.ctx);
         }
     };
 }

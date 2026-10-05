@@ -6,9 +6,9 @@
 //! a test root, the same reason already recorded for the other files that moved.
 //! `lib/cli` re-exports it under its historical name, so no caller had to change.
 //!
-//! The move was forced by a real consumer: `app/cfg/lib/cfg_ops` must be callable from
-//! `app/kvs` and `app/scp`, neither of which imports the CLI framework, and
-//! `app_cfg_ops` therefore has no `cli` module to import from.
+//! The move was forced by a real consumer: `app/cfg/lib/ops` must be callable from
+//! `app/kvs` and `app/scp`, neither of which imports the CLI framework, and the
+//! operations therefore have no `cli` module to import from.
 //!
 //! This file **is** the type: the file's own scope is `SystemdExporter`, so a
 //! consumer writes `const SystemdExporter = @import("systemd_exporter.zig");`.

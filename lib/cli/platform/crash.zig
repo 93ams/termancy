@@ -235,8 +235,12 @@ pub fn Panic(comptime config: Config) type {
             ) catch {};
             std.debug.print("{s}", .{banner_writer.buffered()});
 
-            // The stack trace the previous implementation threw away.
-            std.debug.dumpCurrentStackTrace(first_trace_addr);
+            // The stack trace the previous implementation threw away. Zig 0.16 takes a
+            // `StackUnwindOptions` rather than a bare address; passing the panic's own
+            // first trace address is what omits the handler and its machinery from the
+            // top of the trace. This call site is why the module could not have been
+            // compiling before anything installed the hook: nobody instantiated it.
+            std.debug.dumpCurrentStackTrace(.{ .first_address = first_trace_addr });
 
             if (config.write_report) writeReport(message, config) catch |err| {
                 std.debug.print("snek: crash report not written: {s}\n", .{@errorName(err)});

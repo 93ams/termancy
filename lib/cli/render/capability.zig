@@ -82,6 +82,12 @@ pub fn get() Capability {
 /// `stdout_is_tty` governs whether escapes can be *seen*; `stdin_is_tty` governs
 /// whether the program can *ask*. They are separate because a program can
 /// legitimately be `prog > file` while still prompting on the terminal.
+///
+/// A CI environment is folded in as "not a terminal" for all three capabilities.
+/// A runner can allocate a PTY, and when it does, `isatty` says yes - so a prompt
+/// would block a pipeline until the job times out, and a progress bar would write
+/// cursor movements into a log. `FORCE_COLOR` still wins over it, because a CI log
+/// that can render escapes is exactly what that variable is for.
 pub fn decide(
     env_map: *const std.process.Environ.Map,
     stdout_is_tty: bool,
@@ -99,20 +105,57 @@ pub fn decide(
         std.mem.eql(u8, term, "dumb")
     else
         false;
+    const ci = isCi(env_map);
 
     const color = if (no_color)
         false
     else if (force_color)
         true
     else
-        stdout_is_tty and !dumb_terminal;
+        stdout_is_tty and !dumb_terminal and !ci;
+
+    const terminal = stdout_is_tty and !dumb_terminal and !ci;
 
     return .{
         .color = color,
         // Not `color`: see the module comment.
-        .cursor = stdout_is_tty and !dumb_terminal,
-        .interactive = stdin_is_tty,
+        .cursor = terminal,
+        .interactive = stdin_is_tty and !ci,
     };
+}
+
+/// Whether this process is running under a CI system.
+///
+/// `CI` is the de-facto standard variable - GitHub Actions, GitLab, CircleCI, Travis,
+/// Buildkite and AppVeyor all set it - and the named alternatives cover the runners
+/// that predate it. `CI=false` and `CI=0` are real things to write, so a value that
+/// says "off" is read as off rather than as presence.
+///
+/// Read from the caller's environment map rather than the process, so a unit test can
+/// decide, and public because an application may want the same judgement for a policy
+/// of its own.
+pub fn isCi(env_map: *const std.process.Environ.Map) bool {
+    const names = [_][]const u8{
+        "CI",
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "CIRCLECI",
+        "TRAVIS",
+        "BUILDKITE",
+        "TF_BUILD",
+        "TEAMCITY_VERSION",
+    };
+    inline for (names) |name| {
+        if (env_map.get(name)) |value| {
+            if (value.len > 0 and
+                !std.ascii.eqlIgnoreCase(value, "false") and
+                !std.mem.eql(u8, value, "0"))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 /// `true` when `name` is present **and non-empty**.

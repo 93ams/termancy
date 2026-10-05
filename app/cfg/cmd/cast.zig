@@ -7,7 +7,7 @@
 //! ## What this does and does not do
 //!
 //! It **validates and normalises**, and prints the canonical form. It does **not** rewrite
-//! a file, because there is no TOML document model in this tree - `app/cfg/lib/cfg/toml_mutator.zig`
+//! a file, because there is no TOML document model in this tree - `lib/cfg/toml_mutator.zig`
 //! is line-based text, and a line-based editor cannot safely coerce a nested value. That
 //! gap is recorded in `app/cfg/PLAN.md` rather than papered over with a text substitution
 //! that would corrupt a file it did not fully understand.
@@ -17,7 +17,7 @@
 
 const std = @import("std");
 const cfg = @import("cfg");
-const ops = @import("app_cfg_ops");
+const ops = @import("../lib/ops/root.zig");
 
 /// Flags for `config cast`.
 pub const CastFlags = struct {

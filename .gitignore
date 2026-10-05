@@ -7,6 +7,9 @@ zig-cache/
 zig-out/
 zig-pkg/
 
+# Build and test output captured from a shell.
+*.log
+
 # Editor and OS noise.
 .vscode/
 .idea/

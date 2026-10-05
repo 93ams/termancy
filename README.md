@@ -16,17 +16,20 @@ build.zig            One build root for the whole repository
 build/targets.zig    Target policy and the test-root plumbing
 lib/cli/             The command framework (module `cli`)
 lib/cfg/             The configuration framework (module `cfg`)
-lib/cfg_ops/         Configuration operations, no CLI dependency (`app_cfg_ops`)
 lib/util/            Vendored primitives, so this repo depends on nothing else
 app/cli/             The `tigershark` binary and its command set
 app/cfg/             The `cfg` binary and the `config` command group
+app/cfg/lib/ops/     Configuration operations, no CLI dependency (module `app_cfg`)
 ```
 
 Two design points worth knowing before reading the code:
 
-* **`cfg_ops` is framework-free on purpose.** It imports `cfg` and `util` and
-  never `cli`, so a server binary that has no `App` can still use configuration
-  management. This is enforced by the module's import table, not by convention.
+* **The operations in `app/cfg/lib/ops` are framework-free on purpose.** They import
+  `cfg` and `util` and never `cli`, so a server binary that has no `App` can still
+  use configuration management. They are files of the `app_cfg` module, reached
+  through its `ops` surface; a module of their own bought nothing but a second test
+  root. That makes "no `cli` here" a review rule rather than a build error - while
+  `ops` was its own module, the module's import table enforced it.
 * **`lib/util` is a deliberate copy.** The monorepo that `snek` came from still
   consumes `snek`'s `cfg` and `cli` modules, so a back-dependency would be a
   package cycle. `lib/util/root.zig` records what was copied and why it is the

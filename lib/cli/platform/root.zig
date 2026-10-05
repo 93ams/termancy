@@ -44,6 +44,9 @@ pub const sandbox = @import("sandbox.zig");
 pub const sys = @import("sys.zig");
 /// Standard application directories, resolved per platform and per XDG variable.
 pub const xdg = @import("xdg.zig");
+pub const self_exe = @import("self_exe.zig");
+/// Atomic reads and writes of a program's own state, caches and tokens.
+pub const state = @import("state.zig");
 /// Running a child process, captured or streamed.
 pub const process = @import("process.zig");
 /// Graceful shutdown: conventional signals, as a poll-able flag.
@@ -83,6 +86,8 @@ test {
     std.testing.refAllDecls(sandbox);
     std.testing.refAllDecls(sys);
     std.testing.refAllDecls(xdg);
+    std.testing.refAllDecls(state);
+    std.testing.refAllDecls(self_exe);
     std.testing.refAllDecls(process);
     std.testing.refAllDecls(signal);
     std.testing.refAllDecls(log);

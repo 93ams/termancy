@@ -2,28 +2,44 @@ const std = @import("std");
 const App = @import("root.zig").App;
 const prompt = @import("cli").prompt;
 
-const AddFlags = struct {
-    positionals: struct { component: []const u8 = "" } = .{},
+/// `tigershark add`'s flags.
+pub const AddFlags = struct {
     force: bool = false,
 
     pub const meta = .{
-        .positionals = .{
-            .description = "The name of the component to add (e.g., prompt)",
-        },
         .force = .{
             .short = 'f',
-            .description = "Overwrite existing files without prompting",
+            .help = "Overwrite existing files without prompting",
         },
     };
 };
 
-pub const cmd = App.Command(AddFlags, .{}){
-    .name = "add",
-    .description = "Add a UI component to your project",
-    .run = addRun,
+/// `tigershark add`'s positional arguments.
+///
+/// Separate from the flags: what the user typed as an argument and what they typed as
+/// an option are different kinds of input, and `addRun` should not have to reach
+/// through a flag struct to find one.
+pub const AddArgs = struct {
+    component: []const u8 = "",
+
+    pub const meta = .{
+        .component = .{
+            .help = "The name of the component to add (e.g., prompt)",
+        },
+    };
 };
 
-fn addRun(ctx: App.Ctx, flags: App.Flags(AddFlags)) !void {
+/// The command's metadata, registered separately from its body below.
+const meta = .{
+    .name = "add",
+    .description = "Add a UI component to your project",
+    .flags = AddFlags,
+    .args = AddArgs,
+};
+
+pub const cmd = App.command(meta, addRun);
+
+fn addRun(ctx: App.Ctx, flags: App.Flags(AddFlags), args: AddArgs) !void {
     const alloc = ctx.allocator;
 
     // Load registry
@@ -46,7 +62,7 @@ fn addRun(ctx: App.Ctx, flags: App.Flags(AddFlags)) !void {
     var target_components: std.ArrayListUnmanaged([]const u8) = .empty;
     defer target_components.deinit(alloc);
 
-    if (flags.positionals.component.len == 0) {
+    if (args.component.len == 0) {
         // Interactive mode!
         var keys: std.ArrayListUnmanaged([]const u8) = .empty;
         defer keys.deinit(alloc);
@@ -68,7 +84,7 @@ fn addRun(ctx: App.Ctx, flags: App.Flags(AddFlags)) !void {
             try target_components.append(alloc, s);
         }
     } else {
-        try target_components.append(alloc, flags.positionals.component);
+        try target_components.append(alloc, args.component);
     }
 
     try std.Io.Dir.cwd().createDirPath(ctx.io, "src/ui");

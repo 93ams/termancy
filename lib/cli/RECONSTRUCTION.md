@@ -240,6 +240,11 @@ test-lib-tls 27   test-lib-dns 5       test-lib-sec 5
 test-lib-s3 9     test-lib-resp 31
 ```
 
+*Updated for `snek`:* `app_cfg_ops` is no longer a module - the operations live in
+`app/cfg/lib/ops` as files of `app_cfg`, so `test-app-cfg-ops` is gone as a root and
+its tests are collected by `test-app-cfg`. The counts above stand as the snapshot they
+are.
+
 `scripts/check-encoding.ps1` must still report exactly **10** affected files (all
 pre-existing, none of them ours).
 
@@ -450,6 +455,11 @@ test-lib-cfg 55   test-lib-cli 127     test-lib-util 57
 test-lib-tls 27   test-lib-dns 5       test-lib-sec 5
 test-lib-s3 9     test-lib-resp 31
 ```
+
+*Updated for `snek`:* `app_cfg_ops` is no longer a module - the operations live in
+`app/cfg/lib/ops` as files of `app_cfg`, so `test-app-cfg-ops` is gone as a root and
+its tests are collected by `test-app-cfg`. The counts above stand as the snapshot they
+are.
 
 Also run `scripts/check-encoding.ps1`; it must still report exactly **10** affected files
 (all pre-existing, none of them ours).

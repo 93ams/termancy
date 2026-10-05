@@ -74,10 +74,11 @@ pub fn confirm(ctx: anytype, question: []const u8, options: ConfirmOptions) !boo
     };
 
     const m = Model.init(question, options.default);
-    var channel = tea.Channel(tea.Msg(void)).init(ctx.allocator, ctx.io);
-    defer channel.deinit();
 
-    var prog = tea.Program(Model, void).init(m, &channel);
+    // No channel here: `Program` allocates its own and transfers the lifetime to the
+    // reader thread, which cannot be joined. A caller-owned channel on this frame is
+    // exactly the use-after-free this prompt used to have. See `tea.StdinContext`.
+    var prog = tea.Program(Model, void).init(m, ctx.io);
     try prog.run(ctx);
 
     return prog.model.val;
@@ -152,10 +153,7 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
     };
 
     const m = Model.init(question);
-    var channel = tea.Channel(tea.Msg(void)).init(ctx.allocator, ctx.io);
-    defer channel.deinit();
-
-    var prog = tea.Program(Model, void).init(m, &channel);
+    var prog = tea.Program(Model, void).init(m, ctx.io);
     try prog.run(ctx);
 
     inline for (fields, 0..) |field, i| {
@@ -252,10 +250,7 @@ pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) 
     };
 
     const m = Model.init(question);
-    var channel = tea.Channel(tea.Msg(void)).init(ctx.allocator, ctx.io);
-    defer channel.deinit();
-
-    var prog = tea.Program(Model, void).init(m, &channel);
+    var prog = tea.Program(Model, void).init(m, ctx.io);
     try prog.run(ctx);
 
     var selected_list = std.ArrayListUnmanaged(EnumType).empty;
@@ -361,10 +356,7 @@ pub fn multiSelectDynamic(ctx: anytype, options: []const []const u8, question: [
     var m = try Model.init(ctx.allocator, question, options);
     defer m.deinit();
 
-    var channel = tea.Channel(tea.Msg(void)).init(ctx.allocator, ctx.io);
-    defer channel.deinit();
-
-    var prog = tea.Program(Model, void).init(m, &channel);
+    var prog = tea.Program(Model, void).init(m, ctx.io);
     try prog.run(ctx);
 
     var selected_list = std.ArrayListUnmanaged([]const u8).empty;

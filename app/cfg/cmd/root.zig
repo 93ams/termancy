@@ -1,29 +1,27 @@
-//! `app/cfg/cmd` - the `cli.App.Command` wrappers around `app/cfg/lib/cfg_ops`.
+//! `app/cfg/cmd` - the `App.command` registrations over `app/cfg/lib/ops`.
 //!
 //! Each command is **thin by design**: parse flags, call an operation, render.
 //! Anything that decides *what* the answer is belongs in `ops/`, so it can be called
 //! without the framework. If a file in this folder grows logic that does not touch
 //! `cli.Ctx`, that logic is in the wrong folder.
 //!
-//! ## Why the command *types* are declared here
+//! ## Why the command *declarations* are here
 //!
-//! `AppT.Command(Flags, subcmds)` produces a **type**, and that type has a field
-//! literally named `command`. A child file therefore cannot also export a function
-//! named `command` and hand back the type - the two names collide, which is exactly
-//! what `zig build` reported while this was being written:
+//! `AppT.command(meta, run)` needs `AppT`, and `AppT` is `Commands(App, ConfigT)`'s
+//! first parameter - so the registration can only happen inside this file, which is
+//! where the app is known. (An earlier version of this comment blamed a name collision
+//! with a field called `command`; there is no such field, and the real reason is the
+//! one above.)
 //!
-//! ```text
-//! error: expected type 'type', found 'cli.App(...).CommandWithReturn(...)'
-//! ```
-//!
-//! So the split is: each child file owns its **flags** and its **`run` body** (both
-//! of which are `AppT`-independent and independently testable), and this file owns
-//! the command **declarations**, where `AppT` is known.
+//! The split is therefore: each child file owns its **flags** (and any positional
+//! arguments) and its **`run` body** - both `AppT`-independent and independently
+//! testable - and this file owns the **metadata** and the registration, where `AppT`
+//! is known.
 
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
-const ops = @import("app_cfg_ops");
+const ops = @import("../lib/ops/root.zig");
 
 /// `config export`'s flags and body.
 pub const exporter = @import("exporter.zig");
@@ -59,126 +57,127 @@ pub fn Commands(comptime AppT: type, comptime ConfigT: type) type {
         pub const ConfigFlags = struct {};
 
         /// `config export`
-        pub const export_cmd = AppT.Command(exporter.ExportFlags, .{}){
+        pub const export_cmd = AppT.command(.{
             .name = "export",
             .description = "Write the resolved configuration as environment variables",
-            .run = exportRun,
-        };
+            .flags = exporter.ExportFlags,
+        }, exportRun);
 
         /// `config dry-run`
-        pub const dry_run_cmd = AppT.Command(dry_run.DryRunFlags, .{}){
+        pub const dry_run_cmd = AppT.command(.{
             .name = "dry-run",
             .aliases = &.{"dryrun"},
             .description = "Validate configuration overrides without applying them",
-            .run = dryRunRun,
-        };
+            .flags = dry_run.DryRunFlags,
+        }, dryRunRun);
 
         /// `config inspect`
-        pub const inspect_cmd = AppT.Command(inspect.InspectFlags, .{}){
+        pub const inspect_cmd = AppT.command(.{
             .name = "inspect",
             .description = "Explain where a configuration value came from",
-            .run = inspectRun,
-        };
+            .flags = inspect.InspectFlags,
+        }, inspectRun);
 
         /// `config schema`
-        pub const schema_cmd = AppT.Command(schema.SchemaFlags, .{}){
+        pub const schema_cmd = AppT.command(.{
             .name = "schema",
             .description = "Emit a JSON Schema for the configuration",
-            .run = schemaRun,
-        };
+            .flags = schema.SchemaFlags,
+        }, schemaRun);
 
         /// `config get`
-        pub const get_cmd = AppT.Command(get.GetFlags, .{}){
+        pub const get_cmd = AppT.command(.{
             .name = "get",
             .description = "Print one configuration value",
-            .run = getRun,
-        };
+            .flags = get.GetFlags,
+        }, getRun);
 
         /// `config keys`
-        pub const keys_cmd = AppT.Command(keys.KeysFlags, .{}){
+        pub const keys_cmd = AppT.command(.{
             .name = "keys",
             .description = "List the configuration's key paths, one per line",
-            .run = keysRun,
-        };
+            .flags = keys.KeysFlags,
+        }, keysRun);
 
         /// `config cast`
-        pub const cast_cmd = AppT.Command(cast.CastFlags, .{}){
+        pub const cast_cmd = AppT.command(.{
             .name = "cast",
             .description = "Coerce a value into a named type",
-            .run = castRun,
-        };
+            .flags = cast.CastFlags,
+        }, castRun);
 
         /// `config set`
-        pub const set_cmd = AppT.Command(mutate.SetFlags, .{}){
+        pub const set_cmd = AppT.command(.{
             .name = "set",
             .description = "Set a key in a TOML file",
-            .run = setRun,
-        };
+            .flags = mutate.SetFlags,
+        }, setRun);
 
         /// `config del`
-        pub const del_cmd = AppT.Command(mutate.DelFlags, .{}){
+        pub const del_cmd = AppT.command(.{
             .name = "del",
             .aliases = &.{"delete"},
             .description = "Remove a key from a TOML file",
-            .run = delRun,
-        };
+            .flags = mutate.DelFlags,
+        }, delRun);
 
         /// `config format`
-        pub const format_cmd = AppT.Command(profiles_cmd.FormatFlags, .{}){
+        pub const format_cmd = AppT.command(.{
             .name = "format",
             .description = "Normalise whitespace in a TOML file",
-            .run = formatRun,
-        };
+            .flags = profiles_cmd.FormatFlags,
+        }, formatRun);
 
         /// `config profile`
-        pub const profile_cmd = AppT.Command(profiles_cmd.ProfileFlags, .{}){
+        pub const profile_cmd = AppT.command(.{
             .name = "profile",
             .description = "List or switch configuration contexts",
-            .run = profileRun,
-        };
+            .flags = profiles_cmd.ProfileFlags,
+        }, profileRun);
 
         /// `config encrypt`
-        pub const encrypt_cmd = AppT.Command(secrets_cmd.EncryptFlags, .{}){
+        pub const encrypt_cmd = AppT.command(.{
             .name = "encrypt",
             .description = "Encrypt a configuration file at rest",
-            .run = encryptRun,
-        };
+            .flags = secrets_cmd.EncryptFlags,
+        }, encryptRun);
 
         /// `config decrypt`
-        pub const decrypt_cmd = AppT.Command(secrets_cmd.DecryptFlags, .{}){
+        pub const decrypt_cmd = AppT.command(.{
             .name = "decrypt",
             .description = "Decrypt an encrypted configuration blob",
-            .run = decryptRun,
-        };
+            .flags = secrets_cmd.DecryptFlags,
+        }, decryptRun);
 
         /// `config redact`
-        pub const redact_cmd = AppT.Command(secrets_cmd.RedactFlags, .{}){
+        pub const redact_cmd = AppT.command(.{
             .name = "redact",
             .description = "Print a config with sensitive values replaced",
-            .run = redactRun,
-        };
+            .flags = secrets_cmd.RedactFlags,
+        }, redactRun);
 
         /// The `config` command itself.
-        pub const config = AppT.Command(ConfigFlags, .{
-            export_cmd,
-            dry_run_cmd,
-            inspect_cmd,
-            schema_cmd,
-            get_cmd,
-            keys_cmd,
-            cast_cmd,
-            set_cmd,
-            del_cmd,
-            format_cmd,
-            profile_cmd,
-            encrypt_cmd,
-            decrypt_cmd,
-            redact_cmd,
-        }){
+        pub const config = AppT.command(.{
             .name = "config",
             .description = "Inspect, validate and export the configuration",
-            .run = configRun,
-        };
+            .flags = ConfigFlags,
+            .subcommands = .{
+                export_cmd,
+                dry_run_cmd,
+                inspect_cmd,
+                schema_cmd,
+                get_cmd,
+                keys_cmd,
+                cast_cmd,
+                set_cmd,
+                del_cmd,
+                format_cmd,
+                profile_cmd,
+                encrypt_cmd,
+                decrypt_cmd,
+                redact_cmd,
+            },
+        }, configRun);
 
         fn encryptRun(ctx: AppT.Ctx, flags: AppT.Flags(secrets_cmd.EncryptFlags)) !void {
             const pass = secrets_cmd.passphraseFrom(ctx.env_map, flags.passphrase_env) orelse {
@@ -475,7 +474,7 @@ pub const State = struct {};
 /// against. `Config` is the real shared schema: no per-app
 /// configuration type has been threaded through yet. When one is, this is the single
 /// line that changes - which is what taking `ConfigT` as a parameter bought.
-pub const CfgApp = cli.App(State, cli.Config{});
+pub const CfgApp = cli.App(State, cli.Config{ .version = "v0.1.0" });
 
 /// `Commands` returns a **type**, so the group is instantiated with `{}` to get the
 /// command values a root tuple needs. Named `CfgGroup` rather than `Group` because the
@@ -496,25 +495,27 @@ pub const RootFlags = struct {
 /// The group is exposed **directly** as the root's subcommands rather than nested under
 /// a `config` subcommand: `cfg get port` is the documented spelling, and requiring
 /// `cfg config get port` would defeat the point of a dedicated binary.
-pub const RootCmd = CfgApp.Command(RootFlags, .{
-    CfgGroup.export_cmd,
-    CfgGroup.dry_run_cmd,
-    CfgGroup.inspect_cmd,
-    CfgGroup.schema_cmd,
-    CfgGroup.get_cmd,
-    CfgGroup.keys_cmd,
-    CfgGroup.cast_cmd,
-    CfgGroup.set_cmd,
-    CfgGroup.del_cmd,
-    CfgGroup.format_cmd,
-    CfgGroup.profile_cmd,
-    CfgGroup.encrypt_cmd,
-    CfgGroup.decrypt_cmd,
-    CfgGroup.redact_cmd,
-}){
+pub const RootCmd = CfgApp.command(.{
     .name = "cfg",
-    .run = cfgRootRun,
-};
+    .description = "Inspect, validate and export a configuration",
+    .flags = RootFlags,
+    .subcommands = .{
+        CfgGroup.export_cmd,
+        CfgGroup.dry_run_cmd,
+        CfgGroup.inspect_cmd,
+        CfgGroup.schema_cmd,
+        CfgGroup.get_cmd,
+        CfgGroup.keys_cmd,
+        CfgGroup.cast_cmd,
+        CfgGroup.set_cmd,
+        CfgGroup.del_cmd,
+        CfgGroup.format_cmd,
+        CfgGroup.profile_cmd,
+        CfgGroup.encrypt_cmd,
+        CfgGroup.decrypt_cmd,
+        CfgGroup.redact_cmd,
+    },
+}, cfgRootRun);
 
 fn cfgRootRun(ctx: CfgApp.Ctx, flags: CfgApp.Flags(RootFlags)) !void {
     if (flags.version) {

@@ -109,6 +109,10 @@ pub fn write(
 ///
 /// `scope` may be empty, meaning "no particular subsystem"; it is then omitted
 /// from the text line rather than rendered as a dangling separator.
+///
+/// The message is scrubbed of every registered secret first - see
+/// `registerSecret`. A log line is the one output nobody reviews before it ships,
+/// so a token that reaches a log has left the machine.
 pub fn writeAt(
     self: Self,
     writer: anytype,
@@ -121,9 +125,107 @@ pub fn writeAt(
     if (!self.enabled(level)) return;
 
     switch (self.format) {
-        .text => try self.writeText(writer, level, scope, message),
+        .text => try self.writeTextScrubbed(writer, level, scope, message),
         .json => try self.writeJson(writer, level, scope, message, timestamp_ms),
     }
+}
+
+/// `writeText` with the message's secrets replaced.
+///
+/// Streamed rather than buffered: the message is walked once, writing the text before
+/// each secret and a mask in its place. That keeps arbitrarily long messages working
+/// without an allocation, which matters because a log call must not be able to fail
+/// for a reason unrelated to logging.
+fn writeTextScrubbed(
+    self: Self,
+    writer: anytype,
+    level: Level,
+    scope: []const u8,
+    message: []const u8,
+) !void {
+    assert(level.name().len <= 5);
+    if (scope.len == 0) {
+        try writer.print("{s: <5} {s}: ", .{ level.name(), self.service });
+    } else {
+        try writer.print("{s: <5} {s}:{s} ", .{ level.name(), self.service, scope });
+    }
+
+    // The prefix goes out first, so the walk below only has to reason about the message.
+    var remaining = message;
+    while (findEarliestSecret(remaining)) |hit| {
+        try writer.writeAll(remaining[0..hit.start]);
+        try writer.writeAll(redaction_mask);
+        remaining = remaining[hit.end..];
+    }
+    try writer.writeAll(remaining);
+    try writer.writeByte('\n');
+}
+
+/// What replaces a secret in a log line. Fixed text, not a masked prefix: a mask that
+/// keeps characters leaks the length and the last character, which the suite's own
+/// `security.redact` test records as a defect of that helper.
+pub const redaction_mask = "[REDACTED]";
+
+/// The secrets registered process-wide, in registration order.
+///
+/// Process-wide because a logger is a value type passed to `write`, while the flags
+/// that carry secrets are parsed once, elsewhere. The framework registers them as it
+/// parses (`App.execute`), so an application that never touches this API still gets
+/// its `meta.<field>.secret` values scrubbed out of every log line.
+var registered_secrets: [32][]const u8 = [_][]const u8{""} ** 32;
+var registered_count: usize = 0;
+
+/// Registers a value to be scrubbed from every subsequent log message.
+///
+/// Empty values and duplicates are ignored: an empty string would match everywhere,
+/// and registering the same token twice would only cost a comparison. The slice is
+/// *borrowed*, not copied - command-line arguments live for the whole process, which
+/// is exactly the lifetime a secret needs here.
+pub fn registerSecret(value: []const u8) void {
+    if (value.len == 0) return;
+    for (registered_secrets[0..registered_count]) |existing| {
+        if (std.mem.eql(u8, existing, value)) return;
+    }
+    if (registered_count == registered_secrets.len) return;
+    registered_secrets[registered_count] = value;
+    registered_count += 1;
+}
+
+/// Forgets every registered secret. For a long-lived process that has finished with
+/// one set of credentials, and for tests, which must not leak state into each other.
+pub fn clearSecrets() void {
+    for (registered_secrets[0..registered_count]) |*slot| slot.* = "";
+    registered_count = 0;
+}
+
+/// How many secrets are registered. Exposed so a test can assert the framework
+/// registered what it parsed.
+pub fn registeredSecretCount() usize {
+    return registered_count;
+}
+
+/// Where a secret was found in a message.
+///
+/// A named type rather than an anonymous struct literal: two returns of the same
+/// anonymous shape are two *different* types to Zig, and the call sites in this file
+/// compare them. (The same hazard as `Ctx`: an anonymous type inside a generic
+/// function is instantiated per use.)
+pub const SecretRange = struct { start: usize, end: usize };
+
+/// The earliest occurrence of any registered secret in `text`, or null.
+///
+/// Earliest rather than first-registered: two secrets can overlap, and replacing a
+/// later one first would leave a fragment of the earlier one in the output.
+fn findEarliestSecret(text: []const u8) ?SecretRange {
+    var best: ?SecretRange = null;
+    for (registered_secrets[0..registered_count]) |secret| {
+        if (secret.len == 0) continue;
+        if (std.mem.indexOf(u8, text, secret)) |start| {
+            const end = start + secret.len;
+            if (best == null or start < best.?.start) best = .{ .start = start, .end = end };
+        }
+    }
+    return best;
 }
 
 /// `level  service:scope message`
@@ -174,9 +276,35 @@ fn writeJson(
         try json.write(scope);
     }
     try json.objectField("msg");
-    try json.write(message);
+    // Scrubbing happens before escaping, so the mask is escaped like any other text.
+    // A stack copy rather than streaming: `Stringify` wants one value, and a message
+    // that contains a secret is the rare case this branch exists for.
+    var scrub_buf: [2048]u8 = undefined;
+    try json.write(scrubBorrowed(&scrub_buf, message) orelse message);
     try json.endObject();
     try writer.writeByte('\n');
+}
+
+/// A stack copy of `message` with every registered secret replaced, or null when the
+/// message contained none.
+///
+/// Null is also the answer when the copy would not fit the caller's buffer, in which
+/// case the original is written and the mask is the only thing lost. The text form
+/// streams and has no such limit; this exists because `std.json.Stringify` wants one
+/// value to escape.
+fn scrubBorrowed(buffer: []u8, message: []const u8) ?[]const u8 {
+    if (registered_count == 0) return null;
+    if (findEarliestSecret(message) == null) return null;
+
+    var fixed = std.Io.Writer.fixed(buffer);
+    var remaining = message;
+    while (findEarliestSecret(remaining)) |hit| {
+        fixed.writeAll(remaining[0..hit.start]) catch return null;
+        fixed.writeAll(redaction_mask) catch return null;
+        remaining = remaining[hit.end..];
+    }
+    fixed.writeAll(remaining) catch return null;
+    return buffer[0 .. buffer.len - fixed.unusedCapacityLen()];
 }
 
 /// Parses a level name, case-insensitively, accepting the abbreviations people

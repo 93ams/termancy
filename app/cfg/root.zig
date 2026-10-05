@@ -10,9 +10,11 @@
 //!
 //! So the module is split by **audience**:
 //!
-//! * **`ops/`** - framework-agnostic operations. `std` + `lib/cfg` only, no
-//!   `cli.Ctx`. Callable from a command, a server binary, or a test.
+//! * **`lib/ops/`** - framework-agnostic operations. `std` + `lib/cfg` + `lib/util`
+//!   only, no `cli.Ctx`. Callable from a command, a server binary, or a test.
 //! * **`cmd/`** - thin `cli.App.Command` wrappers. Parse flags, call `ops`, render.
+//!
+//! Both are files of this one module; `ops/` is not a module of its own.
 //!
 //! `Commands(AppT, ConfigT)` is the assembly point that returns the command group.
 //!
@@ -42,7 +44,11 @@
 const std = @import("std");
 
 /// Configuration operations, callable without the CLI framework.
-pub const ops = @import("app_cfg_ops");
+///
+/// A folder of this module rather than a module of its own: the files are reached
+/// by relative import, so `test { refAllDecls(ops); }` below collects their tests
+/// into `test-app-cfg` instead of a second test root.
+pub const ops = @import("lib/ops/root.zig");
 
 /// The command group, and the demo config it defaults to.
 pub const cmd = @import("cmd/root.zig");
@@ -53,17 +59,32 @@ pub const Commands = cmd.Commands;
 /// The placeholder configuration the prototype binary resolves.
 pub const Config = cmd.Config;
 
-test {
-
+test "the operations are part of this module, and reachable through it" {
     // `refAllDecls` is shallow: it reaches the declarations of the namespaces it is
     // handed, and a `test` block is collected only when a declaration in that
     // namespace references it. `app/cli/lib/ROADMAP.md` M-2 records the rule and the
     // control experiment.
     //
-    // `ops` is a *separate module* (`app_cfg_ops`), and no amount of referencing from
-    // here collects its tests - a `test` block is only collected from the module
-    // being compiled. Its tests therefore have their own root, `test-app-cfg-ops`,
-    // registered in `build.zig`. Measured: naming `ops` here collected 0 of its tests
-    // and this app's total silently fell from 34 to 15.
+    // `ops` used to be a *separate module* (`app_cfg_ops`), and no amount of
+    // referencing from here collected its tests - a `test` block is only collected
+    // from the module being compiled - so they needed their own root,
+    // `test-app-cfg-ops`. The operations are files of *this* module now, so naming
+    // `ops` here is what collects their tests into `test-app-cfg`.
     std.testing.refAllDecls(cmd);
+    std.testing.refAllDecls(ops);
+
+    // The invariant the merge is for: a binary with no `cli.App` reaches every
+    // operation through the app module's own surface (`@import("app_cfg").ops`),
+    // with no module of its own in between - and the surface is checked rather than
+    // assumed, because a folder that stops being re-exported still compiles.
+    try std.testing.expect(@hasDecl(@This(), "ops"));
+    try std.testing.expect(@hasDecl(ops, "exporter"));
+    try std.testing.expect(@hasDecl(ops, "dry_run"));
+    try std.testing.expect(@hasDecl(ops, "inspect"));
+    try std.testing.expect(@hasDecl(ops, "query"));
+    try std.testing.expect(@hasDecl(ops, "fields"));
+    try std.testing.expect(@hasDecl(ops.exporter, "writeDotEnv"));
+    try std.testing.expect(@hasDecl(ops.dry_run, "checkAll"));
+    try std.testing.expect(@hasDecl(ops.inspect, "reportAll"));
+    try std.testing.expect(@hasDecl(ops.query, "get"));
 }

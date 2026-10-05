@@ -29,7 +29,7 @@ is deliberate: the gap between them is the argument for every remaining item.
 | Fact | Before | Now |
 |---|---|---|
 | `lib/cli` size | 64 files, flat, ~11,400 lines | **44 files** in 4 topical groups; config and 11 primitives moved out (U-0) |
-| **Tests that actually run** | **0 of 91** — no `cli` step existed in `test-lib` | **93 run**, `test-lib-cli 93 pass (93 total)` |
+| **Tests that actually run** | **0 of 91** — no `cli` step existed in `test-lib` | **250 run**, `test-lib-cli 250 pass (250 total)` |
 | `zig build test-lib` | `13/13 steps, 80/80 tests` | **`17/17 steps, 180/180 tests`** |
 | `lib/cfg` | 1 file, **does not compile**, imported by nothing | **12 files**, `root.zig`, own test root, tests pass |
 | **`zig fmt --check build.zig build lib app`** | **red on 39 files**, 14 under `lib/cli` | **clean, exit 0** |
@@ -75,6 +75,70 @@ while a dependency walk from `cli.zig` reached **63 of 64** files with
   a file with an aggregate `test { refAllDecls(@This()); }` block, so **adding a
   test never means editing a build file.** The mechanism is subtler than the
   convention says, and this session measured the difference — see §5.0.
+
+---
+
+### 0.3 How to read this document's status markers
+
+The markers are part of the document's contract, so they are defined here rather than left
+to inference:
+
+| Marker | Means |
+|---|---|
+| `**[done]**` | A gate, shape or hygiene item that landed. Its body should name the measurement. |
+| `**[FIXED, verified]**` | A defect that was fixed **and** whose fix was re-checked independently (a test run in isolation, or a control experiment that fails without the fix). |
+| `**[FIXED]**` | Fixed, with less evidence than the above. Treat as weaker. |
+| `**[resolved by deletion]**`, `**[superseded by …]**` | The item was answered by removing or replacing its subject, not by doing the work as written. |
+| `**[decision recorded]**`, `**[planned — owner action]**` | Not a work item: either a decision already made, or something only the owner can do. |
+| *(no marker)* | **Open** — unless the body says otherwise. Several bodies do (B-1 is `done, via N-1`, P-1 and A-1 are largely landed, U-0's tiers 1 and 2 are complete), and that gap between heading and body is exactly what makes a heading-only scan unreliable. |
+
+Two rules follow, and both were learned by getting them wrong in this document:
+
+1. **Prefer the body's measured evidence to the heading's marker.** A heading says what its
+   author believed when they wrote it; the body says what was measured. Where they
+   disagree, the body wins and the heading is owed an edit.
+2. **A "done" without a measurement is not done.** Every fixed item in this session ends
+   with a command and its output (a test count, a cross-compile result, or a control
+   experiment that fails without the change), because "fixed" on its own is the same class
+   of claim as the dead test suite this document opens with — see §5.0.
+
+### 0.4 Applicability — which items can be executed in *this* tree
+
+Measured by path existence, not by reading: several items below name files that **do not
+exist here**, and the document is long enough that this wastes a reader's time otherwise.
+
+**Absent, so the item cannot be started in this tree:**
+
+| Path | Item(s) that depend on it |
+|---|---|
+| `lib/resp` | C-5 (the 9 tests that never run) |
+| `app/kvs`, `app/scp`, `app/bus` | A-0's adoption measurements, A-1's remaining migrations, A-1b's reverted bus migration, A-2's bus-vs-`cfg.Manager` decision, and the justification quoted in `app/cfg/lib/ops/root.zig` |
+| `src/zig` | every path written in that form (this tree has `lib/` and `app/` at the root) |
+| `lib/util/slab.zig` | N-2's "deliberately not done" note |
+
+They are kept rather than deleted because they record *why* the library is shaped as it is
+— the ops layer exists, for instance, because a non-CLI consumer needed config management —
+but the consumers named are not in this repository. Treat them as design history, not as a
+backlog.
+
+**Stale paths inside items that do apply** (corrected here):
+
+* B-4's `app/cli/commands/add.zig` is **`app/cli/cmd/add.zig`**.
+* B-4's `prompt.zig` is **`lib/cli/interact/prompt.zig`**.
+* B-4's line numbers were from before the file was touched; at the time of writing the
+  reader thread is spawned at **`tea.zig:185`** and the line counts are at `:191` and `:228`
+  (defect 1 of that item is fixed — see the item itself).
+* **B-4 defect 2 is four call sites, not one.** The pattern "create a channel, `defer` its
+  `deinit`, hand it to `Program.run` while a reader thread holds it" repeats at
+  `lib/cli/interact/prompt.zig:77`, `:155`, `:255` and `:364`. Fixing one fixes a quarter of
+  it.
+
+**The rule this subsection exists for:** before starting any item below, confirm its paths
+exist (`Test-Path`, or the repository's grep tool over the whole tree). An item whose
+subject is absent is either history or written against the other layout — and an audit's
+line numbers are a claim like any other, to be re-measured rather than trusted. Both
+corrections above were found by exactly that check, and §8.5 records the same lesson
+learned the hard way.
 
 ---
 
@@ -164,7 +228,7 @@ The measured number is the assertion.
 
 *What landed:* `root.zig`'s comment records the measured figures, and the
 per-step counts now appear in the `--summary all` output that `scripts/check.ps1`
-and CI both print. **`test-lib-cli` = 93, `test-lib` = 173** are the numbers to
+and CI both print. **`test-lib-cli` = 250, `test-lib` = 502** are the numbers to
 watch; any drop is a lost suite, not a passing build.
 
 ### C-5 · `low` · `lib/resp` has 9 tests that never run — same bug, different module
@@ -258,7 +322,7 @@ I stopped hiding it". Two edits made during the misdiagnosis - re-exporting
 `scripts/check-encoding.ps1` - were later reverted/kept respectively by the other
 worker; neither is load-bearing here.
 
-### B-2 · `high` · `btree_store.zig:32-36` — use-after-free on update
+### B-2 · `high` · `btree_store.zig:32-36` — use-after-free on update · **[FIXED, verified]**
 
 In Zig 0.16 `fetchPutContext` returns the **existing** key pointer and does not
 replace it (`std/hash_map.zig:904-914`). `WorkspaceStore.put` frees that pointer
@@ -266,14 +330,31 @@ and leaves it in the map, so `get()` hashes freed memory and `deinit` double-fre
 it; the freshly duped key also leaks. `cli_test.zig` covers `WorkspaceStore`, but
 evidently not its update path — which is the path that breaks.
 
-### B-3 · `high` · `spatial_focus.zig:48` — underflow panic
+**Fixed.** The update path now has its own coverage, including
+`WorkspaceStore.put and delete leak nothing when each allocation fails`, which fails every
+allocation in turn — the test that catches the double-free on `deinit` and the leaked
+fresh key. Verified independently: `zig test lib/util/btree_store.zig` → **All 4 tests
+passed.**
+
+### B-3 · `high` · `spatial_focus.zig:48` — underflow panic · **[FIXED, verified]**
 
 `SpatialFocusGrid.init(2, 0, true)` followed by `moveLeft()` panics with
 `integer overflow` at `self.cur_col = self.cols - 1`. `:44` and `:47` are
 unguarded the same way. Either guard the three sites or reject a zero dimension
 in `init` — and if you reject it, that is a documented contract, so say so.
 
-### B-4 · `high` · The shipped prompt path mis-renders and can use freed memory
+**Fixed, and the audit undercounted the sites.** There were **four** unguarded `- 1`
+expressions, not three: `:44`, `:47` and `:48` as listed, plus **`:70`** in `moveUp`,
+which this item did not name. Each was reproduced as a real `panic: integer overflow`
+before the fix (`:47` and `:70` via `init(0, 2, true)`, `:48`/`:44` via `init(2, 0, true)`).
+The contract chosen is "a zero dimension is a legal *inert* grid": movement is a no-op
+returning `false`, the cursor stays at `(0,0)`, `getIndex` is 0 — documented on `init` and
+in the module header, with an `assertCursorInBounds` precondition and a `defer`
+postcondition on every movement function. Verified independently:
+`zig test lib/cli/render/spatial_focus.zig` → **All 8 tests passed.** The lesson is the
+one §8.5 records: an audit is a claim, and the compiler is the arbiter.
+
+### B-4 · `high` · The shipped prompt path mis-renders and can use freed memory · **[FIXED, verified]**
 
 `tea.zig` is the only code in this group a user actually runs, via
 `prompt.zig` → `app/cli/commands/add.zig` → the `tigershark` binary. Two defects:
@@ -292,14 +373,83 @@ the reader thread observes, not a fix to the deinit order. Both need regression
 tests, and both are in a file with *no* tests today — `cli_test.zig` covers
 neither `Program.run` nor `prompt`'s cancellation path.
 
-### B-5 · `medium` · `version.zig:51,59` are stale `std` APIs
+**Status: both defects FIXED, verified.**
 
-`statFile` now takes `(io, sub_path, options)` and `std.http.Client` now requires
-`.io`. Both are invisible because `app/cli/main.zig:69` says
-`// cli.version.check disabled for now`. Fix the two call sites and **re-enable
-the call** — leaving it disabled is what keeps the breakage hidden, and a
-permanently disabled code path is the same failure mode as the dead test suite
-this whole document opens with.
+*Defect 1 (stale frames) is fixed.* The counting rule now lives in one documented
+function, `renderedLineCount`, with the rule written down: one line per newline, plus one
+for a final line the view did not terminate, and zero for an empty view (erasing there
+would move the cursor over a line this program never wrote). A test pins all four cases,
+including the two-line view that the old `std.mem.count` reported as one. This is the
+user-visible half: it is what left the previous frame on screen on every re-render.
+
+*Defect 2 (thread lifetime) is fixed, but not the way this item proposed — and the reason
+is worth more than the fix.* This item said "a shutdown flag the reader thread observes,
+not a fix to the deinit order". The flag is **not implementable in this std**, established
+by searching rather than assuming:
+
+* `std.Io.Future.cancel` (`Io.zig:1191`) only places a cancel *request* and then **waits**
+  for the operation to finish; the task observes it at its next cancellation point, which
+  for a blocked read never arrives.
+* `Io.Threaded.waitForCancelWithSignaling` (`Threaded.zig:772`) signals a blocked thread
+  only to interrupt a *cancelable syscall*, and that machinery is entered solely through
+  `Io.operate`/`async` (`Thread.Status.blocked_canceling`, `Threaded.zig:856`).
+* `std.Io.Reader.readVec`/`stream` are not `Io` operations at all — `Reader.zig:23`'s
+  VTable has no cancellation hook.
+* The one cancelable read path, `Io.File.readStreaming` (`Io/File.zig:474`), is executed
+  synchronously by the Threaded backend, and the cancel flag is only observed *after* the
+  syscall returns.
+* There is no `poll`/`select` over a file descriptor in 0.16 (`Io.Operation` has no poll
+  variant), and no timeout applies to a blocking read.
+
+So a stop flag is only observable *between* reads, and joining blocks until a byte arrives
+— on the quit path no byte ever does. That is exactly what hung the first attempt at this
+item, whose tests drove the real `Program.run`.
+
+The rule actually adopted is the opposite one, documented on `StdinContext`: **the reader
+thread owns nothing its spawner can free.** `Program.run` allocates the reader context
+*and* the channel from `std.heap.page_allocator` in a new `startReader(allocator, io, in)`,
+and never frees or joins them; `Program.init` no longer *takes* a channel, so a caller
+cannot own or free one. Nothing is freed while the reader could run, so neither UAF is
+reachable. The residual cost is a **deliberate, bounded, documented leak** — one context
+plus one channel per prompt, in a process that exits as soon as the prompt's command
+returns. That is a real cost, recorded here rather than hidden: if a future std gains a
+pollable stdin, "stop it" becomes available and the leak can go.
+
+All four call sites are updated uniformly (`prompt.zig`'s `confirm`, `select`,
+`multiSelect`, `multiSelectDynamic` — the stack channel and its `defer channel.deinit()`
+are gone), and the change is **170 insertions / 32 deletions across two files**, of which
+37/2 is defect 1. The test injects a finite source (`std.Io.Reader.fixed` over a one-byte
+slice), joins after deterministic EOF, and asserts zero leaks under
+`std.testing.allocator` — it caught a real missing `deinit` while being written. It never
+calls `Program.run` and never reads a real stdin; the first attempt's hanging test is the
+reason. **Not proven:** the real `run` path has no regression test (it cannot have one
+without a thread-capable stdin), and the leak is reasoned from the code rather than
+observed, because the `add` prompt is not exercised end to end by any test.
+
+### B-5 · `medium` · `version.zig:51,59` are stale `std` APIs · **[resolved by deletion]**
+
+The file is gone, and the finding is recorded here because deleting it was the fix.
+
+`version.zig` was a background thread that fetched a version string and cached it in
+`/tmp/<app>_version_cache.txt`, printing an ANSI notice on exit. Every line used an API
+Zig 0.16 removed (`std.Thread.spawn(.{}, …)`, `std.http.Client{ .allocator }` without an
+`Io`, `client.open`/`send`/`finish`/`wait`/`reader`, `readAllArrayList`,
+`file.readStreaming`, `std.time.milliTimestamp`), and nothing called it: the only surviving
+mention was a comment in `app/cli/main.zig` explaining why the call was disabled.
+`std.debug.assert`-style "fix the two call sites and re-enable the call" was the plan; the
+better answer turned out to be that both halves were replaced outright:
+
+* **the notice** by `App.updateCommand` (§8.4) — a real release registry, tag comparison,
+  checksum, optional Ed25519 signature, confirmation before replacing a running binary,
+  and an atomic swap, instead of comparing two strings and printing yellow text;
+* **the cache** by `platform/state.zig` — XDG-resolved instead of `/tmp`, atomic replace
+  instead of a truncating write, and permissions that can be restricted for secrets.
+
+Verified by removal: the flat re-export in `cli.zig` and the surface re-export in
+`root.zig` were dropped, `zig build test` stayed green at the same test count, and no
+declaration anywhere referenced the module. A non-compiling module whose documented home
+is `/tmp` is a trap rather than a feature waiting to be finished — the note left in
+`cli.zig` where it used to be says so, so it does not get re-added.
 
 ### B-6 · `medium` · The five POSIX/Linux files cannot compile for the shipped target
 
@@ -320,6 +470,87 @@ reasons (`cli.zig:386` references `error.NotATerminal`/`error.ProcessOrphaned`
 which are not in `AppError`; `app/scp/crypto/cpace_oquake.zig:24,32`;
 `app/bus/client/srv.zig:238`). Getting those green is a prerequisite for making
 this item *verifiable*, and is its own task.
+
+**Update, measured later (the session behind §7.5):** the `cli.zig` half of that note
+is gone, and the cross-build is **green**: `zig build -Dtarget=x86_64-linux-musl`
+with a *fresh* cache directory (so nothing was reused) → **5/5 steps succeeded**,
+both `cfg` and `tigershark` compiled for `x86_64-linux-musl`.
+`error.NotATerminal`/`error.ProcessOrphaned` no longer appear anywhere in `cli.zig`.
+This does **not** clear B-6: the other two paths in the note (`app/scp`, `app/bus`)
+are not part of this build's target set, and the per-OS branches in `sys.zig`,
+`daemon.zig`, `mmap.zig` and `telemetry.zig` still need the compile-time
+verification described above.
+
+**Update, measured later (the session behind §8.5):** two of the four files are fixed, and
+the *method* is now proven rather than proposed.
+
+`sys.zig` was fixed by exactly the "force instantiation" technique this item describes:
+a throwaway probe that called `System.isElevated()` and took `&System.openEditor` reported
+`error: incompatible types: 'os.windows.Bool(c_int)' and 'comptime_int'` at `:21` — a
+`win.BOOL` compared against an integer — which had never been compiled because nothing
+called it. Both are ported now (`std.os.linux.geteuid`; `std.process.spawn` with
+`.expand_arg0`/`.inherit`; `file.readFileAlloc`; `io.random` for the temporary file's name,
+which also removed a `platform → util` dependency and a clock read from a platform helper)
+and both are **instantiated by tests in `sys.zig`**, so the bodies are analysed on every
+`zig build test`. That is the regression gate this item implies but never had.
+
+Still open, and the same treatment applies: `daemon.zig:57,76`, `mmap.zig:85,122`, and
+`telemetry.zig:12` (the last may already be gone — that module was rewritten in the same
+session, and the line number is from before the rewrite; re-probe before trusting it).
+The lesson from `version.zig` (B-5), `crash.zig`'s panic handler and `sys.zig` alike: in
+this tree **an uninstantiated body is not a compiling body**, so the fix for each of these
+is a test that calls it, not a reading of it.
+
+**Update, measured after re-probing each site (three of them are already gone):**
+
+| Site | Verdict |
+|---|---|
+| `daemon.zig:57` (`getpid`) | **already fixed** — `std.posix.system.getpid()` |
+| `daemon.zig:76` (`kill`) | **already fixed** — `std.posix.kill(@intCast(pid), @enumFromInt(0))` |
+| `telemetry.zig:12` (`clock_gettime`) | **already fixed** — the module was rewritten and no longer reads a clock at all |
+| `mmap.zig:85` (`std.posix.open`) | **CONFIRMED BROKEN**: `error: root source file struct 'posix' has no member named 'open'` |
+| `mmap.zig:122` (`std.posix.close`) | **CONFIRMED BROKEN**: `... has no member named 'close'` |
+
+`mmap.zig` is the whole of B-6's residue, and it needs: `std.posix.open(path, flags, mode)`
+→ `std.posix.openat(std.posix.AT.FDCWD, path, flags, mode)` (verified present at
+`std/posix.zig:441`), and a replacement for `std.posix.close` — which does **not** exist
+under that name in 0.16, so the `close` spelling has to be found before editing (candidates
+are the syscall layer `std.posix.system.close` or moving the file onto `std.Io.File`).
+`fstat` should be checked at the same time; it is not in the `posix` surface either.
+
+**Update: the port was attempted and deliberately reverted — it is a three-API change, not
+a two-API one.** `open` → `openat(AT.FDCWD, …)` and `close` →
+`std.posix.system.close(fd)` (the syscall layer, `linux.close` on this target, `std.c.close`
+under libc; its result is an error *code* rather than an error union, so the call sites
+discard it) both compile — the cross-compile then failed one line later on
+`std.posix.fstat`, which **is also gone** and was hidden behind the first two errors. So the
+file needs a third spelling that is not in the `posix` surface at all:
+
+* `std.posix.fstatat` does **not** exist either (searched; `posix.zig` has `AT` and `openat`
+  but no `fstat`/`fstatat`), so either the syscall layer is used directly
+  (`linux.fstat`/`std.c.fstat` with a `Stat` out-parameter and a manual error check), or
+* the file moves onto the `Io` API — but `MmapFile.open(path)` takes **no `io`**, so that
+  variant changes the signature and every caller, which is a different size of change.
+
+Reverted rather than half-ported: a file that still cannot cross-compile is not an
+improvement, and I cannot *run* a Linux binary here to validate the logic afterwards. The
+next attempt should start from the three spellings above and finish with the cross-compile,
+not the native test.
+
+**The methodological finding is the valuable part, and it generalises to every item in this
+section.** I probed `mmap.zig` twice:
+
+* **native (`zig test` on the Windows host) → `All 1 tests passed.`** A false negative: the
+  file branches on `builtin.os.tag`, so the Windows branch was analysed and the POSIX one
+  never was. A test that *runs* on this host cannot vouch for the other OS's branch.
+* **cross-compiled (`zig test -target x86_64-linux-musl`) → both errors, immediately.**
+
+So the rule for this whole section is: **verify a per-OS branch by cross-compiling, never by
+running.** That is what this item's original note meant by "verify by compiling, not by
+running", and it is why the probe has to target the *shipping* OS. Note also that neither
+probe could *execute* a Linux binary, so `mmap.zig` will still need a review of its logic
+once it compiles — a cross-compile proves the branch is well-formed, not that it is correct.
+
 
 ---
 
@@ -396,11 +627,16 @@ over an app. See section 3c for the `ops` / `cmd` split that made those operatio
 reachable from `app/kvs` and `app/scp`, which import no file mentioning `cli`.
 
 `app/cli` is the first consumer. This is the first **app module that other apps
-import** - everything until now was `lib/` - which is why two modules are declared in
-`build.zig` (`app_cfg` and `app_cfg_ops`), each with its own test root:
-`test-app-cfg` and `test-app-cfg-ops`. Nothing else compiles either, so without those
-roots their tests would never run, and a `refAllDecls` from elsewhere does not help -
-it cannot cross a module boundary.
+import** - everything until now was `lib/` - which is why `app_cfg` is declared in
+`build.zig` with its own test root, `test-app-cfg`. Nothing else compiles it, so
+without that root its tests would never run, and a `refAllDecls` from elsewhere does
+not help - it cannot cross a module boundary.
+
+*Superseded:* `app_cfg` was declared as **two** modules (`app_cfg` and `app_cfg_ops`)
+with two test roots (`test-app-cfg`, `test-app-cfg-ops`). The operations are a folder
+of `app_cfg` now (`app/cfg/lib/ops`), reached by relative import through its `ops`
+surface, so the second module and its root are gone and the same tests run in
+`test-app-cfg`.
 
 *Deliberately kept:* the demonstration config, now `Commands(App, DemoConfig)` with
 `DemoConfig` exported from `cmd/root.zig` and documented as a placeholder rather than
@@ -418,8 +654,8 @@ is still reachable as a library call and is a candidate for its own subcommand. 
 secret is never printed on any path, only its length.
 
 *Superseded verification:* the counts in the paragraph below are from the earlier
-move. The current state is in section 3c - `test-app-cfg-ops` 33,
-`test-app-cfg` 18, `test-kvs-config` 4, `test-lib` 327/327.
+move. The current state is in section 3c - `test-app-cfg` 51 (the operations' and the
+command group's tests share one root), `test-kvs-config` 4, `test-lib` 327/327.
 
 *Verified:* `zig build` 48/48; `tigershark --help` still lists `repl`, `config`,
 `add`, `init`; `tigershark config` resolves and prints; `config --schema` emits
@@ -1825,8 +2061,8 @@ command silently rewriting whichever file happened to be conventional.
 
 `config encrypt`, `config decrypt` and `config redact` now exist. The cryptography was
 already correct after the KDF fix; what was missing was a way to *reach* it, because
-`encrypted_config.zig` lived in `app/cli/lib/secrets/` and `app_cfg_ops` may not import
-`lib/cli`.
+`encrypted_config.zig` lived in `app/cli/lib/secrets/` and the config operations in
+`app/cfg/lib/ops` may not import `lib/cli`.
 
 That was the same miscategorisation already fixed for `systemd_exporter`: the file imports
 **only `std`** and is configuration functionality, so it belongs in `lib/cfg`. Moved, with
@@ -1983,21 +2219,25 @@ unmatched token at a command that has subcommands can be rejected unconditionall
 regardless of whether it has a `run`.
 ## 3c. Proposed-feature intake: daemon mode, undo ledger, locks, auto-TUI, SHM, LLM router, config suite
 
-### `app/cfg` split into `ops` + `cmd` · **[done, and build-enforced]**
+### `app/cfg` split into `ops` + `cmd` · **[done]**
 
 The config commands were unreachable from `app/kvs` and `app/scp`, which import zero
-files mentioning `cli` (measured). `app/cfg` now ships as two modules:
+files mentioning `cli` (measured). `app/cfg` therefore ships both halves:
 
 | Module | Source | Imports | Callers |
 |---|---|---|---|
-| `app_cfg_ops` | `app/cfg/ops/root.zig` | `std`, `cfg`, `util` | any binary |
-| `app_cfg` | `app/cfg/root.zig` | `cli`, `cfg`, `app_cfg_ops` | binaries with a `cli.App` |
+| `app_cfg` | `app/cfg/root.zig` | `cli`, `cfg`, `util` | binaries with a `cli.App`, and - through its `ops` surface - any binary |
+
+`ops` is a folder of that module (`app/cfg/lib/ops`), not a module of its own. It was
+one (`app_cfg_ops`, source `app/cfg/ops/root.zig`, imports `std`/`cfg`/`util`) until
+the two were merged; that merge is what removed the second test root, and it costs the
+import table that made a `cli` import under `ops/` a build error.
 
 Shipped commands: `config export` (`--format dotenv|systemd`), `config dry-run`
 (`--overrides`), `config inspect` (`[path]`), `config schema` (`[output]`), and bare
-`config`. Per-root test
-counts: `test-app-cfg-ops` 33, `test-app-cfg` 18, `test-kvs-config` 4 (the
-reachability guard, in a module whose imports are only `app_cfg_ops` and `cfg`).
+`config`. Per-root test counts: `test-app-cfg` 51 (33 operations + 18 command group,
+in one root), `test-kvs-config` 4 (the reachability guard, in a module that names
+`cfg` and no `cli`).
 
 **Two file moves were forced by this, and both are the pattern U-0 describes:**
 
@@ -2020,14 +2260,17 @@ reachability guard, in a module whose imports are only `app_cfg_ops` and `cfg`).
    from `X` and cannot be passed as one. Runners rebuild the plain struct.
 3. `refAllDecls` **cannot cross a module boundary**. When `ops` became its own
    module, `test-app-cfg` fell from 34 to 15 tests while `zig build` stayed green;
-   the tests were recovered with a second root, `test-app-cfg-ops`. Compare
-   **per-root** counts after any module split, not the total.
+   the tests were recovered with a second root, `test-app-cfg-ops`. (Merging that
+   module back is what removes the root again: the operations are files of
+   `app_cfg`, so `refAllDecls(ops)` in `app/cfg/root.zig` collects their 47 tests
+   into `test-app-cfg`.) Compare **per-root** counts after any module split, not the
+   total.
 
 A further trap cost real time and is recorded because the fix was structural:
 `error: unable to resolve comptime value` appears when a **runtime** path is compared
 against a **comptime** `field.name` inside an `inline for`. No amount of restructuring
 the caller fixes it; the reflection must be inverted into a comptime-built table that
-the runtime path is looked up *in*. That table is `app/cfg/ops/fields.zig`, and it
+the runtime path is looked up *in*. That table is `app/cfg/lib/ops/fields.zig`, and it
 carries per-field function pointers for the type-dependent work, because Zig cannot
 store a `type` in a runtime-readable table and a function pointer cannot take
 `anytype`.
@@ -2537,3 +2780,293 @@ the two-commit shape matters more than the speed.
 **Report the number, not the adjective.** Every count in this document is a
 measurement with a command behind it, and any item that cannot produce one is
 not finished.
+
+---
+
+## 7. A-0 — The ergonomic registration API, and the gaps it exposed · **[done]**
+
+`App.Command(Flags, subcmds){ .name = ..., .run = ... }` put four things in one
+struct literal: a command's identity, its flags type, its behaviour, and - because
+positional arguments were a field *inside* the flags struct - its arguments. The new
+spelling separates them:
+
+```zig
+const meta = .{
+    .name = "add",
+    .description = "Add a UI component to your project",
+    .flags = AddFlags,
+    .args = AddArgs,
+};
+
+pub const cmd = App.command(meta, addRun);
+
+// Any of these; the framework reads the signature at comptime.
+fn addRun(ctx: App.Ctx, flags: App.Flags(AddFlags), args: AddArgs) !void { ... }
+fn addRun(ctx: App.Ctx, args: AddArgs, flags: App.Flags(AddFlags)) !void { ... }
+```
+
+`App.command(meta, null)` registers a command with no body (a routing node, or
+`is_repl`), and a flags type that already declares `positionals` keeps working, so a
+command can move to `.args` without rewriting a flags struct a library function
+shares. `App.Command`/`LeafCommand`/`CommandWithReturn` are unchanged and still
+tested; both `app/cli` and `app/cfg` (14 commands) are migrated to the new spelling.
+
+### 7.1 What "ensure the feature exists" actually found
+
+Auditing the checklist against the code found nine features that were *declared* and
+not implemented. Each is now implemented and has a test that fails without it:
+
+| Feature | State found | Evidence |
+|---|---|---|
+| Repeated/array flags | **absent** - `parseValue` rejected every non-`[]const u8` slice at compile time, and `assignFlag` overwrote | a `[]const []const u8` flag was a `@compileError`, so `-H a -H b` could not be expressed |
+| Custom `parse` declaration | **dead** - looked up on the type `MergeFlags` synthesizes, which copies fields and no declarations | `@hasDecl(FlagsType, "parse")` was permanently false |
+| `validation` rules block | **dead**, same cause | `@hasDecl(FlagsType, "validation")` permanently false |
+| `--dry-run` for field `dry_run` | **unknown flag** at runtime, and a test asserted against its own local copy of the normalisation | `config format --dry-run` → `Unknown flag 'dry-run'` |
+| Attached short values (`-tvalue`) | **unimplemented**, and the dead `next_val` branch made `-ttok` mis-route | value could only come from the next argv token |
+| Hidden commands | **unimplemented** for framework commands: `hidden` was not a field, so `@hasField` was comptime-false everywhere except a hand-written type | `--help`, `writeMarkdownDocs` and completions listed them |
+| `pre_run` hook | **never called** - collected and ignored | no call site anywhere in the file |
+| `--version` / `-V` | absent at framework level | each app hardcoded its own flag and string |
+| Config-file defaults | absent | `parseFlags` read defaults, argv and the environment only |
+| Flag typo suggestions | absent (subcommands had them) | `Unknown flag 'verbos'` with no hint |
+| Overridable help | absent; `printHelp` was private | `app/cfg` hand-wrote usage rather than delegating |
+| zsh completions | **unreachable** - shadowed by a hardcoded duplicate earlier in the dispatcher | `emitZshCompletions` had no reachable caller |
+
+Three defects were also found by reading the *resolution order*, not the feature list:
+1. **The environment could not satisfy a required flag.** The "missing required"
+   error was raised before the environment was consulted, so a field with no default
+   could never be filled from `meta.<field>.env`. The check now runs after the
+   environment and the file, in the order the documentation always claimed.
+2. **`subcmd_indices[32]` and `pre_runs[count]` were written unchecked.** A deep
+   enough tree or argv wrote past the end of the array. Both are bounds-checked now,
+   with `error.CommandNestingTooDeep`.
+3. **`@import("cli").AppError` did not compile.** `root.zig` re-exported nine names
+   that `cli.zig` does not declare at file scope (`AppError`, `Error`, `GlobalFlags`,
+   `Command`, `CommandWithReturn`, `LeafCommand`, `Flags`, `MergeFlags`,
+   `ExecutionChain`, `TestHarness`), and nothing referenced them, so the surface was
+   broken silently. `AppError` and `GlobalFlags` are now real file-scope
+   declarations, the rest are documented as `App.*`, and the completeness guard
+   checks **both** directions.
+
+### 7.2 Measured
+
+- `zig build test --summary all` → **15/15 steps, 502/502 tests**, of which
+  `test-lib-cli` is **250** (was 216).
+- `zig fmt --check build.zig build lib app` → clean.
+- `zig build` → 15/15 steps; `tigershark --help`, `tigershark add --help`,
+  `cfg --help`, `generate-completions zsh`, `generate-docs markdown` and
+  `--version`/`-V` were all checked by running the binaries.
+
+### 7.3 What the new tests pin, and why
+
+The 34 new tests are grouped by the checklist rather than by function: registration
+shapes, parsing, typing, routing/help, environment/config, execution. Two rules they
+follow deliberately, because the audits found tests that broke both:
+
+1. **Never assert against a copy of the implementation.** The kebab-case test used to
+   re-implement the normalisation locally and pass while the parser had none; it now
+   drives the parser. The exit-code test enumerates the framework's *declared* set
+   (`@typeInfo(cli.AppError)`), not a hand-written copy of it.
+2. **A test that needs a different framework configuration declares its own `App`.**
+   `Ctx` is a member of the `App` closure, so a command is only guaranteed to run
+   under the instance it was built from.
+
+### 7.4 Follow-up hardening · **[done]**
+
+Three more gaps, all of them "the capability exists but nothing uses it":
+
+1. **`ComptimeLinter` was never called by the framework.** `lib/util/linter.zig` checked
+   duplicate short flags and had exactly one caller: a test. `App.command` and
+   `App.Command` now run it when the command **type** is built, so a bad declaration
+   fails the build whether or not anything executes it. The checker also grew three
+   rules that were previously silent or badly reported:
+   * a long name the framework owns (`help`, `output`, `interactive`, `yes`) - `--help`
+     is intercepted and the other three are merged in from `GlobalFlags`, so declaring
+     one is either shadowed behaviour or a duplicate-field error with no explanation;
+   * `-h`, which the router consumes;
+   * `.count = true` on a non-integer field, which used to fail inside `parseFlags`
+     with a message about `+=`.
+2. **The man page had no OPTIONS or ARGUMENTS section and did not recurse**, so
+   `generate-docs man` documented a synopsis and (at most) one level of children. It
+   now emits COMMANDS/ARGUMENTS/OPTIONS for the root, a `.SS` entry per subcommand at
+   any depth, and labels a subcommand's own sections as paragraphs - a `.SH` inside a
+   `.SS` silently returns to the top level, which is why the level is a parameter
+   rather than a literal.
+3. **`cfg` and `tigershark` had no root description**, so their help printed a usage
+   line with nothing under it and their man pages read `cfg - `. Both roots now carry
+   one; two existing tests asserted the old man macros and were updated with the new
+   structure.
+
+*Measured after this pass:* `zig build test --summary all` → **15/15 steps, 505/505
+tests** (`test-lib-cli` 250, `test-lib-util` 23); `zig fmt --check` clean; `zig build`
+15/15. The linter's own failure mode was verified by declaring a `help` field and
+observing `error: CLI Flag Collision: 'help' is reserved by the framework; rename the
+field` at compile time.
+
+### 7.5 The exit status the binaries actually return · **[done]**
+
+Running the shipped binaries and reading `$LASTEXITCODE` - which no test had ever
+done, because `App.run` terminates the process - found that the documented status
+table was not the one in use:
+
+| Command | Before | Now |
+|---|---|---|
+| `tigershark nope` (unknown command) | 1 | **127** |
+| `tigershark --versoin` (unknown flag) | 1 | **2** |
+| `tigershark --output zz` (bad value) | **0**, after printing an error | **2** |
+| `tigershark repl` piped | 1 (printed help) | 1, with a message |
+
+Two causes, both in the one function no test could reach:
+
+* `failWith` consulted `config.exit_map` and then **hardcoded `1`**; `getExitCode` -
+  with its POSIX table, and with the test that asserts it - was never called on the
+  real path.
+* `App.run` excluded `HandledError` from the failure path. `assignFlag` raises it
+  *after* printing "Invalid value …", so a rejected flag value was treated as the
+  command having succeeded: an error message and exit 0.
+
+`failWith` now uses `getExitCode`, the decision is extracted into
+`App.failureDisposition(err)` (`{ code, report }`) so the previously untestable part is
+a pure function with tests, `HandledError` is mapped to 2 (a usage failure) with the
+diagnostic already printed, and a cancelled prompt exits 130 rather than 0.
+
+Also fixed while adding the first test of the **interactive prompt path**: answering the
+prompt for a required positional incremented `pos_count` without storing a value, so the
+pass that fills positionals read `pos_buf[0]` when `pos_buf` had been sized by argv
+alone - a panic with a bare `mycmd <TAB>`-free invocation and no arguments at all. The
+prompt's value is already assigned where it is parsed, so the counter now counts only
+argv positionals, which is what the fill pass reads.
+
+*Measured after this pass:* **15/15 steps, 564/564 tests** (`test-lib-cli` 308); the exit
+codes in the table above were re-measured from `zig-out/bin/tigershark.exe`.
+
+---
+
+## 8. What "ensure we have all of" found in the second checklist
+
+A longer feature list was audited the same way as §7: for each item, find the code, find the
+test, and where either is missing say so precisely. The method that keeps paying is
+**running the thing** and **searching for the caller** - `rg 'fn feature'` then `rg
+'feature\('` - because this tree's failure mode is not a missing implementation, it is an
+implementation wired to nothing.
+
+### 8.1 Landed in this pass, with tests
+
+| Item | What was there | What is there now |
+|---|---|---|
+| Deprecation lifecycle (commands) | flags had `.deprecated`; commands had nothing | `meta.deprecated` / `.deprecated`: warned on use, omitted from `--help`, completions and suggestions |
+| Feature flags | nothing | `meta.feature` / `.feature` on commands *and* flags, gated by an environment variable: unroutable, unadvertised, and not settable from the environment or a config file while closed |
+| OnError hook | `pre_run`/`post_run` only | command-level `on_error = fn (ctx, err) void`, wrapped around the body *and* the middleware onion, notification-only by design |
+| Dry run in the context | a per-command `dry_run` flag in `app/cfg`, `cli.dry_run` unused | `Ctx.dry_run`, set from a `dry_run` field or from `meta.dry_run = true` (which adds `--dry-run`), so deep business logic can honour it from the context alone |
+| REPL on a bare invocation | `--interactive` and a `repl` subcommand | a command with `is_repl` and no arguments enters its shell **on a terminal**; piped or in CI it prints usage instead |
+| TTY / CI awareness | `decide` read `NO_COLOR`, `FORCE_COLOR`, `TERM` and two `isatty`s | CI is an input: colour, cursor movement and prompts are all off under CI, `FORCE_COLOR` still wins for colour, and `Ctx.is_tty` is `caps.interactive` so the policy has one source |
+| Secret redaction | `meta.<field>.secret` redacted in `formatFlags` only | the chain is closed: `--help`, the man page and the HTML page never print a secret's default; a failed parse masks the value instead of echoing it; and every secret string flag is registered with `cli.log`'s scrubber, so a log line cannot carry it (text and JSON) |
+| Structured output | text tables and JSON | `--output yaml`, a block-style emitter in the same `formatOutput` |
+| Generated documentation | `markdown` and `man` | `generate-docs html`, one self-contained page with escaped descriptions, and deprecated/gated commands marked in all three |
+| Plugin discovery | nothing | `Config.plugins = .{ .enabled, .prefix }`: an unregistered command runs `<prefix>-<name>` from `PATH` with the remaining arguments, inheriting the streams, its exit status passed through `chain.external_status` to `App.run`. Off by default, and a token containing a separator, a dot, a colon or a leading dash is refused before any lookup |
+| Mutually exclusive groups | declared, checked at parse time | plus a compile-time check that every name in a group names a real flag - a group that matches nothing is a safeguard that enforces nothing |
+
+### 8.2 The tests that pin it
+
+Nine new tests, in the same style as §7.3 - grouped by capability, never asserting against
+a copy of the implementation, and each declaring its own `App` when it needs different
+framework configuration. The CI test drives `capability.decide` directly with a synthetic
+environment map, because the alternative (a real CI runner) is not a unit test.
+
+### 8.3 Also landed: three modules that were library-only
+
+Each was a real implementation with no caller and no test, found by the same
+"search for the caller" method. All three now have one:
+
+* **`platform/state.zig`** (new): reading and writing state, caches and tokens in the
+  standard per-OS directories, through `xdg`, with atomic replace, parent-directory
+  creation and owner-only permissions for secret material. This is also what retires the
+  `/tmp/<app>_version_cache.txt` hardcode in `version.zig` that `xdg`'s own module comment
+  claims was already removed.
+* **`platform/update.zig`**: GitHub Releases parsing, the checksum-asset convention, a
+  `sha256sum`-format parser, and detached Ed25519 signature verification, so the existing
+  check → download → verify → replace pipeline can be driven from an ordinary release
+  registry and can enforce a signature rather than only a checksum.
+* **`platform/telemetry.zig`**: an *opt-in* reporter (the module previously had only an
+  opt-out predicate and sent nothing), with an injected transport, so the framework never
+  performs network I/O and a payload cannot contain the environment, argv or a hostname.
+
+### 8.4 `App.updateCommand`: the pipeline, now reachable from a command line
+
+The self-updating item was the one place where every part existed and nothing was joined
+up. `App.updateCommand(.{ … })` registers a command that:
+
+1. reads `<owner>/<repo>`'s latest release and compares tags (`--check` stops here);
+2. prints the available version **before** changing anything;
+3. requires `--yes` - or an interactive yes - to replace a running binary;
+4. fetches `<asset>.sha256`, parses it, and fetches `<asset>.sig` when a public key is
+   configured, so `install` verifies the checksum and then the signature;
+5. reports `Already up to date` or `Updated <path> to <version>; restart to use it`.
+
+Two decisions are worth recording, because both are seams rather than assumptions:
+
+* **The transport is a factory** (`fetcher_factory`), not a value. The metadata is
+  comptime, and a `Fetcher` holds a context pointer - so runtime state (a test stub, a
+  proxy from the environment, an authenticated session) can only be reached through a
+  function called at run time. The command's own test needed exactly this.
+* **The binary to replace is the caller's business** (`target_path`, or `resolve_target`).
+  `std.process.Init` in Zig 0.16 carries the environment, the arguments, an arena, an
+  allocator, an `Io` and the preopened directories - and no executable path, and there is
+  no `std.process.selfExePath` to fall back on. Rather than guess, the command refuses
+  with `NoUpdateTarget` and names the field to set. `platform/self_exe.zig` is the
+  implementation an app passes: Windows reads `ImagePathName` from the process
+  environment block (the loader's own record, the same field `std` uses), Linux reads the
+  `/proc/self/exe` symlink (so a `PATH`-resolved or linked invocation still names the real
+  file), and any other platform returns `error.Unsupported` rather than a plausible-looking
+  wrong path. `app/cli` registers the command with `.resolve_target = cli.self_exe.resolveTarget`,
+  so `tigershark update --check` runs the whole pipeline against the real registry.
+
+Its test drives all five paths through a stub transport and a temporary file: up to date
+(no prompt, no `--yes`), `--check` (one request, nothing written), refusal without `--yes`
+(`ConfirmationRequired`), install (`--yes`, target replaced, three requests), and a bad
+checksum (`ChecksumMismatch`, target untouched).
+
+### 8.5 The pass that followed: instantiate it, or it is not compiling
+
+*Measured at the time of writing:* **13/13 steps, 573/574 tests passed (1 skipped)**.
+(`test-lib-cli` 312+1 skip, `test-lib-cfg` 124, `test-lib-util` 27, `test-app-cfg` 107,
+`test-app-cli` 3.) The step count fell from 15 to 13 because `app/cfg/lib/ops` stopped
+being a module of its own; each test root carries a compile *and* a run step, so removing
+one root removes two.
+
+This pass cost almost nothing in new features and found five defects, all of the same
+shape: **code nothing calls is code the compiler never analyses, and it rots silently.**
+
+| Declaration | How it had rotted | Fix |
+|---|---|---|
+| `crash.zig` panic handler | `dumpCurrentStackTrace(first_trace_addr)` — 0.16 takes `StackUnwindOptions` | passing `.{ .first_address = … }`; found the instant the hook was installed in the binaries |
+| `sys.isElevated` | `win.BOOL` compared against integer `0` | compare against `.FALSE`; POSIX branch moved to `std.os.linux.geteuid` |
+| `sys.openEditor` | `Child.init`, `readStreaming`, `std.crypto.random`, and a `platform → util` import for a timestamp | `std.process.spawn` + `readFileAlloc` + `io.random`, no cross-module dependency |
+| `dry_run.record` | no `errdefer`: a failed details copy leaked the target, a failed append leaked both | `errdefer` on both copies, proven by `checkAllAllocationFailures` |
+| `dry_run.renderDiff` | unconditional ANSI, so a redirected ledger carried escape codes | colour is a caller parameter, since `lib/util` cannot read `lib/cli`'s capability |
+
+Two habits came out of it, and they are now the rule for this tree:
+
+1. **A fix ends with a test that calls the thing.** Referencing a function is what forces
+   its body to be analysed, so `sys.zig`'s two functions and `dry_run`'s ledger now have
+   tests whose *purpose* is instantiation plus behaviour. The `isElevated` test asserts a
+   `bool` and deliberately not a value: whether the host is elevated is a property of the
+   host.
+2. **A guard that has never failed is not a guard.** Both new guards were run against a
+   planted defect: the ops-folder scan (`fields.zig imports the CLI; this folder must stay
+   framework-free` → `FAIL (OpsDependsOnCli)`) and the allocation-failure test
+   (`fail_index: 1/4` with the `errdefer`s removed).
+
+Also in this pass: `version.zig` deleted (B-5), `app/cfg/lib/ops` moved out of `lib/` so
+the residency rule holds for every module (each of `util`, `cfg`, `cli` now has ≥2
+consumers), and the ops folder's "framework-free" invariant - which the merge into
+`app_cfg` could no longer enforce through the build graph - re-established as a source
+scanning test that skips comments, because the rule is also *documented* as
+`` **No `@import("cli")`.** `` in the very file being scanned.
+
+**A method warning, for whoever reads this next.** Absence claims in this document were
+made with shell glob searches, and that method produced a false negative in exactly this
+pass: `lib/util/dry_run.zig` was written up as having "no callers and no tests" when
+`cli_test.zig:1977` had covered it all along, which the compiler then pointed out by
+failing the build. Before recording that something is unused, search with the repository's
+grep tool over the whole tree, and prefer a compiler error to a search result.
+
