@@ -10,7 +10,7 @@
 //! (`cli.security`, `cli.secret_val`, ...).
 
 const std = @import("std");
-const zcfg = @import("cfg");
+const zcfg = @import("..\cfg\root.zig");
 
 /// Zeroing and redaction primitives.
 pub const security = @import("security.zig");

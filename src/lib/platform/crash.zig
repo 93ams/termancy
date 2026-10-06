@@ -6,7 +6,7 @@
 //! not as a runtime registration. So a program opts in with one line in `main.zig`:
 //!
 //! ```zig
-//! pub const panic = @import("cli").crash.Panic(.{
+//! pub const panic = @import("..\framework\root.zig").crash.Panic(.{
 //!     .app_name = "cfg",
 //!     .issues_url = "https://github.com/93ams/snek/issues/new",
 //! });

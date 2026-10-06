@@ -1,6 +1,6 @@
 const std = @import("std");
-const zcfg = @import("cfg");
-const zutil = @import("util");
+const zcfg = @import("..\cfg\root.zig");
+const zutil = @import("..\util\root.zig");
 
 // Each sub-folder has its own `root.zig`, and those are imported here so every
 // folder's surface is part of the module graph and gets compiled. The individual
@@ -11,10 +11,10 @@ const zutil = @import("util");
 // `app/cli/lib/root.zig`, which is the authoritative surface: it reads
 // `framework.<name>` for each of these, so a name missing here breaks the module
 // root rather than only the leaf.
-pub const render = @import("render/root.zig");
-pub const interact = @import("interact/root.zig");
-pub const secrets = @import("secrets/root.zig");
-pub const platform = @import("platform/root.zig");
+pub const render = @import("render");
+pub const interact = @import("interact");
+pub const secrets = @import("secrets");
+pub const platform = @import("platform");
 
 pub const tea = render.tea;
 pub const style = render.style;
