@@ -1577,7 +1577,7 @@ a semantic drift hides, because the tests still pass either way. If it is done, 
 `Rig` migration in slices of a few tests with the suite green between each, and re-measure
 the saving rather than believing "~200 lines".
 
-### S-8 · `medium` · Sequential prompts race each other for stdin · **[PLANNED — see the design below]**
+### S-8 · `medium` · Sequential prompts race each other for stdin · **[tea.zig half DONE; `prompt.zig` half needs a design decision]**
 
 Found by reading `prompt.zig` while measuring B-4, and recorded rather than fixed: it is a
 design question, not an edit.
@@ -1635,17 +1635,45 @@ Enter as its own answer. Two options, and the choice should be made deliberately
 * Drain at exit. Rejected: it needs `run` to know the next prompt exists, and it drops a
   keystroke that arrived during the previous frame — a real input, not a stale one.
 
-#### Verification
+#### The plan landed in `tea.zig`, and the second half hit a real obstacle
 
-* **A deterministic regression test, no real stdin.** Add to `cli_test.zig`: build one
-  `Channel(Msg(void))`, push `'y'` and then `'q'`, drive two sequential `Program(QuitModel, void)`
-  `run`s over that channel via `initWithChannel`, and assert the first run consumed the
-  `'y'` (and not the `'q'`) and the second consumed the `'q'`. It must fail against today's
-  code path — that is the control — and it needs no thread, so it cannot hang.
-* **A drain test.** Push two messages, run once with `tryPop`-on-entry, and assert the
-  second message survives for the next `run`.
-* **The existing 328 tests stay green**, including the four `*_prompted` tests, which are
-  unaffected because they drive a single prompt.
+**Done, with tests (`tea.zig`):**
+
+* `Program.initWithChannel(model, io, allocator, channel, skip)` — `run` consumes a
+  caller-owned channel instead of starting a reader. `init`/`initWithAllocator` are
+  unchanged, so nothing outside a caller that opts in is affected.
+* `run` is now a pure consumer: the six `reader.ctx.channel` accesses became one
+  `self.channel`, and it skips `skip` messages before it starts updating.
+* `Channel.tryPop` (non-blocking) and `Channel.queuedCount`, both added for this.
+* **A deterministic regression test**, as designed — two sequential `run`s over one
+  `Channel(Msg(void))`, no thread, so it cannot hang. It passes under *both*
+  instantiations of the generic (`Program(QuitModel, void)` and the prompt's model).
+
+**`skip` is the caller's number, and that is a correction the work forced.** The first
+version had `run` compute it as `channel.queuedCount()` at run start. The test then
+**hung**, and the hang was the finding: a caller-owned channel that already holds this
+run's input has that input counted as the previous prompt's and silently discarded, after
+which `run` waits forever for a message that already arrived. `run` cannot tell a leftover
+answer from input queued for *this* run; only the caller can. Hence the explicit
+parameter, and hence `queuedCount` surviving as a helper rather than as the mechanism.
+
+**Not done, and the reason is a genuine design gap rather than effort:** wiring
+`PromptReader` into `prompt.zig`. One shared channel serves four prompts, but the `skip`
+for prompt *N+1* is "messages that arrived after prompt *N* started and that prompt did
+not consume" — a number the prompt layer does **not** have. It cannot be derived after the
+fact either: a message queued *during* prompt N and one queued *for* prompt N+1 are
+indistinguishable by the time N returns. Closing it needs either sequence numbers on
+messages (a change to `Msg`) or a per-prompt drain policy, and both are decisions rather
+than edits. So `prompt.zig` still starts one reader per prompt; the seam that makes it
+fixable now exists and is tested.
+
+#### What the remaining work needs
+
+The `PromptReader` itself is straightforward (one channel, one `StdinContext`, one thread,
+threaded to the four prompt functions the way `ctx` already is, never freed — the same
+decision B-4 made, moved from per prompt to per dialog). The open question is purely the
+stale-message accounting above, and it should be settled before the wiring lands, because
+getting it wrong reintroduces exactly the hang this session already paid for twice.
 
 #### Out of scope, deliberately
 

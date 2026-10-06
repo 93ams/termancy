@@ -126,6 +126,28 @@ pub fn Channel(comptime T: type) type {
             }
             return self.queue.orderedRemove(0);
         }
+
+        /// How many messages are queued right now, without waiting.
+        ///
+        /// Used by `run` to record a watermark: messages queued *before* a run started
+        /// belong to whoever queued them, not to this prompt.
+        pub fn queuedCount(self: *Self) usize {
+            self.mutex.lock(self.io) catch unreachable;
+            defer self.mutex.unlock(self.io);
+            return self.queue.items.len;
+        }
+
+        /// `pop`, but returns `null` instead of waiting when nothing is queued.
+        ///
+        /// This exists for the shared-reader case (ROADMAP S-8), where one reader serves
+        /// several prompts: a prompt must be able to tell "nothing for me yet" from "a byte
+        /// arrived", because the first is the normal state at the top of a prompt's loop.
+        pub fn tryPop(self: *Self) ?T {
+            self.mutex.lock(self.io) catch unreachable;
+            defer self.mutex.unlock(self.io);
+            if (self.queue.items.len == 0) return null;
+            return self.queue.orderedRemove(0);
+        }
     };
 }
 
@@ -150,6 +172,13 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
         /// The reader thread `run` started, once it has started one. `deinit` joins it
         /// before freeing anything; `null` means `run` never got that far.
         reader: ?Reader = null,
+        /// The queue `run` consumes. `null` means "start a reader and make one", which is
+        /// `init`'s behaviour; non-null means the caller owns it (see `initWithChannel`).
+        channel: ?*Channel(MsgT) = null,
+        /// How many messages already in `channel` belong to *someone else* and must be
+        /// skipped. See `initWithChannel` for why this is the caller's number rather than
+        /// something `run` can compute.
+        skip: usize = 0,
 
         pub fn init(model: ModelT, io: std.Io) Self {
             return .{ .model = model, .io = io, .allocator = default_allocator };
@@ -159,6 +188,38 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
         /// whole lifetime and can therefore release what `run` allocated. See `deinit`.
         pub fn initWithAllocator(model: ModelT, io: std.Io, allocator: std.mem.Allocator) Self {
             return .{ .model = model, .io = io, .allocator = allocator };
+        }
+
+        /// `init`, consuming a channel the **caller** owns instead of starting a reader.
+        ///
+        /// `run` starting a reader per prompt is a bug when a dialog has several prompts
+        /// (ROADMAP S-8): each `run` leaves a thread blocked on the same stdin, and two
+        /// threads reading one stream race for the bytes. Passing one channel - served by
+        /// one reader, owned by the dialog - makes `run` a pure consumer.
+        ///
+        /// `skip` is the number of messages already in `channel` that belong to an earlier
+        /// prompt. It is the caller's number **because only the caller knows it**: `run`
+        /// cannot tell a leftover answer from input the caller queued for this run, and
+        /// computing it inside `run` was wrong in exactly that way - a caller that queued a
+        /// message before calling `run` had its own input silently discarded.
+        ///
+        /// The caller must keep `channel` alive for as long as messages can still arrive; a
+        /// reader that outlives the caller is exactly the lifetime rule `StdinContext`
+        /// documents. `deinit` frees nothing in this mode, because `run` allocated nothing.
+        pub fn initWithChannel(
+            model: ModelT,
+            io: std.Io,
+            allocator: std.mem.Allocator,
+            channel: *Channel(MsgT),
+            skip: usize,
+        ) Self {
+            return .{
+                .model = model,
+                .io = io,
+                .allocator = allocator,
+                .channel = channel,
+                .skip = skip,
+            };
         }
 
         /// Releases what `run` allocated, **after** joining the reader thread.
@@ -308,36 +369,64 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             // never joined, so its context and the channel it pushes into must outlive every
             // frame that could free them. `prompt.zig` used to own the channel on its own
             // frame and `defer` its `deinit`, which could free the queue while the thread was
-            // pushing into it. The leak is bounded - one context and one channel per prompt,
+            // pushing into it. The leak is bounded - one context and one channel per dialog,
             // in a process that exits as soon as the prompt's command returns - and the
             // alternative is a use-after-free.
             //
             // `self.allocator` is the caller's choice; see `default_allocator`. A caller that
             // can prove the thread has stopped calls `deinit` to release both allocations,
             // and that is what makes the leak measurable rather than merely argued.
-            const reader = try startReader(self.allocator, self.io, ctx.in.*);
-            // Recorded before anything that can fail, so `deinit` can always reach them.
-            // `deinit` joining the thread is what keeps this safe: the thread is gone before
-            // either allocation is released.
-            self.reader = reader;
-            // `readVec` requires a buffer to read into; the reader thread asserts the same
-            // precondition from its side, before it reads anything.
-            std.debug.assert(reader.ctx.in.buffer.len > 0);
+            //
+            // A caller that already owns a reader passes its channel to `initWithChannel`;
+            // then `run` starts nothing and `self.reader` stays null. That is what keeps one
+            // dialog (four prompts) on one thread instead of four racing over one stdin.
+            if (self.channel == null) {
+                const reader = try startReader(self.allocator, self.io, ctx.in.*);
+                // Recorded before anything that can fail, so `deinit` can always reach them.
+                // `deinit` joining the thread is what keeps this safe: the thread is gone
+                // before either allocation is released.
+                self.reader = reader;
+                self.channel = reader.ctx.channel;
+            }
+            const channel = self.channel.?;
+            // A reader `run` started needs a buffer to read into, and asserts the same
+            // precondition from its own side before it reads anything. A caller-supplied
+            // channel may have no reader at all (a test pushing messages directly), which is
+            // exactly why this is asserted on the reader rather than on the channel.
+            if (self.reader) |started| std.debug.assert(started.ctx.in.buffer.len > 0);
+
+            // A shared channel can already hold messages the previous prompt did not consume
+            // (ROADMAP S-8), and delivering one to this prompt would answer a question the
+            // user has not been asked yet. So this run ignores the first `stale` messages it
+            // sees.
+            //
+            // The count is the caller's when the caller owns the channel, and only then:
+            // `run` cannot distinguish a leftover answer from input queued for *this* run.
+            // When `run` starts the reader itself, nothing can have been queued before it,
+            // so the count is zero by construction and the field stays as the caller set it.
+            const stale = self.skip;
 
             var prev_lines: usize = 0;
 
             // Initial view
-            var aw = std.Io.Writer.Allocating.init(reader.ctx.channel.allocator);
+            var aw = std.Io.Writer.Allocating.init(channel.allocator);
             try self.model.view(&aw.writer);
             var view_bytes = aw.writer.buffer[0..aw.writer.end];
             try writer.writeAll(view_bytes);
             prev_lines = renderedLineCount(view_bytes);
-            reader.ctx.channel.allocator.free(aw.writer.buffer);
+            channel.allocator.free(aw.writer.buffer);
 
             // Event Loop
+            var remaining_stale = stale;
             while (true) {
                 // 1. Wait for input or background task message
-                const msg = reader.ctx.channel.pop();
+                const msg = channel.pop();
+
+                // Messages older than this run belong to someone else; drop and re-wait.
+                if (remaining_stale > 0) {
+                    remaining_stale -= 1;
+                    continue;
+                }
 
                 // 2. Update phase
                 const cmd = try self.model.update(msg);
@@ -346,12 +435,12 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
                     if (prev_lines > 0) {
                         for (0..prev_lines) |_| try writer.writeAll("\x1b[A\x1b[2K\r");
                     }
-                    var aw_final = std.Io.Writer.Allocating.init(reader.ctx.channel.allocator);
+                    var aw_final = std.Io.Writer.Allocating.init(channel.allocator);
                     try self.model.view(&aw_final.writer);
                     view_bytes = aw_final.writer.buffer[0..aw_final.writer.end];
                     try writer.writeAll(view_bytes);
                     try writer.writeAll("\n");
-                    reader.ctx.channel.allocator.free(aw_final.writer.buffer);
+                    channel.allocator.free(aw_final.writer.buffer);
                     break;
                 } else if (cmd == .exec) {
                     // Spawn background task
@@ -364,12 +453,12 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
                     for (0..prev_lines) |_| try writer.writeAll("\x1b[A\x1b[2K\r");
                 }
 
-                var aw_next = std.Io.Writer.Allocating.init(reader.ctx.channel.allocator);
+                var aw_next = std.Io.Writer.Allocating.init(channel.allocator);
                 try self.model.view(&aw_next.writer);
                 view_bytes = aw_next.writer.buffer[0..aw_next.writer.end];
                 try writer.writeAll(view_bytes);
                 prev_lines = renderedLineCount(view_bytes);
-                reader.ctx.channel.allocator.free(aw_next.writer.buffer);
+                channel.allocator.free(aw_next.writer.buffer);
             }
         }
 
@@ -501,6 +590,64 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             };
             try ran.run(ctx);
             try testing.expect(ran.model.quit);
+        }
+
+        test "two runs over one channel each get their own message, never the previous one" {
+            // The S-8 regression, and the reason it is written this way: the real bug is a
+            // race between two reader *threads* over one stdin, so a test through the real
+            // path would be non-deterministic - and this session already paid twice for
+            // tests that hang instead of fail. A channel can be pushed into directly, so
+            // this test drives the program side with no thread at all.
+            //
+            // The skip is explicit for a reason worth keeping: the first version of this
+            // change had `run` compute the count itself, and the test hung, which is how the
+            // flaw was found. `run` cannot tell a leftover answer from input the caller
+            // queued for *this* run - computing it inside `run` meant a caller that queued
+            // its own message had it silently discarded, and then waited forever for input
+            // that had already arrived. The caller knows; `run` does not.
+            const testing = std.testing;
+
+            var channel = Channel(Msg(void)).init(testing.allocator, testing.io);
+            defer channel.deinit();
+
+            // Phase 1: a caller-owned channel with nothing to skip. `QuitModel` does not quit
+            // on `y`, so the run consumes `y` first and `q` second - and the queue is empty
+            // afterwards, which asserts it consumed its own messages and left none behind.
+            var out1_buf: [128]u8 = undefined;
+            var out1 = std.Io.Writer.fixed(&out1_buf);
+            var first = Program(QuitModel, void).initWithChannel(
+                .{},
+                testing.io,
+                testing.allocator,
+                &channel,
+                0, // nothing queued yet: nothing belongs to an earlier prompt
+            );
+            const ctx1 = .{ .in = &std.Io.Reader.fixed(&[_]u8{}), .out = &out1 };
+            try channel.push(.{ .key = .{ .key = .char, .char = 'y' } });
+            try channel.push(.{ .key = .{ .key = .char, .char = 'q' } });
+            try first.run(ctx1);
+            try testing.expectEqual(@as(u8, 'q'), first.model.seen);
+            try testing.expectEqual(@as(usize, 0), channel.queuedCount());
+
+            // Phase 2: one message the previous prompt never consumed, then this prompt's own
+            // answer. `skip = 1` names the leftover, so `update` must see the answer and the
+            // leftover must be discarded - the leftover-answer case this whole change is for.
+            try channel.push(.{ .key = .{ .key = .char, .char = 'x' } });
+
+            var out2_buf: [128]u8 = undefined;
+            var out2 = std.Io.Writer.fixed(&out2_buf);
+            var second = Program(QuitModel, void).initWithChannel(
+                .{},
+                testing.io,
+                testing.allocator,
+                &channel,
+                1, // the `x` above belongs to the prompt that already ended
+            );
+            const ctx2 = .{ .in = &std.Io.Reader.fixed(&[_]u8{}), .out = &out2 };
+            try testing.expectEqual(@as(usize, 1), channel.queuedCount());
+            try channel.push(.{ .key = .{ .key = .char, .char = 'q' } });
+            try second.run(ctx2);
+            try testing.expectEqual(@as(u8, 'q'), second.model.seen);
         }
     };
 }
