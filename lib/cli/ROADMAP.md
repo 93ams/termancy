@@ -483,13 +483,49 @@ view is drawn, and the cursor is hidden on entry and restored on exit **in that 
 Nothing blocks, so nothing can hang `zig build test` — the constraint the first attempt
 paid for.
 
-*Measuring the leak is still not done, and this is why:* `run` allocates from
-`std.heap.page_allocator` deliberately (see `StdinContext`), so a test cannot observe those
-two allocations without first making the allocator injectable — a public-API change to
-`Program.init` that belongs with the "if a future std gains a pollable stdin" work, not
-before it. The leak remains **reasoned and structural, not observed**: the ownership rule
-plus the test that joins on EOF is the argument, and it is a strong one, but it is not a
-measurement. Say so if anyone asks.
+*Measuring the leak is done, and it took the allocator seam rather than a pollable stdin.*
+The note above said the leak was "reasoned and structural, not observed", and that measuring
+it needed `Program.init` to take an allocator. That is what happened:
+
+* `Program` gained an `allocator` field. `init` keeps the process-lifetime
+  `std.heap.page_allocator` (named `default_allocator`), and a new `initWithAllocator` takes
+  one explicitly - so production is unchanged and a test can pass `std.testing.allocator`.
+  `run` no longer hardcodes the allocator; it records the `Reader` on the program so the
+  caller can reach it later.
+* `Program.deinit` is the new half of the ownership rule: **join the reader, then free**.
+  It is a no-op when `run` never started a reader, and idempotent, because a caller `defer`s
+  it unconditionally. Production still does not call it - the thread is normally blocked in
+  a stdin read that no byte will end, so joining would hang - but a caller with a finite
+  source can, and that is what makes the two allocations recoverable.
+
+**Measured by control experiment, not inferred.** With the `defer prog.deinit()` removed from
+the `run` test, `std.testing.allocator` fails the suite with
+`2 tests leaked memory`, naming each address and the three allocation sites -
+`startReader`'s context, `startReader`'s channel, and the queue storage that
+`Channel.push` grows. With the `defer` restored, all 594 pass. So the leak is now a
+number with a failing control behind it rather than a paragraph: one context, one channel and
+one queue-buffer per prompt that is never joined.
+
+*What this does not change:* the shipped prompt path still leaks, deliberately, for the
+reason in `StdinContext` - `prompt.zig` uses the default allocator and never joins. What
+changed is that the claim is now testable, and a future `Program` that forgets to release
+will be caught by the same `testing.allocator` the day someone drives it with a finite
+source.
+
+*Two traps found while adding these tests, both cost time and neither is obvious.*
+
+1. **A test inside a generic is collected once per instantiation, and the body sees the
+   *ambient* generic's parameters, not the ones it names.** The `run` test initially drove
+   `Program(QuitModel, void)` while being *collected* under
+   `Program(prompt.confirm's Model, void)`, whose model does not quit on `q` - so `run` never
+   returned and the suite **hung** rather than failing. A hang is the wrong failure mode for
+   a guard: it takes the whole suite with it. The rule that follows is to make such a body
+   work for whichever model it is collected under, or to construct the inner `Program`
+   explicitly so its model is not in question. The second test does the latter.
+2. **The prompt's model has required fields**, so a generic test cannot construct a value of
+   `ModelT` to drive a quit - which is why the two tests here assert against `QuitModel`
+   (constructed explicitly) or against properties that hold for any model, and never against
+   `ModelT{}`.
 
 *A compiler bug found on the way, worth one line for the next person:* declaring the test's
 model as a `struct` with methods **inside a test that is itself inside a generic** made the
@@ -657,40 +693,53 @@ shipping OS" and needs no cross-toolchain to execute. It is deliberately **not**
 `trace.zig` sites on its first run.
 
 **Verified by running it, not only compiling it.** The Linux half was believed to be
-unrunnable here, and that was wrong: the repository has WSL available, and a static musl
-binary runs there. The suite was built for `x86_64-linux-musl` with `--test-no-exec` and
-executed under WSL Ubuntu → **326 tests, 321 passed, 1 skipped, 4 failed**, and the failure
-list is the proof:
+unrunnable here, and that was wrong for the second time in this item: the repository has WSL
+available, and a static musl binary runs there. The suite was built for `x86_64-linux-musl`
+with `--test-no-exec` and executed under WSL Ubuntu, and the milestone is now:
 
-* `test.cli_test.test.OS Primitives: MmapFile zero-copy reading` — **OK**. This is the test
-  that calls `MmapFile.open`, so the `openat`/`statx`/`PROT`/`mmap`/`munmap`/`close` path is
-  now verified by execution on Linux, not merely by compilation. The old logic is therefore
-  not "well-formed but unvalidated" any more.
-* `render.tea.Program(render.tea.QuitModel,void).test.run reaches its quit path…` — **OK**,
-  the B-4 addition, so `Program.run`'s quit path is now covered on both platforms.
-* All **4** failures are the same known limitation: `process.zig` and `detach.zig` spawn the
-  string `"zig"` (the tests' own comment says `zig` is guaranteed present "because the build
-  running this test ships with it"), and WSL Ubuntu has no `zig` on `PATH`. Their error is
-  `FileNotFound`/`SpawnFailed` at the spawn, not an assertion. Every other test passes,
-  **including** the POSIX branches of `state.zig`, `xdg.zig`, `signal.zig` and `update.zig`.
+| Run | Result |
+|---|---|
+| No `zig` on WSL's `PATH` | 326 tests — 321 passed, 1 skipped, **4 failed** |
+| With zvm's Linux `zig` on `PATH` | 328 tests — **327 passed, 1 skipped, 0 failed** |
 
-*One of those four is easy to miss when reading the output*, and did get missed once here,
-so it is named: `process.zig`'s "an exceeding output budget is an error rather than a silent
-truncation" fails with `expected error.StreamTooLong, found error.FileNotFound`, because it
-too spawns `zig`. Grepping for `...FAIL` finds **3** of the 4; the fourth prints
-`FAIL (TestUnexpectedError)` on its own line after the mismatch, so count failures from the
-summary line, not from a pattern.
+*The four failures were the environment, proved by removing the environmental difference.*
+`process.zig` and `detach.zig` spawn the string `"zig"` (their own comment says it is
+guaranteed present "because the build running this test ships with it"), and WSL Ubuntu had
+no `zig` on `PATH` - its `PATH` reaches Windows' `/mnt/c/Users/amsti/.zvm/bin/zig`, which is
+a **Windows PE** binary that cannot exec under Linux. Installing zvm inside WSL turned all
+four green with no source change, which is the cleanest possible proof that they were never
+defects.
+
+*Installing a Linux Zig (`zvm`), for the next person.* `curl https://www.zvm.app/install.sh
+| bash` installs zvm itself, but the extracted binary arrives **without the executable bit**
+- `chmod +x "$HOME/.zvm/self/zvm"` before the first run. zvm 0.9.1 has no `--skip-use` (the
+README documents one the binary rejects); the flag set is `--force`, `--skip-shasum`,
+`--zls`, `--full`, `--nomirror`. `zvm install 0.16.0` verifies the shasum and the minisign
+signature, which is why it is worth preferring over an unverified tarball.
+`~/.zvm/bin` is then on `PATH` via the `# ZVM` block in `~/.bashrc` - but only for
+**interactive** shells, and `bash -lc` does not read `.bashrc` on Ubuntu, so a script that
+needs `zig` must export the `PATH` itself.
+
+**Confirmed green on Linux:** `OS Primitives: MmapFile zero-copy reading` (the
+`openat`/`statx`/`PROT`/`mmap`/`munmap`/`close` path, verified by execution, so the old
+logic is not "well-formed but unvalidated" any more), `render.tea.Program(…,void).test.run
+reaches its quit path…` (the B-4 addition), and the POSIX branches of `state.zig`, `xdg.zig`,
+`signal.zig` and `update.zig`.
+
+*One failure is easy to miss when reading the output*, and did get missed once here, so it is
+named: `process.zig`'s "an exceeding output budget…" fails as `expected
+error.StreamTooLong, found error.FileNotFound` and prints `FAIL (TestUnexpectedError)` on its
+own line, so grepping `...FAIL` finds **3** of the 4. Count failures from the summary line.
 
 To reproduce: `zig test -target x86_64-linux-musl -lc --test-no-exec --dep cfg --dep util
 "-Mroot=lib/cli/root.zig" "-Mcfg=lib/cfg/root.zig" "-Mutil=lib/util/root.zig" -femit-bin=<out>`,
-then run `<out>` inside WSL. Note `-target` must precede the `-M` flags; placed after them it
-is silently ignored and the host target is built instead. The run is stable — two consecutive
-executions gave identical counts.
+then run `<out>` inside WSL with `PATH="$HOME/.zvm/bin:$PATH"`. Note `-target` must precede
+the `-M` flags; placed after them it is silently ignored and the host target is built
+instead. Two consecutive runs gave identical counts.
 
 **Still open in this item:** the cross-build of the *executables* (`zig build -Dtarget=…`) is
 green, but nothing runs `cfg`/`tigershark` on Linux, so a per-OS branch reachable only from
-`main.zig` would still be caught by the compile gate alone. Putting a Linux `zig` on WSL's
-`PATH` would turn all four remaining failures green and make this platform fully verified.
+`main.zig` would still be caught by the compile gate alone.
 
 
 ---

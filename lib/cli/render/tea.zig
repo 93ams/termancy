@@ -135,11 +135,56 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
         const MsgT = Msg(CustomMsgT);
         const CmdT = Command(CustomMsgT);
 
+        /// The allocator a `Program` uses when the caller does not name one.
+        ///
+        /// The process-lifetime allocator is the right production choice and the wrong
+        /// test one: `run` cannot always free what it allocates (see `StdinContext`), so
+        /// an allocator with a leak report would fail every run. A caller that *can*
+        /// guarantee the reader thread has stopped - a test with a finite source - passes
+        /// its own allocator to `initWithAllocator`.
+        pub const default_allocator = std.heap.page_allocator;
+
         model: ModelT,
         io: std.Io,
+        allocator: std.mem.Allocator,
+        /// The reader thread `run` started, once it has started one. `deinit` joins it
+        /// before freeing anything; `null` means `run` never got that far.
+        reader: ?Reader = null,
 
         pub fn init(model: ModelT, io: std.Io) Self {
-            return .{ .model = model, .io = io };
+            return .{ .model = model, .io = io, .allocator = default_allocator };
+        }
+
+        /// `init`, with the allocator named - for a caller that owns the reader thread's
+        /// whole lifetime and can therefore release what `run` allocated. See `deinit`.
+        pub fn initWithAllocator(model: ModelT, io: std.Io, allocator: std.mem.Allocator) Self {
+            return .{ .model = model, .io = io, .allocator = allocator };
+        }
+
+        /// Releases what `run` allocated, **after** joining the reader thread.
+        ///
+        /// This is the half of B-4 that was missing. Production does not call it: the
+        /// reader thread is normally blocked in a stdin read that no byte will end, so
+        /// joining would hang, and the process exits instead. A caller driving a source
+        /// that reaches end of stream - a test, or any non-interactive use - *can* join,
+        /// and once the thread is provably gone the two allocations are safe to free.
+        ///
+        /// Order matters and is the whole point: **join, then free**. Freeing first is the
+        /// use-after-free this item was about. Idempotent, because `run` may have failed
+        /// before starting a reader and a caller may still `defer` this.
+        pub fn deinit(self: *Self) void {
+            const reader = self.reader orelse return;
+            self.reader = null;
+
+            // Blocks until the reader ends. Safe only because the source is finite; see
+            // the doc comment above and `StdinContext`.
+            reader.thread.join();
+
+            // The thread has stopped, so nothing else reaches either allocation. The
+            // channel's own `deinit` frees the queue storage, not just the struct.
+            reader.ctx.channel.deinit();
+            self.allocator.destroy(reader.ctx.channel);
+            self.allocator.destroy(reader.ctx);
         }
 
         /// What the reader thread is allowed to touch, and for how long.
@@ -176,9 +221,19 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
         /// stream returns zero bytes, which ends the loop, which lets an owner that owns a
         /// finite source join this thread and then free in either order.
         fn stdinReaderThread(ctx_ptr: *StdinContext) void {
-            // Nothing else may hold the queue's lock before this thread reads, and the
-            // reader needs a buffer for the bytes it is about to request.
-            std.debug.assert(ctx_ptr.channel.mutex.state.load(.monotonic) == .unlocked);
+            // No assertion on `ctx_ptr.channel.mutex` here, and that is deliberate. This
+            // used to assert the queue's lock was `.unlocked` at thread start, which is
+            // not an invariant: `Channel.pop` holds that lock for the whole time it is
+            // blocked in `cond.wait`, so the main loop is *normally* holding it when this
+            // thread starts. The assert was a latent flake that crashed the suite
+            // intermittently (`reached unreachable code` in `std.debug.assert`) the moment
+            // the surrounding timing shifted - a scheduling-dependent failure, which is
+            // the worst kind to leave in a test path.
+            //
+            // The real invariant is checked by the spawner, where it can be observed
+            // without racing another thread: `startReader` asserts the channel it hands
+            // over is freshly created and empty. A reader that wanted to assert about the
+            // lock would have to hold it.
             std.debug.assert(ctx_ptr.in.buffer.len > 0);
             var buf: [16]u8 = undefined;
             while (true) {
@@ -256,7 +311,15 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             // pushing into it. The leak is bounded - one context and one channel per prompt,
             // in a process that exits as soon as the prompt's command returns - and the
             // alternative is a use-after-free.
-            const reader = try startReader(std.heap.page_allocator, self.io, ctx.in.*);
+            //
+            // `self.allocator` is the caller's choice; see `default_allocator`. A caller that
+            // can prove the thread has stopped calls `deinit` to release both allocations,
+            // and that is what makes the leak measurable rather than merely argued.
+            const reader = try startReader(self.allocator, self.io, ctx.in.*);
+            // Recorded before anything that can fail, so `deinit` can always reach them.
+            // `deinit` joining the thread is what keeps this safe: the thread is gone before
+            // either allocation is released.
+            self.reader = reader;
             // `readVec` requires a buffer to read into; the reader thread asserts the same
             // precondition from its side, before it reads anything.
             std.debug.assert(reader.ctx.in.buffer.len > 0);
@@ -351,11 +414,17 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             // hung `zig build test`. This drives it with a finite source instead, so the
             // reader thread reaches end of stream on its own and `run` always returns.
             //
-            // What this pins is the *shape* of the quit path: one key reaches `update`,
-            // a `.quit` command is honoured, and the cursor is restored on the way out. It
-            // deliberately does not assert anything about the two allocations `run` makes
-            // - it cannot see them, because `run` uses `std.heap.page_allocator` on purpose
-            // (see `StdinContext`). Measuring that leak is a separate, larger change.
+            // It also **measures** the leak that B-4 recorded as reasoned-but-unobserved,
+            // by injecting `std.testing.allocator` through `initWithAllocator`. That is
+            // only possible because the source is finite: `deinit` joins the reader thread
+            // first, and a join on a blocked stdin read would hang. If `deinit` freed
+            // before joining, `testing.allocator` would report a leak or a double free
+            // here; if `run` leaked anything of its own, it would report that too.
+            //
+            // What this pins as well as the memory: the byte travels from the source
+            // through the reader thread and the channel into `update`, the `.quit` command
+            // is honoured, the final view is drawn, and the cursor is hidden on entry and
+            // restored on exit, in that order.
             //
             // The model lives at file scope (`QuitModel`) rather than here: a struct with
             // methods declared inside a test that is itself inside a generic was enough to
@@ -369,7 +438,8 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             var out_buf: [256]u8 = undefined;
             var out = std.Io.Writer.fixed(&out_buf);
 
-            var prog = Program(QuitModel, void).init(.{}, testing.io);
+            var prog = Program(QuitModel, void).initWithAllocator(.{}, testing.io, testing.allocator);
+            defer prog.deinit();
             const ctx = .{
                 .in = &std.Io.Reader.fixed(&source_bytes),
                 .out = &out,
@@ -384,6 +454,53 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             try testing.expect(std.mem.indexOf(u8, written, "byebye") != null);
             // The cursor was hidden on entry and restored on exit, in that order.
             try testing.expect(std.mem.startsWith(u8, written, "\x1b[?25l"));
+        }
+
+        test "deinit is idempotent and safe before run has started a reader" {
+            // `deinit` makes two promises that the `run` test cannot localise, so they are
+            // pinned here instead: calling it twice is a no-op, and calling it on a
+            // `Program` whose `run` never started a reader does nothing.
+            //
+            // The second promise is the one a caller actually relies on. A test or a
+            // non-interactive caller `defer`s `deinit` unconditionally; if `run` failed
+            // before `startReader`, the `oref` must return rather than join a thread that
+            // does not exist or free storage that was never allocated.
+            //
+            // Deliberately *not* a second `run`: this body is collected once per
+            // instantiation of the generic, and the prompt's model has required fields, so
+            // there is no model-independent way to drive a quit from here. The `run` test
+            // above already drives it for whichever model this instantiation carries.
+            const testing = std.testing;
+
+            var prog = Program(QuitModel, void).initWithAllocator(
+                .{},
+                testing.io,
+                testing.allocator,
+            );
+
+            // No `run`, so no reader: both calls must be silent no-ops.
+            prog.deinit();
+            prog.deinit();
+
+            // And after a run that did start one, a second call is still a no-op. The
+            // source is `q` because this instantiation is `QuitModel`'s by construction -
+            // the inner `Program` names it, so no other model's `update` is involved.
+            var source_bytes: [1]u8 = .{'q'};
+            var out_buf: [128]u8 = undefined;
+            var out = std.Io.Writer.fixed(&out_buf);
+
+            var ran = Program(QuitModel, void).initWithAllocator(
+                .{},
+                testing.io,
+                testing.allocator,
+            );
+            defer ran.deinit();
+            const ctx = .{
+                .in = &std.Io.Reader.fixed(&source_bytes),
+                .out = &out,
+            };
+            try ran.run(ctx);
+            try testing.expect(ran.model.quit);
         }
     };
 }

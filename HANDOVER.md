@@ -8,7 +8,7 @@ Last verified numbers (run them yourself before trusting anything here):
 
 | Gate | Expected |
 |---|---|
-| `zig build test --summary all` | `13/13 steps succeeded; 591/592 tests passed (1 skipped)` |
+| `zig build test --summary all` | `13/13 steps succeeded; 593/594 tests passed (1 skipped)` |
 | `zig build test-direct --summary all` | `13/13 steps succeeded` |
 | `zig build test-linux-compile --summary all` | `6/6 steps succeeded` — compiles every root for the shipping OS |
 | `zig fmt --check build.zig build lib app` | exit 0, no output |
@@ -46,9 +46,9 @@ for the full method and the two control experiments; the short version:
 
 * All **471 named** declarations in `lib/` execute (cli 318 + cfg 123 + util 30), as
   measured when the audit ran. The tree has grown since — `util` added a direct test for
-  the monotonic clock and `cli` gained a headless `Program.run` test, so it currently
-  reports **592** tests, 591 passing (cli 326, util 32). The audit's arithmetic is
-  unaffected; only the totals moved.
+  the monotonic clock and `cli` gained headless `Program.run`/`deinit` tests, so it
+  currently reports **594** tests, 593 passing (cli 328, util 32). The audit's arithmetic
+  is unaffected; only the totals moved.
   Verified by running each module root directly and pairing every declaration with
   the executed name that served it, allowing for the instantiation-qualified prefix
   a test inside a generic container runs under.
@@ -129,19 +129,22 @@ B-2/B-3/B-4/B-5/B-6 carry their measured resolutions.
    **7**, across `mmap.zig`, `platform/telemetry.zig` and `util/trace.zig`.
    `zig build test-linux-compile` now gates this class, and the Linux suite was
    **executed under WSL**, where the `MmapFile` test passes.**
-3. **B-4's deliberate leak — half closed.** The `run` path now *has* the headless
-   regression test three documents said was impossible (a finite `Reader.fixed` source,
-   not a thread-capable stdin), and it passes. What remains is the **measurement**: `run`
-   allocates its reader context and channel from `page_allocator` on purpose, so a test
-   cannot see them. Observing the leak needs `Program.init` to take an allocator — a
-   public-API change that belongs with the "if a future std gains pollable stdin" work.
-   Until then the leak is structural, not measured; do not claim otherwise.
-   The full analysis is in the B-4 entry, which records the attempt and revert.
-4. **Run the Linux suite properly.** `test-linux-compile` proves the code *compiles* for
-   the shipping OS; it does not execute it. WSL can, and doing so found no POSIX defect —
-   but four tests are unrunnable there because they spawn the bare string `"zig"`
-   (`process.zig`, `detach.zig`) and WSL has no `zig` on `PATH`. Putting a Linux `zig` on
-   that `PATH` would turn those four green and make the second platform fully verified.
+3. ~~**B-4's deliberate leak.**~~ **Closed, and now measured rather than argued.**
+   `Program` takes an allocator (`initWithAllocator`; `init` still defaults to
+   `page_allocator`), and `Program.deinit` joins the reader thread **before** freeing
+   it — so any caller with a finite source can release both allocations. The `run` test
+   does, under `std.testing.allocator`. Control experiment: removing that `defer` makes
+   the suite fail with `2 tests leaked memory`, naming the context, the channel and the
+   queue buffer. Production still leaks deliberately (`prompt.zig` never joins, because
+   its thread is blocked in a real stdin read), but the claim is testable now. See the
+   B-4 entry, which also records two traps that cost time — a generic test body sees the
+   *ambient* instantiation's model and **hangs** rather than fails when it does not quit.
+4. ~~**Run the Linux suite properly.**~~ **Done — the second platform is fully green.**
+   WSL has a Linux `zig` (zvm, 0.16.0), and the whole suite passes there: **327 passed,
+   1 skipped, 0 failed**. The four failures previously blamed on the environment were
+   exactly that — they spawn the bare string `"zig"`, and WSL's `PATH` only reached the
+   **Windows** `zig` at `/mnt/c/…/.zvm/bin`, which cannot exec under Linux. See §4 for the
+   zvm setup, the `chmod +x` it needs, and the `bash -lc` gotcha.
 5. **S-1–S-7** (`cli.zig` is the module root *and* an 11k-line implementation; its
    indentation hides scope; `parseFlags` is ~430 lines). Large, structural, review-heavy.
 6. **N-2** — nine `app/` files still wrap a single type instead of `const Self = @This();`.
@@ -174,11 +177,18 @@ zig test -target x86_64-linux-musl -lc --test-no-exec --dep cfg --dep util `
 wsl -d Ubuntu -- bash -lc "cp /mnt/c/<path>/x /tmp/x && chmod +x /tmp/x && cd /tmp && /tmp/x"
 ```
 
-Expect **326 tests: 321 passed, 1 skipped, 4 failed**, where all four failures are the
-missing `zig` on WSL's `PATH` (`process.zig` and `detach.zig` spawn it by name). Count
-failures from that summary line, not by grepping `...FAIL` — one of the four prints
-`FAIL (TestUnexpectedError)` on the following line. `--test-filter` is not a runtime flag
-in 0.16; the runner takes no filter argument, so filter by reading the output.
+Expect **328 tests: 327 passed, 1 skipped, 0 failed**. `zig` must be on the `PATH` you
+launch it with, or the four tests that spawn it fail; WSL's default `PATH` reaches
+Windows' `/mnt/c/…/.zvm/bin/zig`, which is a **PE binary** and cannot exec, so use the
+Linux one:
+
+```
+export PATH="$HOME/.zvm/bin:$HOME/.zvm/self:$PATH"   # zvm's Linux zig, v0.16.0
+```
+
+`bash -lc` does **not** read `~/.bashrc` on Ubuntu, so the `# ZVM` block there is not
+enough for a script — export the `PATH` in the script itself. Count failures from the
+summary line rather than a `...FAIL` grep, which finds only 3 of 4 when they occur.
 
 Use `--prefix` for cross-builds: without it the Linux binaries overwrite `zig-out/bin`, and
 then you must re-run a plain `zig build` before the Windows binaries work again.
@@ -241,6 +251,19 @@ then you must re-run a plain `zig build` before the Windows binaries work again.
   declares tests; each distinct `Program(A, T)` and `Program(B, T)` runs them again. Adding
   one model type can therefore add several tests, and a test-count assertion pinned to an
   exact number will need updating for a reason that has nothing to do with the change.
+* **A test inside a generic that hangs takes the whole suite with it — and hangs are the
+  likely failure, not asserts.** `Program`'s `run` test drove `QuitModel` while being
+  *collected* under the prompt's model, which does not quit on `q`, so `run` waited for a key
+  that never came. It had to be killed twice. If a test you are adding touches a generic,
+  check which instantiation will collect it, and make the body independent of that choice —
+  or drive it with a timeout while you work.
+* **A green suite can hide a schedule-dependent assert.** `stdinReaderThread` asserted its
+  channel's mutex was `.unlocked` at thread start. It is not an invariant — `Channel.pop`
+  holds that lock the whole time it waits — so the assert was a latent flake that only fired
+  once the new tests shifted the timing, as `1 crash` in `--summary all` while the same
+  suite passed on the next run. Two lessons: **a flaky crash is a bug, not noise** (the
+  assertion was simply wrong and is now gone), and when a run reports a count you did not
+  expect, re-run it — `593/594` and `592/594 (1 crashed)` were the same tree.
 
 ## 6. Zig 0.16 spellings this session had to discover
 
