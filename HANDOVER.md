@@ -8,7 +8,7 @@ Last verified numbers (run them yourself before trusting anything here):
 
 | Gate | Expected |
 |---|---|
-| `zig build test --summary all` | `13/13 steps succeeded; 587/588 tests passed (1 skipped)` |
+| `zig build test --summary all` | `13/13 steps succeeded; 588/589 tests passed (1 skipped)` |
 | `zig build test-direct --summary all` | `13/13 steps succeeded` |
 | `zig build test-linux-compile --summary all` | `6/6 steps succeeded` — compiles every root for the shipping OS |
 | `zig fmt --check build.zig build lib app` | exit 0, no output |
@@ -44,7 +44,10 @@ dead test**. The measured claim (479 declarations, 478 runs) was real, but the c
 was an accounting artifact, not a lost test. Read `lib/cli/ROADMAP.md` item **C-6**
 for the full method and the two control experiments; the short version:
 
-* All **471 named** declarations in `lib/` execute (cli 318 + cfg 123 + util 30).
+* All **471 named** declarations in `lib/` execute (cli 318 + cfg 123 + util 30), as
+  measured when the audit ran. `util` is **31** now: porting B-6 added a direct test
+  for the monotonic clock, which had none — and that missing test was the whole of why
+  its POSIX branch rotted. The tree currently reports **589** tests, 588 passing.
   Verified by running each module root directly and pairing every declaration with
   the executed name that served it, allowing for the instantiation-qualified prefix
   a test inside a generic container runs under.

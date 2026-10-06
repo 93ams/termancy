@@ -80,11 +80,15 @@ pub const TraceContext = struct {
 /// `nsec`, so that line could never have compiled. A comment claiming a defect
 /// is not a working branch, which is exactly why B-6 was open for so long.
 ///
-/// `std.c` is used rather than `std.os.linux` deliberately: the repository
-/// targets Windows and Linux-with-libc, and `std.c` is the spelling that stays
-/// correct if a third libc platform is ever added. A clock that cannot be read
-/// yields 0 rather than an error - this is a coarse duration for telemetry, and
-/// a caller that cannot measure must still be able to record the event.
+/// `std.c` is used only where a libc is actually linked, because naming `std.c`
+/// at all is a build error without `-lc`. This repository's artifacts do not
+/// declare `link_libc` (they are static musl), so the Linux path is the syscall
+/// layer - which needs no libc and is what `std.posix.system` resolves to there
+/// anyway.
+///
+/// A clock that cannot be read yields 0 rather than an error: this is a coarse
+/// duration for telemetry, and a caller that cannot measure must still record
+/// the event.
 pub fn getMonotonicMs() u64 {
     const builtin = @import("builtin");
     if (builtin.os.tag == .windows) {
@@ -92,12 +96,20 @@ pub fn getMonotonicMs() u64 {
             pub extern "kernel32" fn GetTickCount64() u64;
         };
         return kernel32.GetTickCount64();
-    } else {
-        // The target is Linux, where both spellings agree; assert it rather than
-        // leave a second latent branch behind.
-        comptime std.debug.assert(@hasField(std.c.timespec, "sec"));
-        comptime std.debug.assert(@hasField(std.c.timespec, "nsec"));
+    } else if (builtin.os.tag == .linux) {
+        // No libc needed, so this branch is correct for both static musl and a
+        // libc-linked build; the field names below are the Linux ones.
+        comptime std.debug.assert(@hasField(std.os.linux.timespec, "sec"));
+        comptime std.debug.assert(@hasField(std.os.linux.timespec, "nsec"));
 
+        var ts: std.os.linux.timespec = undefined;
+        if (std.posix.errno(std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts)) != .SUCCESS) return 0;
+        std.debug.assert(ts.sec >= 0);
+        std.debug.assert(ts.nsec >= 0);
+        const ms = @as(u64, @intCast(ts.sec)) * 1000 +
+            @as(u64, @intCast(@divTrunc(ts.nsec, 1_000_000)));
+        return ms;
+    } else if (builtin.link_libc) {
         var ts: std.c.timespec = undefined;
         if (std.posix.errno(std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts)) != .SUCCESS) return 0;
         std.debug.assert(ts.sec >= 0);
@@ -105,6 +117,11 @@ pub fn getMonotonicMs() u64 {
         const ms = @as(u64, @intCast(ts.sec)) * 1000 +
             @as(u64, @intCast(@divTrunc(ts.nsec, 1_000_000)));
         return ms;
+    } else {
+        // A POSIX target with no syscall wrapper and no libc. Reported by
+        // returning 0 rather than by failing to compile, because a build error
+        // here would take out every caller of a coarse telemetry clock.
+        return 0;
     }
 }
 
@@ -147,4 +164,22 @@ test "generated trace contexts are the right shape and differ" {
     const written = a.headerInto(&buf);
     try std.testing.expectEqual(@as(usize, header_length), written.len);
     try std.testing.expect(std.mem.startsWith(u8, written, "00-"));
+}
+
+test "the monotonic clock advances, and never comes back as a negative" {
+    // This test exists because `getMonotonicMs` had none, and that is why its
+    // POSIX branch sat on two removed APIs without anyone noticing. It is called
+    // for real - `profiler.zig` times with it and `trace_parent.zig` seeds its
+    // PRNG from it - so a missing test was the whole of the gap.
+    //
+    // Both branches return milliseconds since some epoch (boot, on Windows and
+    // for `CLOCK_MONOTONIC`), so the assertions are the shape of the value
+    // rather than a particular magnitude: the negative reading is what a sign
+    // error produces, and the upper bound rejects a nanosecond value or a
+    // wrapping somewhere in the conversion.
+    const first = getMonotonicMs();
+    const second = getMonotonicMs();
+
+    try std.testing.expect(first <= second);
+    try std.testing.expect(second < 1_000_000_000_000_000);
 }

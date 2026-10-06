@@ -260,6 +260,12 @@ dead test" is the counting of a body-less aggregator, not a lost test.** If C-4'
 pinned numbers are ever updated, count named declarations and executable blocks -
 never bare `test {` blocks.
 
+*Numbers are as of the audit.* B-6's port added one test (`lib/util/trace.zig` now
+covers its monotonic clock directly, because having no test is why that branch
+rotted), so the tree reports **589** where this item says 588 and `util` declares 31
+where it says 30. The **479** figure and the aggregator that accounts for the
+off-by-one are unchanged - that count is historical and was never a defect.
+
 ### C-4 · `medium` · Pin the test count so a lost suite fails loudly · **[done]**
 
 The failure mode C-1 introduces is subtle: if a future edit removes the
