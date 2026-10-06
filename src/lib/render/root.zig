@@ -12,7 +12,19 @@ const std = @import("std");
 
 /// The folder's own re-exports.
 pub const lib = @import("lib.zig");
-pub usingnamespace lib;
+pub const decstbm = lib.decstbm;
+pub const capability = lib.capability;
+pub const color = lib.color;
+pub const graphics = lib.graphics;
+pub const layout = lib.layout;
+pub const pager = lib.pager;
+pub const progress = lib.progress;
+pub const spatial_focus = lib.spatial_focus;
+pub const style = lib.style;
+pub const spinner = lib.spinner;
+pub const tea = lib.tea;
+pub const virtual_terminal = lib.virtual_terminal;
+pub const vte = lib.vte;
 
 test {
     // Shallow by design: a `test` block is collected only when a declaration in the

@@ -19,7 +19,7 @@
 //! See repo-wide `ROADMAP.md` item O-3 for the naming convention.
 
 const std = @import("std");
-const cli = @import("cli");
+const cli = @import("framework");
 
 /// Per-invocation state threaded through the command tree. Empty: this app keeps
 /// no state between commands, which is why the commands are self-contained.
@@ -116,9 +116,11 @@ const update_cmd = App.updateCommand(.{
 
 /// The root command's metadata.
 ///
-/// Configuration management lives in `app/cfg`, shared with the other binaries rather
-/// than owned by this one. It is a function of `App` because a command is a type
-/// specialised to the app's state - see `app/cfg/root.zig`.
+/// Configuration management lives in `cmd/config/`, beside the rest of the command tree
+/// rather than in a module of its own. It was `app_cfg` while this repository held two
+/// applications; with one binary it is simply the app's largest command group, reached by
+/// relative import like `add` and `init`. It is a function of `App` because a command is a
+/// type specialised to the app's state - see `cmd/config/root.zig`.
 const root_meta = .{
     .name = "snek",
     .description = "Snek CLI Framework - project scaffolder and component manager",
@@ -126,7 +128,7 @@ const root_meta = .{
     .subcommands = .{
         repl_cmd,
         update_cmd,
-        @import("app_cfg").Commands(App, @import("app_cfg").Config).config,
+        @import("config/root.zig").Commands(App, @import("config/root.zig").Config).config,
         add.cmd,
         init.cmd,
     },

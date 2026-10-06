@@ -9,7 +9,7 @@
 //! array and a `generate()` that needs no `std.Random` argument.
 
 const std = @import("std");
-const trace = @import("..\util\root.zig").trace;
+const trace = @import("util").trace;
 
 const Self = @This();
 

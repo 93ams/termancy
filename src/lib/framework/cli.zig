@@ -1,6 +1,6 @@
 const std = @import("std");
-const zcfg = @import("..\cfg\root.zig");
-const zutil = @import("..\util\root.zig");
+const zcfg = @import("cfg");
+const zutil = @import("util");
 
 // Each sub-folder has its own `root.zig`, and those are imported here so every
 // folder's surface is part of the module graph and gets compiled. The individual

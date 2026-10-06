@@ -54,20 +54,54 @@ src/
     root.zig           Cross-module behavioural suite (one test root for the whole surface)
 ```
 
-## The one Zig constraint that shapes the layout
+## One Zig constraint that shapes the layout, measured
 
-A Zig module root may only import files **inside the module's path**, and the app is built
-as a module. So `src/app/main.zig` may not `@import("../lib/util/root.zig")` when it *is*
-the module root — the compiler rejects it as `import of file outside module path`.
+A Zig module root may only import files **inside the module's path**, and the app is built as
+a module. Three probes, not reasoning:
 
-Measured, both ways:
+| Arrangement | Result |
+|---|---|
+| `framework/root.zig` importing `../cfg/root.zig` | **rejected** — `import of file outside module path` |
+| the same importing `@import("cfg")`, declared with `-M` | works |
+| `src/app/main.zig` importing `../lib/...` | **rejected** |
 
-* module root `src/app/main.zig` → `@import("../lib/thing/root.zig")` → **rejected**
-* module root `src/app/root.zig` → `@import("../lib/thing/root.zig")` → **accepted**
+Two consequences decide the layout, and both were chosen by the owner rather than inferred:
 
-The app's module root is therefore `src/app/root.zig`, which sits above `lib/` and may
-reach into it by relative path. `src/app/main.zig` stays the executable's entry point (it is
-compiled as part of the same module) and holds only `pub fn main`, per the `main.zig` rule.
+1. **Library modules import each other by name** (`@import("cfg")`, `@import("render")`),
+   through the import tables in `build.zig`. This is the only mechanism Zig offers across a
+   module boundary, it is what the code already did, and it is what keeps each module
+   independently testable (REQ-LAYOUT-003). "The app imports its own lib files directly"
+   therefore applies to `src/app/lib/ops`, which is app-private and has no boundary of its
+   own (REQ-LAYOUT-007).
+2. **The app module's root is `src/root.zig`**, not `src/app/main.zig`. Only a root above both
+   `app/` and `lib/` can reach the library at all. `pub fn main` consequently lives in the
+   root file and delegates to `src/app/main.zig`, which holds the boot sequence.
+
+A third finding, recorded because it is a silent failure rather than an error: a bare
+`zig test` on a file whose root names an undeclared module reports **`All 0 tests passed`**.
+An under-collected suite looks like a small suite.
+
+## Import spelling
+
+Library-to-library and app-to-library imports are **by module name**; everything else is a
+relative path, because it stays inside one module.
+
+```zig
+// in src/lib/interact/prompt.zig - another module, so by name
+const render = @import("render");
+const tea = render.tea;
+
+// in src/app/cmd/config/root.zig - app-private, so by relative path
+const ops = @import("../../lib/ops/root.zig");
+
+// in src/root.zig - the app's own command tree, relative
+const app = @import("app/main.zig");
+```
+
+`@import("cli")` and `@import("app_cfg")` no longer exist. `@import("cfg")`,
+`@import("util")`, `@import("render")`, `@import("platform")`, `@import("secrets")`,
+`@import("interact")` and `@import("framework")` are the module names, and `build.zig` is
+where the graph that makes them resolvable is declared.
 
 ## Requirements
 
@@ -136,19 +170,20 @@ independently testable, not because the app needs a name for them.
 ## Invariants
 
 * The dependency graph is acyclic. `util` depends on nothing in the tree; `cfg` depends on
-  `util`; `secrets` on `cfg`; `render` and `platform` on nothing but `std` and `util`;
-  `interact` on `render` and `platform`; `framework` on all of them; `app` on all of them.
-  This is the inversion of today's `lib/cli` blob, which is why the split is worth the
-  churn.
-* No file imports another module's internals: a cross-module import names
-  `<module>/root.zig`, never a file inside another module.
-* `src/app/main.zig` contains `pub fn main` and nothing else.
+  `util`; `render` and `platform` on `util` (`platform` also on `render`, for escape-sequence
+  capability detection); `secrets` on `cfg` and `util`; `interact` on `render`, `platform`
+  and `util`; `framework` on all of them; `app` on all of them. This is the inversion of
+  today's `lib/cli` blob, which is why the split is worth the churn.
+* No file imports another module's internals: a cross-module import names the module
+  (`@import("render")`), never a file inside it.
+* `src/root.zig` holds the only `pub fn main`; `src/app/main.zig` holds the boot sequence it
+  calls, and no second entry point exists.
 
 ## Non-goals
 
-* **Not a rewrite.** Every behaviour, error message and test assertion moves unchanged. If a
-  move changes a behaviour, the move was wrong.
-* **Not a re-split of `lib/cfg`.** It becomes `src/lib/cfg` as-is; its internal shape is
+* **Not a rewrite.** Every behaviour, error message and test assertion moved unchanged. Where
+  a move changed a count, the count is recorded rather than smoothed over.
+* **Not a re-split of `lib/cfg`.** It became `src/lib/cfg` as-is; its internal shape was
   already organized.
 * **No new module boundaries inside a module.** Splitting `framework`'s 11k-line `cli.zig`
   is `ROADMAP.md` S-1/S-3 and stays open; this spec only decides where the file lives.

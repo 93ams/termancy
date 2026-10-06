@@ -11,7 +11,10 @@ const std = @import("std");
 
 /// The folder's own re-exports.
 pub const lib = @import("lib.zig");
-pub usingnamespace lib;
+pub const security = lib.security;
+pub const secret_val = lib.secret_val;
+pub const secure_heap = lib.secure_heap;
+pub const encrypted_config = lib.encrypted_config;
 
 test {
     // Shallow by design: a `test` block is collected only when a declaration in the

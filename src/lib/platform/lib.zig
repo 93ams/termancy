@@ -57,7 +57,7 @@ pub const log = @import("log.zig");
 pub const detach = @import("detach.zig");
 /// `.env` and systemd unit export. Now owned by `lib/util`; re-exported here under
 /// its historical name so `cli.systemd_exporter` keeps resolving.
-pub const systemd_exporter = @import("..\util\root.zig").systemd_exporter;
+pub const systemd_exporter = @import("util").systemd_exporter;
 /// Telemetry opt-out (`DO_NOT_TRACK`, `CI`). Free functions, not a type.
 pub const telemetry = @import("telemetry.zig");
 /// The framework's `traceparent` header type. The codec is `lib/util/trace.zig`.

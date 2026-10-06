@@ -1,6 +1,6 @@
 const std = @import("std");
 const App = @import("root.zig").App;
-const prompt = @import("cli").prompt;
+const prompt = @import("framework").prompt;
 
 /// `snek add`'s flags.
 pub const AddFlags = struct {

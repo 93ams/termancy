@@ -19,9 +19,9 @@
 //! is known.
 
 const std = @import("std");
-const cli = @import("cli");
+const cli = @import("framework");
 const cfg = @import("cfg");
-const ops = @import("../lib/ops/root.zig");
+const ops = @import("../../lib/ops/root.zig");
 
 /// `config export`'s flags and body.
 pub const exporter = @import("exporter.zig");

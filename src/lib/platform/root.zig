@@ -11,7 +11,32 @@ const std = @import("std");
 
 /// The folder's own re-exports.
 pub const lib = @import("lib.zig");
-pub usingnamespace lib;
+pub const daemon = lib.daemon;
+pub const dist_specs = lib.dist_specs;
+pub const dynlib_reloader = lib.dynlib_reloader;
+pub const fido2 = lib.fido2;
+pub const headless = lib.headless;
+pub const oauth = lib.oauth;
+pub const openapi = lib.openapi;
+pub const panic = lib.panic;
+pub const crash = lib.crash;
+pub const proctitle = lib.proctitle;
+pub const sandbox = lib.sandbox;
+pub const sys = lib.sys;
+pub const xdg = lib.xdg;
+pub const self_exe = lib.self_exe;
+pub const state = lib.state;
+pub const process = lib.process;
+pub const signal = lib.signal;
+pub const log = lib.log;
+pub const detach = lib.detach;
+pub const systemd_exporter = lib.systemd_exporter;
+pub const telemetry = lib.telemetry;
+pub const trace_parent = lib.trace_parent;
+pub const profiler = lib.profiler;
+pub const updater = lib.updater;
+pub const update = lib.update;
+pub const wasm_bridge = lib.wasm_bridge;
 
 test {
     // Shallow by design: a `test` block is collected only when a declaration in the

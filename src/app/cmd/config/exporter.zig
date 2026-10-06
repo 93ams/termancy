@@ -12,7 +12,7 @@
 
 const std = @import("std");
 const cfg = @import("cfg");
-const ops = @import("../lib/ops/root.zig");
+const ops = @import("../../lib/ops/root.zig");
 
 /// Flags for `config export`.
 pub const ExportFlags = struct {

@@ -6,7 +6,7 @@
 //! not as a runtime registration. So a program opts in with one line in `main.zig`:
 //!
 //! ```zig
-//! pub const panic = @import("..\framework\root.zig").crash.Panic(.{
+//! pub const panic = @import("framework").crash.Panic(.{
 //!     .app_name = "cfg",
 //!     .issues_url = "https://github.com/93ams/snek/issues/new",
 //! });
@@ -34,7 +34,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const capability = @import("../render/capability.zig");
+const capability = @import("render").capability;
 
 /// What the reporter needs to know. Comptime, so it costs nothing and cannot be
 /// half-configured at the moment it matters.

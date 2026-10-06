@@ -51,120 +51,135 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const target = targets.resolveTarget(b, optimize);
 
-    // -- Shared libraries --
+    // -- Library modules --
     //
-    // Declared in dependency order: `cfg` and `util` first because `cli` imports
-    // them.
+    // One module per independently usable concern, declared in dependency order so each
+    // module's import table can name the ones below it. The layering is `SPEC.md`
+    // REQ-LAYOUT-008 and it points one way: nothing in `src/lib` imports `framework`, and
+    // only `framework` imports everything.
+    //
+    // A module root may not import outside its own directory, which is why these are
+    // modules rather than relative paths - see the probe recorded in `SPEC.md`.
     const util_mod = b.addModule("util", .{
-        .root_source_file = b.path("lib/util/root.zig"),
+        .root_source_file = b.path("src/lib/util/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     const cfg_mod = b.addModule("cfg", .{
-        .root_source_file = b.path("lib/cfg/root.zig"),
+        .root_source_file = b.path("src/lib/cfg/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "util", .module = util_mod },
+        },
+    });
+    const render_mod = b.addModule("render", .{
+        .root_source_file = b.path("src/lib/render/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "util", .module = util_mod },
+        },
+    });
+    const platform_mod = b.addModule("platform", .{
+        .root_source_file = b.path("src/lib/platform/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "util", .module = util_mod },
+        },
+    });
+    const secrets_mod = b.addModule("secrets", .{
+        .root_source_file = b.path("src/lib/secrets/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "cfg", .module = cfg_mod },
+            .{ .name = "util", .module = util_mod },
+        },
+    });
+    // `interact` is the module that reads stdin, so it needs the renderer to draw and the
+    // platform layer for terminal state. `render` is here as well as on the two above
+    // because a file inside this module resolves `@import("x")` against *this* table, and a
+    // table that is a subset of what a deeper file needs fails against the deep file.
+    const interact_mod = b.addModule("interact", .{
+        .root_source_file = b.path("src/lib/interact/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "platform", .module = platform_mod },
+            .{ .name = "util", .module = util_mod },
+        },
     });
 
-    // The framework's public surface is `root.zig`, not `cli.zig`; `root.zig` is
-    // the only module root that reaches `test/cli_test.zig`, and it carries a
+    // The framework's public surface is `root.zig`, not `cli.zig`; `root.zig` carries a
     // comptime guard asserting it re-exports every `pub` decl of `cli.zig`.
-    const cli_mod = b.addModule("cli", .{
-        .root_source_file = b.path("lib/cli/root.zig"),
+    const framework_mod = b.addModule("framework", .{
+        .root_source_file = b.path("src/lib/framework/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "cfg", .module = cfg_mod },
             .{ .name = "util", .module = util_mod },
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "platform", .module = platform_mod },
+            .{ .name = "secrets", .module = secrets_mod },
+            .{ .name = "interact", .module = interact_mod },
         },
     });
 
-    // -- App command groups --
+    // -- The application module --
     //
-    // `app_cfg` imports `cli`: the command group is `Commands(App, Config)`-shaped
-    // and its wrappers are `cli.App.Command`s. `util` and `cfg` are named on the
-    // import table as well as on `cli` because a file inside a module resolves
-    // `@import("x")` against the *importing* module's table, and a table that is a
-    // subset of what a deeper file needs fails against the deep file rather than
-    // at its declaration. That covers `app/cfg/lib/ops/*.zig` too: they are files
-    // of this module, reached by relative import, and they import `cfg` and `util`
-    // by name.
-    const app_cfg_mod = b.addModule("app_cfg", .{
-        .root_source_file = b.path("app/cfg/root.zig"),
+    // The root is `src/root.zig` rather than `src/app/main.zig` because a module root may
+    // only reach inside its own directory, and the app needs both `app/` and `lib/`. That
+    // also means `pub fn main` lives in the root file and delegates to `app/main.zig`.
+    //
+    // The folder's own files (`cmd/`, `lib/ops/`) are reached by relative import, which is
+    // what "the app imports its own lib files directly" means: they are files of this
+    // module, not a module boundary of their own.
+    const app_mod = b.addModule("app", .{
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "cli", .module = cli_mod },
+            .{ .name = "framework", .module = framework_mod },
             .{ .name = "cfg", .module = cfg_mod },
             .{ .name = "util", .module = util_mod },
-        },
-    });
-    const app_cli_mod = b.addModule("app_cli", .{
-        .root_source_file = b.path("app/cli/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "cli", .module = cli_mod },
-            .{ .name = "app_cfg", .module = app_cfg_mod },
-            .{ .name = "util", .module = util_mod },
-            .{ .name = "cfg", .module = cfg_mod },
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "platform", .module = platform_mod },
+            .{ .name = "secrets", .module = secrets_mod },
+            .{ .name = "interact", .module = interact_mod },
         },
     });
 
-    // -- Binaries --
-    //
-    // `cfg` names its whole graph because the executable's module compiles
-    // `app/cfg/cmd/*.zig` directly when it names their declarations, so it needs
-    // the same table rather than a subset.
-    const cfg_exe = b.addExecutable(.{
-        .name = "cfg",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("app/cfg/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "cli", .module = cli_mod },
-                .{ .name = "app_cfg", .module = app_cfg_mod },
-                .{ .name = "cfg", .module = cfg_mod },
-                .{ .name = "util", .module = util_mod },
-            },
-        }),
+    // The cross-module behavioural suite. It exercises six modules, so it cannot live
+    // inside any one of them; `ROADMAP.md` RISK-LAYOUT-2 records why.
+    const integration_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/test/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "framework", .module = framework_mod },
+            .{ .name = "cfg", .module = cfg_mod },
+            .{ .name = "util", .module = util_mod },
+            .{ .name = "render", .module = render_mod },
+            .{ .name = "platform", .module = platform_mod },
+            .{ .name = "secrets", .module = secrets_mod },
+            .{ .name = "interact", .module = interact_mod },
+        },
     });
-    const cli_exe = b.addExecutable(.{
+
+    // -- The binary --
+    //
+    // One executable (SPEC.md REQ-LAYOUT-004). Its module is the app's, so the entry point
+    // is `src/root.zig`'s `pub fn main`.
+    const snek_exe = b.addExecutable(.{
         .name = "snek",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("app/cli/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "cli", .module = cli_mod },
-                .{ .name = "app_cfg", .module = app_cfg_mod },
-            },
-        }),
+        .root_module = app_mod,
     });
-
-    const install_cfg = b.addInstallArtifact(cfg_exe, .{});
-    const install_cli = b.addInstallArtifact(cli_exe, .{});
-    b.getInstallStep().dependOn(&install_cfg.step);
-    b.getInstallStep().dependOn(&install_cli.step);
-
-    // -- Tests --
-    //
-    // Building a binary never collects its `test` blocks: a `test` block is
-    // collected only from the module compiled *as a test*. `app/cfg`'s entry point
-    // is therefore declared a second time here, with the executable's import
-    // table, purely so its tests run.
-    const cfg_bin_test_mod = b.createModule(.{
-        .root_source_file = b.path("app/cfg/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "cli", .module = cli_mod },
-            .{ .name = "app_cfg", .module = app_cfg_mod },
-            .{ .name = "cfg", .module = cfg_mod },
-            .{ .name = "util", .module = util_mod },
-        },
-    });
+    b.installArtifact(snek_exe);
 
     const test_step = b.step("test", "Run all snek unit tests");
     // `build/targets.zig` opens each artifact through the `--listen=-` test runner,
@@ -175,10 +190,13 @@ pub fn build(b: *std.Build) void {
     targets.addTestRoots(b, test_step, test_direct_step, &.{
         .{ .name = "test-lib-util", .module = util_mod, .target = target, .optimize = optimize },
         .{ .name = "test-lib-cfg", .module = cfg_mod, .target = target, .optimize = optimize },
-        .{ .name = "test-lib-cli", .module = cli_mod, .target = target, .optimize = optimize },
-        .{ .name = "test-app-cfg", .module = app_cfg_mod, .target = target, .optimize = optimize },
-        .{ .name = "test-app-cfg-bin", .module = cfg_bin_test_mod, .target = target, .optimize = optimize },
-        .{ .name = "test-app-cli", .module = app_cli_mod, .target = target, .optimize = optimize },
+        .{ .name = "test-lib-render", .module = render_mod, .target = target, .optimize = optimize },
+        .{ .name = "test-lib-platform", .module = platform_mod, .target = target, .optimize = optimize },
+        .{ .name = "test-lib-secrets", .module = secrets_mod, .target = target, .optimize = optimize },
+        .{ .name = "test-lib-interact", .module = interact_mod, .target = target, .optimize = optimize },
+        .{ .name = "test-lib-framework", .module = framework_mod, .target = target, .optimize = optimize },
+        .{ .name = "test-app", .module = app_mod, .target = target, .optimize = optimize },
+        .{ .name = "test-integration", .module = integration_test_mod, .target = target, .optimize = optimize },
     });
 
     // -- Linux compile gate --
@@ -202,9 +220,13 @@ pub fn build(b: *std.Build) void {
     const linux_roots = [_]struct { name: []const u8, module: *std.Build.Module }{
         .{ .name = "linux-util", .module = util_mod },
         .{ .name = "linux-cfg", .module = cfg_mod },
-        .{ .name = "linux-cli", .module = cli_mod },
-        .{ .name = "linux-app-cfg", .module = app_cfg_mod },
-        .{ .name = "linux-app-cli", .module = app_cli_mod },
+        .{ .name = "linux-render", .module = render_mod },
+        .{ .name = "linux-platform", .module = platform_mod },
+        .{ .name = "linux-secrets", .module = secrets_mod },
+        .{ .name = "linux-interact", .module = interact_mod },
+        .{ .name = "linux-framework", .module = framework_mod },
+        .{ .name = "linux-app", .module = app_mod },
+        .{ .name = "linux-integration", .module = integration_test_mod },
     };
     for (linux_roots) |root| {
         const module = targets.testableModule(b, root.module, linux_target, optimize);

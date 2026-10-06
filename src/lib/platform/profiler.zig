@@ -5,7 +5,7 @@
 //! in `.agents/AGENTS.md`.
 
 const std = @import("std");
-const getMonotonicMs = @import("..\util\root.zig").trace.getMonotonicMs;
+const getMonotonicMs = @import("util").trace.getMonotonicMs;
 
 const Self = @This();
 

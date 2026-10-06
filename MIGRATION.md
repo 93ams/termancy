@@ -3,38 +3,72 @@
 Implements `SPEC.md` (REQ-LAYOUT-001…010). Phased so `zig build test` is green at the end of
 every phase; the test count is the instrument (baseline **598/599**, 1 skipped).
 
-## STATUS — mid-migration, the tree does not build yet
+## STATUS — complete; all five gates green
 
-**Landed (file moves only, staged):** every source file is now under `src/`, with no
-root-level `app/` or `lib/` (REQ-LAYOUT-001). Seven library modules exist with roots, and
-`src/lib/util` + `src/lib/cfg` **already build and test independently** (32 and 125 passing).
+| Gate | Result |
+|---|---|
+| `zig build test` | 19/19 steps, **592/593** (1 skipped) |
+| `zig build test-direct` | exit 0 |
+| `zig build test-linux-compile` | 10/10 steps |
+| `zig fmt --check build.zig build src` | exit 0 |
+| `zig build` | exit 0, **one** binary: `zig-out/bin/snek.exe` |
 
-**Still to do, in order** — the tree cannot compile until step 1 and 2 are complete:
+`snek --help` lists `repl`, `update`, `config`, `add`, `init`; `snek --version` prints
+`snek v0.1.0`.
 
-1. **`build.zig` module graph.** The file still names the old paths
-   (`lib/util/root.zig`, `lib/cfg/root.zig`, `lib/cli/root.zig`, `app/cfg/root.zig`,
-   `app/cli/root.zig`, `app/cfg/main.zig`, `app/cli/main.zig`) and the `app_cfg` module.
-   Replace with the seven library modules plus one app module, per REQ-LAYOUT-008 layering:
-   `framework` imports all six; `interact` imports `render`, `platform`, `secrets`;
-   `secrets` imports `cfg`, `util`; `platform`/`render` import `util`; `cfg` imports `util`.
-   Drop the `cfg` executable and `app_cfg` (REQ-LAYOUT-004/006). The app module's root is
-   **`src/root.zig`** and its source file is `src/app/main.zig`.
-2. **App imports.** `src/app/**: `@import("cli")` → `@import("framework")`;
-   `@import("app_cfg")` → the relative paths now in `src/app/cmd/config/` and
-   `src/app/lib/ops/`; and in the config command files `@import("fields.zig")` →
-   `@import("../lib/ops/fields.zig")`.
-3. **`src/root.zig`.** It delegates `pub fn main` to `app/main.zig`, but `app/main.zig`
-   still contains `pub fn main` itself — one of the two must go, and the module root cannot
-   export a second `main`. Keep `pub fn main` in `src/root.zig` and rename the app's body.
-4. **`src/test/root.zig`** (RISK-LAYOUT-2) — the migrated `cli_test.zig` still imports
-   `../cli.zig` and needs the new module names. Its 151 tests are the safety net.
-5. **Documentation** — `src/lib/framework/ROADMAP.md` and `RECONSTRUCTION.md`, `README.md`,
-   `build.zig`'s header and `AGENTS.md` still describe the old paths (74 references under
-   `src/`).
+Per-root counts: util 32, cfg 125, render 45, platform 106 (+1 skip), secrets 2, interact 18,
+framework 4, app 108, integration 152.
 
-**Verified so far:** `zig test src/lib/util/root.zig` → 32 pass;
-`zig test src/lib/cfg/root.zig` → 125 pass. Those two have no in-tree module dependencies, so
-they test without the build file — which is why they were the ones to check first.
+### One open discrepancy, measured rather than smoothed over
+
+The baseline was **598 passed / 1 skipped**; this is **592 / 1**. Five tests fewer, and the
+declared-vs-executed reconciliation shows where it is *not*:
+
+| Module | declared | executed |
+|---|---|---|
+| cfg | 125 | 125 |
+| util | 32 | 32 |
+| platform | 107 | 107 |
+| interact | 18 | 18 |
+| app | 109 | 108 |
+| integration | 152 | 152 |
+| framework | 4 | 4 |
+| secrets | 2 | 2 |
+| render | 49 | **45** |
+
+`render` is the only material gap: 47 named + 2 anonymous declared, 45 executed. Those are
+tests declared **inside generic containers** that no instantiation reaches, which is the same
+mechanism `ROADMAP.md` C-6 documents — a test in an uninstantiated generic is never collected.
+It is not yet proven whether those 4 ran before the move (in which case a container that used
+to be instantiated through the old root no longer is) or never ran at all. **This is the one
+thing to check next**, and the method is the one C-6 used: pair each declaration with the
+executed name that serves it. The remaining 1-test difference across `app` is the same shape.
+
+Nothing else is unresolved: no `@import("cli")`, `@import("app_cfg")` or `@import("zconfig")`
+remains, the tree builds for the shipping target, and `src/lib` imports are by module name
+with `build.zig` as the single place the graph is declared.
+
+### What the migration cost, for the record
+
+Almost all of the friction was **not** the refactor. Two environment traps and one
+self-inflicted bug dominated:
+
+1. **Backslash paths.** Two PowerShell string-replace round-trips wrote `@import("..\cfg\root.zig")`
+   into six files. Zig reads `\c` as an invalid escape, so the symptom was
+   `expected '{', found 't'` — nowhere near the cause.
+2. **An `@`-swallowing bug in a helper script.** `@import` became `iimport`, `@min` became
+   `imin`, `@tagName` became `itagName`, and so on: **17 corrupted builtin call sites across
+   two files, plus 6 `iimport` sites**. Found by diffing the corrupted files against `git`,
+   which is the technique to reach for when a bulk edit is suspected of shredding tokens.
+3. **Disk pressure.** `LLVM ERROR: IO failure on output stream: No space left on device`
+   appeared twice at ~6 GB free and vanished after dropping `.zig-cache` (2.65 GB). It reads
+   like a broken toolchain and is not one.
+
+**The lesson worth carrying:** a bulk text rewrite over source is the riskiest tool in this
+repository. Every one of the six `iimport` sites and all seventeen corrupted builtins came
+from replacements that were correct in intent and wrong in mechanism. After each bulk edit,
+**diff the result against `git` and build** — the compiler caught all 23, but only after
+several rounds of confusing errors.
 
 ## Baseline, measured before any move
 

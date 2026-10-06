@@ -1,6 +1,6 @@
 const std = @import("std");
-const tea = @import("../render/tea.zig");
-const style = @import("../render/style.zig");
+const tea = @import("render").tea;
+const style = @import("render").style;
 
 // --- CONFIRM PROMPT ---
 pub const ConfirmOptions = struct {

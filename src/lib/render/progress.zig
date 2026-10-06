@@ -6,7 +6,7 @@ const capability = @import("capability.zig");
 /// `tryLock` left out - two implementations of one primitive is a correctness
 /// risk, not a tidy-up (`AGENT.md` 4.2, `ROADMAP.md` R-2). `cli` already imports
 /// the `util` module, so the copy was pure loss.
-const SpinLock = @import("..\util\root.zig").spin_lock;
+const SpinLock = @import("util").spin_lock;
 
 pub const Bar = struct {
     label: []const u8,

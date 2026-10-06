@@ -11,7 +11,13 @@ const std = @import("std");
 
 /// The folder's own re-exports.
 pub const lib = @import("lib.zig");
-pub usingnamespace lib;
+pub const prompt = lib.prompt;
+pub const text_input = lib.text_input;
+pub const raw_terminal = lib.raw_terminal;
+pub const rope = lib.rope;
+pub const supervisor = lib.supervisor;
+pub const tty_stream = lib.tty_stream;
+pub const widgets = lib.widgets;
 
 test {
     // Shallow by design: a `test` block is collected only when a declaration in the

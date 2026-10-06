@@ -37,7 +37,7 @@ pub fn writeCrashReport(
     msg: []const u8,
     config: PanicConfig,
 ) !void {
-    const trace = @import("..\util\root.zig").trace;
+    const trace = @import("util").trace;
     const timestamp = trace.getMonotonicMs();
     var path_buf: [256]u8 = undefined;
     const crash_path = try std.fmt.bufPrint(&path_buf, "{s}/crash-{d}.json", .{ config.cache_dir, timestamp });

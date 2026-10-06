@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const cli = @import("../cli.zig");
+const cli = @import("framework");
 
 const App = cli.App(usize, .{});
 
@@ -1451,7 +1451,7 @@ test "Config: JSON merge and ProfileManager" {
 
     var cfg = ServerConfig{};
     const json_data = "{\"port\": 9000, \"debug\": true}";
-    try cli.zconfig.mergeJson(&cfg, json_data, testing.allocator);
+    try cli.cfg.mergeJson(&cfg, json_data, testing.allocator);
 
     try testing.expectEqualStrings("127.0.0.1", cfg.host);
     try testing.expectEqual(@as(u16, 9000), cfg.port);
@@ -1461,14 +1461,14 @@ test "Config: JSON merge and ProfileManager" {
     var env_map = std.process.Environ.Map.init(testing.allocator);
     defer env_map.deinit();
 
-    const pm = cli.zconfig.ProfileManager.init(".mycli", null, &env_map);
+    const pm = cli.cfg.ProfileManager.init(".mycli", null, &env_map);
     try testing.expectEqualStrings("default", pm.active_profile);
 
     var path_buf: [128]u8 = undefined;
     const profile_path = try pm.getProfilePath(&path_buf);
     try testing.expectEqualStrings(".mycli/profiles/default.json", profile_path);
 
-    const pm_custom = cli.zconfig.ProfileManager.init(".mycli", "staging", &env_map);
+    const pm_custom = cli.cfg.ProfileManager.init(".mycli", "staging", &env_map);
     const custom_path = try pm_custom.getProfilePath(&path_buf);
     try testing.expectEqualStrings(".mycli/profiles/staging.json", custom_path);
 }

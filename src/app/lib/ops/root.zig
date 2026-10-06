@@ -18,7 +18,7 @@
 //!
 //! ## The rule for this folder
 //!
-//! **No `@import("cli")`.** If an operation needs the framework to work, it is
+//! **No `@import("framework")`.** If an operation needs the framework to work, it is
 //! either doing rendering that belongs in `cmd/`, or it is not an operation. That
 //! rule is what keeps the folder callable from the server binaries, and it is worth
 //! enforcing in review because the import is easy to add and hard to notice.
@@ -69,7 +69,7 @@ test "no file in this folder imports the CLI" {
     // layer's reason to exist is being usable *without* `lib/cli` - its own header says
     // so, and that is what lets a non-CLI consumer manage configuration. Before the merge
     // the build graph guaranteed it: the deleted `app_cfg_ops` module named only `cfg` and
-    // `util`, so `@import("cli")` did not resolve. `app_cfg` must name `cli` (its `cmd/`
+    // `util`, so `@import("framework")` did not resolve. `app_cfg` must name `cli` (its `cmd/`
     // wrappers are `cli.App.Commands`), so the compiler can no longer tell us; the source
     // can, and `@embedFile` reads it at compile time with no path or working-directory
     // assumption - which a runtime directory scan turned out to need.
@@ -91,7 +91,7 @@ test "no file in this folder imports the CLI" {
 
     for (sources) |source| {
         // Comment lines are skipped, and that is not a loophole: this very header states
-        // the rule as `**No `@import("cli")`.**`, so a scan that could not tell prose from
+        // the rule as `**No `@import("framework")`.**`, so a scan that could not tell prose from
         // code would fail on the documentation of its own invariant. A real violation is a
         // line of code, and every line of code is still checked.
         var lines = std.mem.splitScalar(u8, source.text, '\n');

@@ -1,5 +1,5 @@
 const std = @import("std");
-const style = @import("../render/style.zig");
+const style = @import("render").style;
 
 // --- 1. Unified Focus Manager ---
 pub const FocusManager = struct {
