@@ -941,7 +941,7 @@ Recording it because "it went away" is not a diagnosis, and because a suite that
 fails one run in three is worse than one that always fails.
 
 
-### N-2 · `const Self = @This();` at file scope — the file IS the type · **[lib/ COMPLETE: 30 files, 0 wrapped; app/ 25 done, 9 left]**
+### N-2 · `const Self = @This();` at file scope — the file IS the type · **[COMPLETE in this tree: 0 wrapped, 0 candidates]
 
 **The rule is in `.agents/AGENTS.md`.** A file whose subject is a single type does
 not wrap it in a named struct; the file's own scope is the struct, so the import
@@ -964,10 +964,35 @@ mechanical rewrite.
 | Scope | file-as-type | still wrapped |
 |---|---|---|
 | `lib/` | **30** | **0** - complete |
-| `app/` | 22 | 13 - `bus` (8), `scp` (3), `kvs` (1) |
+| `app/` in *this* tree (`cfg`, `cli`) | **0 candidates** | **0** - complete; see below |
+| `app/` in the monorepo (`bus`, `scp`, `kvs`) | n/a | 13 - the paths are absent here (§0.4) |
 
-**`lib/` is done: 30 files, 0 wrapped.** The last two were the aggregates, and
-they turned out **not** to need the split this section previously recommended.
+#### Complete, and re-verified after the header above went stale
+
+**`lib/` is done: 30 files, 0 wrapped.** The last two were the aggregates
+(`style.zig` with seven types, `slab.zig` with four), and they turned out **not** to need
+the split this section previously recommended — see "the multi-type problem" below.
+
+The header this section carried for a long time said `app/ 25 done, 9 left`, and the
+`app/` pass header says `5 converted, 7 left`. **Both counts are about `bus`, `scp`
+and `kvs`, and none of those three apps exists in this repository** — `app/` contains
+only `cfg/` and `cli/`, 24 Zig files in total. So the "9 left" was a backlog for a tree
+that is not this one, and it read as open work here. Re-measured:
+
+* Every `pub const <Name> = struct` under `app/` was enumerated (30 matches, 24 files)
+  and each is a **declaration inside a file whose subject is the command**, not the
+  file's own wrapper: `<Cmd>Flags` or `<Cmd>Args` next to a `run`, a `Fixture`, and
+  tests (`cast.zig` has `CastFlags` + `run` + `Fixture` + 9 tests), or a helper record
+  in a multi-type file (`ops/exporter.zig` declares `Variable`, `Options`, `Collector`).
+  N-2's rule does not reach any of them.
+* `lib/` needs no re-check: it was completed and is still 0 wrapped.
+
+**The generalisable point, and why this note exists:** §0.4 already says the `bus`
+/`scp`/`kvs` paths are absent, but a *per-item progress header* that counts those files
+contradicts it in the one place a reader looks first — the heading. When a document
+carries counts, the counts need the same applicability check as the prose. Nothing was
+converted here; the work was confirming there is none, and saying so where the stale
+number was.
 
 #### The multi-type problem, resolved: keep the helpers as declarations
 
@@ -1016,9 +1041,13 @@ with declarations where they previously did not:
 Both are recorded rather than worked around, because the next conversion will hit
 the same thing.
 
-#### `app/` pass · **[5 converted, 7 left, 1 blocked, 1 exception, 1 detector artifact]**
+#### `app/` pass · **[not applicable in this tree — the files it counts are in `bus`, `scp`, `kvs`, none of which exist here (§0.4)]**
 
-Converted: `bus/client/header_map.zig`, `bus/client/memory/sidmap.zig`,
+*The counts in this subsection are records of the monorepo, kept because the reasoning is
+generalisable — the `union(enum)` exception and the filename-keyed-detector flaw below are
+the two things a future conversion needs. They are **not** a backlog for this repository.*
+
+Converted there: `bus/client/header_map.zig`, `bus/client/memory/sidmap.zig`,
 `bus/client/respmux.zig`, `scp/storage/crawler.zig`.
 
 **`scp/net/transport.zig` is an EXCEPTION, not a shortfall.** It was converted,
