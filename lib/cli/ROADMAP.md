@@ -592,6 +592,60 @@ running", and it is why the probe has to target the *shipping* OS. Note also tha
 probe could *execute* a Linux binary, so `mmap.zig` will still need a review of its logic
 once it compiles — a cross-compile proves the branch is well-formed, not that it is correct.
 
+### B-6 · **[FIXED, verified — and it was 7 broken sites, not 3]** · with a gate that makes the class non-recurring
+
+The port landed, and the first thing it did was disprove the table above. `mmap.zig` was not
+the whole residue, and two of the sites below were found by the compile gate within a minute
+of that gate existing.
+
+| Site | Verdict |
+|---|---|
+| `mmap.zig` `open` | `std.posix.open` → `std.posix.openat(AT.FDCWD, …)` |
+| `mmap.zig` `fstat` | **gone**, no `posix` replacement → `statx` with `AT.EMPTY_PATH` |
+| `mmap.zig` `close` | **gone** → `std.os.linux.close` (returns an error *code*) |
+| `mmap.zig` `PROT.READ` | **not in the B-6 table at all** → `PROT` is a packed struct: `PROT{ .READ = true }` |
+| `telemetry.zig` `.block = .global` | **not in the table** → `Environ.Block` is `GlobalBlock` on Windows but `PosixBlock` elsewhere, so the field does not exist on Linux |
+| `trace.zig` `clock_gettime` | **the table said "may already be gone"; it was not** → `std.c.clock_gettime` |
+| `trace.zig` `.tv_sec`/`.tv_nsec` | **not in the table** → the Linux `timespec` names them `sec`/`nsec`, so the *replacement* line could not have compiled either |
+
+That is **7 broken sites where the audits named 3**, across three files. The
+count is the point: the audits read the source, and a file that branches on `builtin.os.tag`
+hides its other half from both a Windows test *and* a careful reader. The lesson this
+section already stated — an uninstantiated body is not a compiling body — had a corollary
+nobody had acted on: **an unread branch is not an audited branch either.**
+
+**The gate.** `build.zig` gained `zig build test-linux-compile`, which compiles every test
+root for `x86_64-linux-musl` (linking libc, as the release builds do) and stops: the step
+depends on the `Compile` steps, never on a `Run`, so it asserts "this compiles for the
+shipping OS" and needs no cross-toolchain to execute. It is deliberately **not** part of
+`test`, so a developer without the target is not blocked. It found the `telemetry.zig` and
+`trace.zig` sites on its first run.
+
+**Verified by running it, not only compiling it.** The Linux half was believed to be
+unrunnable here, and that was wrong: the repository has WSL available, and a static musl
+binary runs there. The suite was built for `x86_64-linux-musl` with `--test-no-exec` and
+executed under WSL Ubuntu → **318 passed, 1 skipped, 4 failed**, and the failure list is the
+proof:
+
+* `test.cli_test.test.OS Primitives: MmapFile zero-copy reading` — **OK**. This is the test
+  that calls `MmapFile.open`, so the `openat`/`statx`/`PROT`/`mmap`/`munmap`/`close` path is
+  now verified by execution on Linux, not merely by compilation. The old logic is therefore
+  not "well-formed but unvalidated" any more.
+* All **4** failures are the same known limitation: `process.zig` and `detach.zig` spawn the
+  string `"zig"` (the tests' own comment says `zig` is guaranteed present "because the build
+  running this test ships with it"), and WSL Ubuntu has no `zig` on `PATH`. Their error is
+  `FileNotFound`/`SpawnFailed` at the spawn, not an assertion. Every other test passes,
+  including the POSIX branches of `state.zig`, `xdg.zig`, `signal.zig` and `update.zig`.
+
+To reproduce: `zig test -target x86_64-linux-musl -lc --test-no-exec --dep cfg --dep util
+"-Mroot=lib/cli/root.zig" "-Mcfg=lib/cfg/root.zig" "-Mutil=lib/util/root.zig" -femit-bin=<out>`,
+then run `<out>` inside WSL. Note `-target` must precede the `-M` flags; placed after them it
+is silently ignored and the host target is built instead.
+
+**Still open in this item:** the cross-build of the *executables* (`zig build -Dtarget=…`) is
+green, but nothing runs `cfg`/`tigershark` on Linux, so a per-OS branch reachable only from
+`main.zig` would still be caught by the compile gate alone.
+
 
 ---
 

@@ -180,4 +180,42 @@ pub fn build(b: *std.Build) void {
         .{ .name = "test-app-cfg-bin", .module = cfg_bin_test_mod, .target = target, .optimize = optimize },
         .{ .name = "test-app-cli", .module = app_cli_mod, .target = target, .optimize = optimize },
     });
+
+    // -- Linux compile gate --
+    //
+    // `test` runs the artifacts for the *host* target, so a branch guarded by
+    // `builtin.os.tag` is analysed only for this OS. A file can therefore pass
+    // every local gate while its Linux half references APIs that no longer
+    // exist - which is exactly how `lib/util/mmap.zig` rotted: the Windows
+    // branch was analysed, the POSIX one never was, and nothing called
+    // `MmapFile.open` to change that.
+    //
+    // This step compiles each test root for the shipping target - Linux, which
+    // `build/targets.zig` resolves to static musl - and asserts each step
+    // **succeeded without being run**. Compiling is the assertion: the suite
+    // cannot execute here, and a compile of every root is enough to catch an
+    // API that has been removed. It is deliberately excluded from `test`, so a
+    // developer without a cross-toolchain is not blocked; run it before
+    // releasing, or whenever a per-OS branch changes.
+    const linux_step = b.step("test-linux-compile", "Compile every test root for x86_64-linux-musl without running it");
+    const linux_target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl });
+    const linux_roots = [_]struct { name: []const u8, module: *std.Build.Module }{
+        .{ .name = "linux-util", .module = util_mod },
+        .{ .name = "linux-cfg", .module = cfg_mod },
+        .{ .name = "linux-cli", .module = cli_mod },
+        .{ .name = "linux-app-cfg", .module = app_cfg_mod },
+        .{ .name = "linux-app-cli", .module = app_cli_mod },
+    };
+    for (linux_roots) |root| {
+        const module = targets.testableModule(b, root.module, linux_target, optimize);
+        // `link_libc` matches the shipped configuration: the release builds are
+        // static musl, and a module that reaches `std.c` (as one POSIX branch
+        // does) does not compile without saying so.
+        module.link_libc = true;
+        const compiled = b.addTest(.{ .name = root.name, .root_module = module });
+        // Depending on the compile step itself is the assertion: `addTest`
+        // builds a test binary and only `run` would execute it, so depending on
+        // `.step` compiles every root for Linux and stops there.
+        linux_step.dependOn(&compiled.step);
+    }
 }

@@ -49,6 +49,7 @@
 //! what keeps `std.time` out of a module that must be safe to link into anything.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 
 /// The environment variable that turns telemetry **on**.
@@ -522,11 +523,24 @@ test "a payload carries nothing the caller did not name" {
     // The environment iterated here is a clone of this process's own, plus a
     // marker, rather than a small synthetic one: a test against a map holding
     // only the marker would prove nothing about the values that actually matter.
+    //
+    // "This process's own" is spelled differently per OS, and getting it wrong is
+    // silent rather than loud - `Environ.Block` is `GlobalBlock` on Windows and
+    // `PosixBlock` everywhere else, so `.{ .block = .global }` is a field error on
+    // Linux and a *empty map* on Windows. Either way the redaction assertion below
+    // would have been testing nothing.
     const marker = "snek-telemetry-redaction-marker";
-    var process_env = try std.process.Environ.createMap(
-        .{ .block = .global },
-        testing.allocator,
-    );
+    const environ: std.process.Environ = if (builtin.os.tag == .windows)
+        .{ .block = .global }
+    else
+        // `createMap` reads this slice of the global environment on POSIX. The
+        // variable is a `[*:null]?[*:0]u8` - a many-pointer, from which a slice
+        // length cannot be inferred - so `mem.span` converts it using the
+        // sentinel it already carries, and the element becomes const.
+        .{ .block = .{
+            .slice = std.mem.span(@as([*:null]const ?[*:0]const u8, @ptrCast(std.c.environ))),
+        } };
+    var process_env = try std.process.Environ.createMap(environ, testing.allocator);
     defer process_env.deinit();
     try process_env.put("SNEK_TEST_SECRET", marker);
     // A value that occurs in environment values but in no JSON structural

@@ -72,10 +72,19 @@ pub const TraceContext = struct {
 
 /// A monotonic millisecond clock, for coarse duration measurement.
 ///
-/// Known defect, inherited from `app/cli/lib/platform/telemetry.zig` and recorded as
-/// `app/cli/lib/ROADMAP.md` B-6: the POSIX branch calls `std.posix.clock_gettime`,
-/// which Zig 0.16 does not expose. It is not instantiated on Windows, which is
-/// why the host build is green. Fix it with B-6, not here.
+/// The POSIX half used to call `std.posix.clock_gettime`, which Zig 0.16 does
+/// not expose - the same class of rot as the rest of ROADMAP B-6, and it was
+/// found the same way: not by reading the file, but by compiling it for Linux.
+/// It also read `.tv_sec`/`.tv_nsec`, which is the *POSIX* spelling: on Linux
+/// both `std.c.timespec` and `std.os.linux.timespec` name the fields `sec` and
+/// `nsec`, so that line could never have compiled. A comment claiming a defect
+/// is not a working branch, which is exactly why B-6 was open for so long.
+///
+/// `std.c` is used rather than `std.os.linux` deliberately: the repository
+/// targets Windows and Linux-with-libc, and `std.c` is the spelling that stays
+/// correct if a third libc platform is ever added. A clock that cannot be read
+/// yields 0 rather than an error - this is a coarse duration for telemetry, and
+/// a caller that cannot measure must still be able to record the event.
 pub fn getMonotonicMs() u64 {
     const builtin = @import("builtin");
     if (builtin.os.tag == .windows) {
@@ -84,9 +93,18 @@ pub fn getMonotonicMs() u64 {
         };
         return kernel32.GetTickCount64();
     } else {
-        var ts: std.posix.timespec = undefined;
-        std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts) catch return 0;
-        return @as(u64, @intCast(ts.tv_sec)) * 1000 + @as(u64, @intCast(@divTrunc(ts.tv_nsec, 1_000_000)));
+        // The target is Linux, where both spellings agree; assert it rather than
+        // leave a second latent branch behind.
+        comptime std.debug.assert(@hasField(std.c.timespec, "sec"));
+        comptime std.debug.assert(@hasField(std.c.timespec, "nsec"));
+
+        var ts: std.c.timespec = undefined;
+        if (std.posix.errno(std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts)) != .SUCCESS) return 0;
+        std.debug.assert(ts.sec >= 0);
+        std.debug.assert(ts.nsec >= 0);
+        const ms = @as(u64, @intCast(ts.sec)) * 1000 +
+            @as(u64, @intCast(@divTrunc(ts.nsec, 1_000_000)));
+        return ms;
     }
 }
 

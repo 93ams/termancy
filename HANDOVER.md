@@ -10,6 +10,7 @@ Last verified numbers (run them yourself before trusting anything here):
 |---|---|
 | `zig build test --summary all` | `13/13 steps succeeded; 587/588 tests passed (1 skipped)` |
 | `zig build test-direct --summary all` | `13/13 steps succeeded` |
+| `zig build test-linux-compile --summary all` | `6/6 steps succeeded` — compiles every root for the shipping OS |
 | `zig fmt --check build.zig build lib app` | exit 0, no output |
 | `zig build` | exit 0; `.\zig-out\bin\tigershark.exe --version` → `v0.1.0` |
 | `git status --porcelain` | empty |
@@ -119,23 +120,25 @@ B-2/B-3/B-4/B-5/B-6 carry their measured resolutions.
 1. ~~**Find the one dead test in `lib/`.**~~ **Resolved — see §0. There is no dead
    test; the 479-vs-478 gap was a body-less `refAllDecls` aggregator in
    `lib/cli/test/root.zig`, which is not a lost test.** Do not repeat the search.
-2. **`lib/util/mmap.zig`'s POSIX port** (the whole residue of B-6). Three dead APIs:
-   `std.posix.open` → `std.posix.openat(std.posix.AT.FDCWD, …)` (works),
-   `std.posix.close` → `std.posix.system.close(fd)` (works; its result is an error *code*,
-   so discard it), and `std.posix.fstat` — **gone, with no `posix` replacement**. Either
-   use the syscall layer directly (`linux.fstat`/`std.c.fstat` with a `Stat` out-parameter
-   and a manual error check) or move the file onto `Io` (which changes `MmapFile.open`'s
-   signature to take an `io`). An attempt was made and **reverted**: a file that still
-   cannot cross-compile is not an improvement.
+2. ~~**`lib/util/mmap.zig`'s POSIX port.**~~ **Done, and it was the tip of a larger
+   item — see ROADMAP B-6. The audits named 3 dead sites; compiling for Linux found
+   **7**, across `mmap.zig`, `platform/telemetry.zig` and `util/trace.zig`.
+   `zig build test-linux-compile` now gates this class, and the Linux suite was
+   **executed under WSL**, where the `MmapFile` test passes.**
 3. **B-4's deliberate leak.** One reader context plus one channel per prompt is allocated
    from `page_allocator` and never freed, because 0.16 cannot cancel a blocked stdin read
    (the full analysis is in the B-4 entry). If a pollable-stdin mechanism ever appears, the
    leak can go.
-4. **S-1–S-7** (`cli.zig` is the module root *and* an 11k-line implementation; its
+4. **Run the Linux suite properly.** `test-linux-compile` proves the code *compiles* for
+   the shipping OS; it does not execute it. WSL can, and doing so found no POSIX defect —
+   but four tests are unrunnable there because they spawn the bare string `"zig"`
+   (`process.zig`, `detach.zig`) and WSL has no `zig` on `PATH`. Putting a Linux `zig` on
+   that `PATH` would turn those four green and make the second platform fully verified.
+5. **S-1–S-7** (`cli.zig` is the module root *and* an 11k-line implementation; its
    indentation hides scope; `parseFlags` is ~430 lines). Large, structural, review-heavy.
-5. **N-2** — nine `app/` files still wrap a single type instead of `const Self = @This();`.
+6. **N-2** — nine `app/` files still wrap a single type instead of `const Self = @This();`.
    Mechanical, wide.
-6. **M-1–M-5**, **U-0 tier 3**, **U-1**, **U-2**'s remaining half.
+7. **M-1–M-5**, **U-0 tier 3**, **U-1**, **U-2**'s remaining half.
 
 ## 4. How to verify anything here (the exact commands)
 
@@ -146,8 +149,26 @@ zig test --dep cfg --dep util "-Mroot=lib/cli/root.zig" "-Mcfg=lib/cfg/root.zig"
 zig test --dep cfg --dep util "-Mroot=lib/cli/root.zig" --dep cfg --dep util "-Mcli=lib/cli/root.zig" "-Mcfg=lib/cfg/root.zig" "-Mutil=lib/util/root.zig"   # app-level
 zig test lib/util/btree_store.zig            # a single module with no deps
 zig test --test-filter "part of the name" …  # note: filter matches the full test name
+zig build test-linux-compile                 # compile every root for the shipping OS
 zig build -Dtarget=x86_64-linux-musl --cache-dir "$env:TEMP\lx" --prefix "$env:TEMP\lx-out"
 ```
+
+**`-target` must come before the `-M` flags.** Placed after them it is silently ignored,
+the host target is built, and the tests *run on Windows* — which looks like success and is
+the opposite of the check you meant to perform.
+
+**You can execute the Linux build here.** WSL Ubuntu is installed, so a static musl binary
+runs:
+
+```
+zig test -target x86_64-linux-musl -lc --test-no-exec --dep cfg --dep util `
+  "-Mroot=lib/cli/root.zig" "-Mcfg=lib/cfg/root.zig" "-Mutil=lib/util/root.zig" -femit-bin=x
+wsl -d Ubuntu -- bash -lc "cp /mnt/c/<path>/x /tmp/x && chmod +x /tmp/x && cd /tmp && /tmp/x"
+```
+
+Expect **318 passed, 1 skipped, 4 failed**, where all four failures are the missing `zig`
+on WSL's `PATH`. `--test-filter` is not a runtime flag in 0.16; the runner takes no filter
+argument, so filter by reading the output.
 
 Use `--prefix` for cross-builds: without it the Linux binaries overwrite `zig-out/bin`, and
 then you must re-run a plain `zig build` before the Windows binaries work again.
@@ -189,6 +210,18 @@ then you must re-run a plain `zig build` before the Windows binaries work again.
   scope-blind comparison then "found" 259 unexecuted declarations that were simply in
   other modules. Two wrong analyses, both confident, both from *how the data was
   captured* rather than what it said. Check the capture before trusting the conclusion.
+* **A green native test says nothing about the other OS's branch — and neither does
+  reading the file.** `zig build test` analyses only the branch `builtin.os.tag` selects.
+  B-6 was audited by reading and reported **3** dead sites; compiling for Linux found
+  **7**, including `PROT.READ` (a packed struct in 0.16) and a `.block = .global` field
+  that does not exist off Windows. Every one of them was in code that had shipped for
+  months behind a green build. `zig build test-linux-compile` exists so this cannot recur,
+  and it is cheap: it compiles every root for the shipping target and never runs them.
+* **"We cannot execute a Linux binary here" was false, and it had been repeated in
+  three documents.** WSL Ubuntu was already installed. Static musl binaries run under it
+  unchanged, which upgraded the mmap fix from "compiles" to "passes". Before writing a
+  limitation into a document, test the limitation — the cost of being wrong is a class of
+  verification nobody attempts.
 
 ## 6. Zig 0.16 spellings this session had to discover
 
