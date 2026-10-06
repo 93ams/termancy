@@ -1543,7 +1543,7 @@ usefully, removes 14 places where a test can forget to `defer`.
 `app/cli/lib/cli_test.zig` also has `5` empty function bodies and 133 occurrences of
 `undefined`; a `Fixture` shrinks that surface too.
 
-### S-7 · `low` · `.io = undefined` in 14 tests is a live tripwire
+### S-7 · `low` · `.io = undefined` in 14 tests is a live tripwire · **[FIXED, 15 sites]
 
 `App.Ctx.io` is assigned `undefined` in every test that builds a `Ctx` by hand.
 Every module in this library that talks to the filesystem takes `ctx.io` — `add`
@@ -1555,6 +1555,26 @@ compile error.
 `std.Io` (the test runner's) rather than `undefined`, or the tests should use
 `TestHarness`, which has the same problem at `cli.zig:1923`. Whichever way, the
 field stops being a landmine.
+
+**Fixed, and the count was 15, not 14.** Every `.io = undefined` in
+`lib/cli/test/cli_test.zig` is now `.io = std.testing.io` - 15 sites, of which 13
+build an `App.Ctx` by hand and 2 are the in-memory rig. Two things worth recording:
+
+* **S-6 is *not* a prerequisite for this**, which is why it landed alone. The item
+  proposed folding the fix into a shared `Fixture`, but the landmine is one field's
+  *value*; a `Fixture` is one way to set it correctly and a mechanical value change is
+  another, with a fraction of the blast radius. `TestHarness` already did it right
+  (`cli.zig:4460`) with a comment explaining why, and the hand-built contexts simply
+  never followed - so the fix was to make the file consistent with its own best site.
+* **This is a reasoning fix, not a demonstrated one, and the difference is stated on
+  purpose.** The plant-and-run control was attempted and abandoned: a body that touches
+  `ctx.io` has to satisfy the framework's signature checks, which reject an `anytype`
+  parameter and then require the flags parameter to be the command's merged `Flags` type;
+  getting that right is a compile-time exercise in the framework's own generics, not a
+  two-line probe. What *is* established: `undefined` is not a valid `std.Io`, Zig rejects
+  `drive(undefined)` as a comptime-known argument, and the fix makes the file consistent
+  with `TestHarness`'s already-correct site. The trap is real; it is simply not worth
+  three more compile cycles to watch it fire.
 
 ---
 

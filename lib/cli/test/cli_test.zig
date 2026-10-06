@@ -88,6 +88,14 @@ fn rootRun(ctx: App.Ctx, flags: RootFlags) !void {
 }
 
 // --- Test Helper ---
+//
+// `io` is `std.testing.io` here and at every other hand-built `App.Ctx` in this file, not
+// `undefined` (S-7). `undefined` is not a compile error for a `std.Io` - it is a trap door:
+// every platform helper in the library takes `ctx.io` (`state.zig` opens files with it,
+// `cli.zig` spawns with it), so a test that reached one of those paths got a garbage vtable
+// read rather than a diagnostic. The commands these helpers drive today happen to be
+// output-only, which is the only reason it never fired. `TestHarness` had it right, with a
+// comment saying why; the hand-built contexts now match.
 
 fn testExecute(args: [][]const u8, out_fbs: *std.Io.Writer, err_fbs: *std.Io.Writer) !void {
     var in_buf: [1]u8 = undefined;
@@ -103,7 +111,7 @@ fn testExecute(args: [][]const u8, out_fbs: *std.Io.Writer, err_fbs: *std.Io.Wri
         .err = err_fbs,
         .state = &dummy_state,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
     var pre_runs: [32]?*const fn (ctx: App.Ctx) App.Error!void = undefined;
     @memset(&pre_runs, null);
@@ -243,7 +251,7 @@ test "Zero-Copy Verification" {
         .err = &err,
         .state = &captured_addr,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     const target_string = "path/to/some_file.txt";
@@ -308,7 +316,7 @@ test "Custom Parser and Validator" {
         .err = &err_fbs,
         .state = &dummy_state,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
     var chain = try CustomApp.ExecutionChain.init(testing.allocator, args.len);
     defer chain.deinit(testing.allocator);
@@ -371,7 +379,7 @@ test "Global Middleware: Onion Architecture execution order" {
         .err = &err,
         .state = &dummy_state,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain = try MwApp.ExecutionChain.init(testing.allocator, 1);
@@ -441,7 +449,7 @@ test "End-of-Options Delimiter (--)" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain = try App.ExecutionChain.init(testing.allocator, 4);
@@ -486,7 +494,7 @@ test "Negatable Boolean Flags (--no-*)" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain = try App.ExecutionChain.init(testing.allocator, 1);
@@ -533,7 +541,7 @@ test "Cumulative / Count Flags (-vvv)" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain = try App.ExecutionChain.init(testing.allocator, 1);
@@ -582,7 +590,7 @@ test "Direct Environment Variable Binding in Flags" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain = try App.ExecutionChain.init(testing.allocator, 1);
@@ -629,7 +637,7 @@ test "Mutual Exclusion (conflicts_with)" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain = try App.ExecutionChain.init(testing.allocator, 2);
@@ -675,7 +683,7 @@ test "Co-requisite Flags (requires)" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain = try App.ExecutionChain.init(testing.allocator, 2);
@@ -722,7 +730,7 @@ test "Hidden / Deprecated Flag Lifecycle" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     // 1. Using deprecated flag should print a warning to stderr
@@ -747,7 +755,7 @@ test "Hidden / Deprecated Flag Lifecycle" {
         .err = &err_help,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     var chain_help = try App.ExecutionChain.init(testing.allocator, 1);
@@ -781,7 +789,7 @@ test "Typo Correction: Levenshtein distance suggestions on UnknownCommand" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
     };
 
     const TestRootCmd1 = struct {
@@ -1145,7 +1153,7 @@ test "Safeguards: Interactive confirmation safeguard (--yes / -y)" {
         .err = &err,
         .state = &dummy,
         .env_map = &env_map,
-        .io = undefined,
+        .io = std.testing.io,
         .is_tty = false,
     };
 
@@ -2418,7 +2426,7 @@ const RejectRun = struct {
             .err = &self.err,
             .state = &dummy,
             .env_map = &env_map,
-            .io = undefined,
+            .io = std.testing.io,
         };
         try App.execute(RejectRoot, ctx, args, chain);
     }
