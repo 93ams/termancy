@@ -2,7 +2,7 @@ const std = @import("std");
 const App = @import("root.zig").App;
 const prompt = @import("cli").prompt;
 
-/// `tigershark add`'s flags.
+/// `snek add`'s flags.
 pub const AddFlags = struct {
     force: bool = false,
 
@@ -14,7 +14,7 @@ pub const AddFlags = struct {
     };
 };
 
-/// `tigershark add`'s positional arguments.
+/// `snek add`'s positional arguments.
 ///
 /// Separate from the flags: what the user typed as an argument and what they typed as
 /// an option are different kinds of input, and `addRun` should not have to reach

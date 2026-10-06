@@ -1,6 +1,6 @@
 # snek ROADMAP
 
-This roadmap outlines technical improvements and refactoring needed to align the `snek` repository with the Tigershark Engineering Standard (as defined in `AGENTS.md`).
+This roadmap outlines technical improvements and refactoring needed to align the `snek` repository with the Snek Engineering Standard (as defined in `AGENTS.md`).
 
 ## 1. Project Structure & Residency
 

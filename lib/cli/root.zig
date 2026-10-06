@@ -291,7 +291,7 @@ pub const systemd_exporter = framework.systemd_exporter;
 /// This import is what makes the suite run, and it is load-bearing - see the
 /// `test` block below. Before it existed, `cli_test.zig` was unreachable from
 /// any module root and none of its tests had ever executed in this
-/// repository, while the code they cover shipped in `tigershark`.
+/// repository, while the code they cover shipped in `snek`.
 const suite = @import("test/cli_test.zig");
 
 test {

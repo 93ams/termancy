@@ -279,7 +279,7 @@ pub const ProfileManager = struct {
     config_dir: []const u8,
 
     pub fn init(config_dir: []const u8, explicit_profile: ?[]const u8, env_map: *const std.process.Environ.Map) ProfileManager {
-        const resolved = explicit_profile orelse (env_map.get("TIGERSHARK_PROFILE") orelse "default");
+        const resolved = explicit_profile orelse (env_map.get("SNEK_PROFILE") orelse "default");
         return .{
             .active_profile = resolved,
             .config_dir = config_dir,

@@ -3,7 +3,7 @@ const std = @import("std");
 pub const AutocompleteFn = *const fn (prefix: []const u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const []const u8;
 
 pub const ReplState = struct {
-    prompt: []const u8 = "tigershark> ",
+    prompt: []const u8 = "snek> ",
     running: bool = true,
     history: std.ArrayList([]const u8),
     allocator: std.mem.Allocator,

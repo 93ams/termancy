@@ -2,9 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const PanicConfig = struct {
-    app_name: []const u8 = "tigershark",
-    issues_url: []const u8 = "https://github.com/93ams/tigershark/issues/new",
-    cache_dir: []const u8 = ".cache/tigershark",
+    app_name: []const u8 = "snek",
+    issues_url: []const u8 = "https://github.com/93ams/snek/issues/new",
+    cache_dir: []const u8 = ".cache/snek",
 };
 
 pub fn renderStructuredPanic(

@@ -883,14 +883,14 @@ test "Terminal Graphics & Formatting: Micro Syntax Highlighter" {
     var hl_buf: [1024]u8 = undefined;
     var hl_out = std.Io.Writer.fixed(&hl_buf);
 
-    const sample = "const count = 42; // comment\nconst name = \"tigershark\";";
+    const sample = "const count = 42; // comment\nconst name = \"snek\";";
     try cli.style.highlight(&hl_out, sample);
 
     const hl_str = hl_buf[0 .. hl_buf.len - hl_out.unusedCapacityLen()];
     try testing.expect(std.mem.indexOf(u8, hl_str, "\x1b[35mconst\x1b[0m") != null);
     try testing.expect(std.mem.indexOf(u8, hl_str, "\x1b[33m42\x1b[0m") != null);
     try testing.expect(std.mem.indexOf(u8, hl_str, "\x1b[2m// comment\x1b[0m") != null);
-    try testing.expect(std.mem.indexOf(u8, hl_str, "\x1b[32m\"tigershark\"\x1b[0m") != null);
+    try testing.expect(std.mem.indexOf(u8, hl_str, "\x1b[32m\"snek\"\x1b[0m") != null);
 }
 
 test "i18n: Locale resolution, dictionary fallback, and string interpolation" {
@@ -946,15 +946,15 @@ test "Panic: Structured Panic Boxed Rendering" {
     var panic_out = std.Io.Writer.fixed(&panic_buf);
 
     cli.panic.renderStructuredPanic(&panic_out, "Null pointer dereference in auth handler", null, .{
-        .app_name = "tigershark",
-        .issues_url = "https://github.com/93ams/tigershark/issues",
+        .app_name = "snek",
+        .issues_url = "https://github.com/93ams/snek/issues",
         .cache_dir = ".cache/crashes",
     });
 
     const rendered = panic_buf[0 .. panic_buf.len - panic_out.unusedCapacityLen()];
     try testing.expect(std.mem.indexOf(u8, rendered, "UNEXPECTED FATAL ERROR") != null);
     try testing.expect(std.mem.indexOf(u8, rendered, "Null pointer dereference") != null);
-    try testing.expect(std.mem.indexOf(u8, rendered, "github.com/93ams/tigershark/issues") != null);
+    try testing.expect(std.mem.indexOf(u8, rendered, "github.com/93ams/snek/issues") != null);
 }
 
 test "Multi-Bar Progress: Concurrent bar updates and progress tracking" {
@@ -1005,11 +1005,11 @@ test "Widgets: System Clipboard Integration via OSC 52" {
     var clip_buf: [256]u8 = undefined;
     var writer = std.Io.Writer.fixed(&clip_buf);
 
-    try cli.widgets.copyToClipboard(&writer, "Tigershark CLI", testing.allocator);
+    try cli.widgets.copyToClipboard(&writer, "Snek CLI", testing.allocator);
     const clip_out = clip_buf[0 .. clip_buf.len - writer.unusedCapacityLen()];
 
-    // Base64 of "Tigershark CLI" is "VGlnZXJzaGFyayBDTEk="
-    try testing.expect(std.mem.indexOf(u8, clip_out, "\x1b]52;c;VGlnZXJzaGFyayBDTEk=\x07") != null);
+    // Base64 of "Snek CLI" is "U25layBDTEk="
+    try testing.expect(std.mem.indexOf(u8, clip_out, "\x1b]52;c;U25layBDTEk=\x07") != null);
 }
 
 test "Widgets: Fuzzy Finder scoring" {
@@ -1259,7 +1259,7 @@ test "VFS: VirtualFileSystem asset lookup and extraction" {
         },
         .{
             .path = "banner.txt",
-            .content = "Tigershark v1.0",
+            .content = "Snek v1.0",
             .mime = "text/plain",
         },
     };
@@ -1268,7 +1268,7 @@ test "VFS: VirtualFileSystem asset lookup and extraction" {
 
     // Lookup
     try testing.expectEqualStrings("{\"theme\": \"dark\"}", vfs.get("config/defaults.json").?);
-    try testing.expectEqualStrings("Tigershark v1.0", vfs.get("banner.txt").?);
+    try testing.expectEqualStrings("Snek v1.0", vfs.get("banner.txt").?);
     try testing.expect(vfs.get("nonexistent.txt") == null);
 
     const asset = vfs.getAsset("banner.txt").?;
@@ -1284,7 +1284,7 @@ test "VFS: VirtualFileSystem asset lookup and extraction" {
     var b_buf: [128]u8 = undefined;
     const b_buffers = [_][]u8{&b_buf};
     const b_read = try banner_file.readStreaming(std.testing.io, &b_buffers);
-    try testing.expectEqualStrings("Tigershark v1.0", b_buf[0..b_read]);
+    try testing.expectEqualStrings("Snek v1.0", b_buf[0..b_read]);
 
     const json_file = try std.Io.Dir.cwd().openFile(std.testing.io, "test_vfs_extract/config/defaults.json", .{});
     defer json_file.close(std.testing.io);
@@ -1784,7 +1784,7 @@ test "OS Primitives: In-memory process title and argument secret scrubbing" {
         try testing.expectEqual(@as(u8, 0), b);
     }
 
-    cli.proctitle.ProcessTitle.setTitle("tigershark [running]");
+    cli.proctitle.ProcessTitle.setTitle("snek [running]");
 }
 
 test "Comptime Safety: Static flag collision linter" {
@@ -1986,7 +1986,7 @@ test "Data Flow: DryRunLedger mutation tracking and diff rendering" {
     var ledger = cli.dry_run.DryRunLedger.init(testing.allocator);
     defer ledger.deinit();
 
-    try ledger.record(.create_file, "/etc/tigershark.conf", "size: 1KB");
+    try ledger.record(.create_file, "/etc/snek.conf", "size: 1KB");
     try ledger.record(.delete_file, "/tmp/legacy.db", "");
 
     var diff_buf: [1024]u8 = undefined;
@@ -2001,7 +2001,7 @@ test "Data Flow: DryRunLedger mutation tracking and diff rendering" {
     // must not carry escape codes.
     try testing.expect(std.mem.indexOfScalar(u8, out, 0x1b) == null);
     try testing.expect(std.mem.indexOf(u8, out, "[+CREATE]") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "/etc/tigershark.conf") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "/etc/snek.conf") != null);
     try testing.expect(std.mem.indexOf(u8, out, "[-DELETE]") != null);
     try testing.expect(std.mem.indexOf(u8, out, "/tmp/legacy.db") != null);
 }
@@ -2045,12 +2045,12 @@ test "Security: SecurePage locked heap allocation and wiping" {
 
 test "Tooling: Multi-platform distribution spec generator" {
     const pkg = cli.dist_specs.PackageMetadata{
-        .name = "tigershark",
+        .name = "snek",
         .version = "1.0.0",
         .description = "Next-generation CLI & TUI framework",
-        .homepage = "https://tigershark.dev",
-        .author = "Tigershark Team",
-        .url = "https://github.com/93ams/tigershark/releases/download/v1.0.0/tigershark.tar.gz",
+        .homepage = "https://snek.dev",
+        .author = "Snek Team",
+        .url = "https://github.com/93ams/snek/releases/download/v1.0.0/snek.tar.gz",
         .sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     };
 
@@ -2059,21 +2059,21 @@ test "Tooling: Multi-platform distribution spec generator" {
     var brew_writer = std.Io.Writer.fixed(&brew_buf);
     try cli.dist_specs.DistSpecGenerator.generateHomebrew(&brew_writer, pkg);
     const brew_out = brew_buf[0 .. brew_buf.len - brew_writer.unusedCapacityLen()];
-    try testing.expect(std.mem.indexOf(u8, brew_out, "class tigershark < Formula") != null);
+    try testing.expect(std.mem.indexOf(u8, brew_out, "class snek < Formula") != null);
 
     // Scoop
     var scoop_buf: [1024]u8 = undefined;
     var scoop_writer = std.Io.Writer.fixed(&scoop_buf);
     try cli.dist_specs.DistSpecGenerator.generateScoop(&scoop_writer, pkg);
     const scoop_out = scoop_buf[0 .. scoop_buf.len - scoop_writer.unusedCapacityLen()];
-    try testing.expect(std.mem.indexOf(u8, scoop_out, "\"bin\": \"tigershark.exe\"") != null);
+    try testing.expect(std.mem.indexOf(u8, scoop_out, "\"bin\": \"snek.exe\"") != null);
 
     // Arch Linux
     var arch_buf: [1024]u8 = undefined;
     var arch_writer = std.Io.Writer.fixed(&arch_buf);
     try cli.dist_specs.DistSpecGenerator.generateArchPkgbuild(&arch_writer, pkg);
     const arch_out = arch_buf[0 .. arch_buf.len - arch_writer.unusedCapacityLen()];
-    try testing.expect(std.mem.indexOf(u8, arch_out, "pkgname=tigershark") != null);
+    try testing.expect(std.mem.indexOf(u8, arch_out, "pkgname=snek") != null);
 }
 
 test "Tooling: FootprintAnalyzer struct metrics" {
@@ -4202,7 +4202,7 @@ const UpdateStub = struct {
         self.calls += 1;
         if (std.mem.indexOf(u8, url, "/releases/latest") != null) self.saw_release_api = true;
         if (std.mem.endsWith(u8, url, ".sha256")) self.saw_checksum = true;
-        if (std.mem.endsWith(u8, url, "tigershark-bin")) self.saw_binary = true;
+        if (std.mem.endsWith(u8, url, "snek-bin")) self.saw_binary = true;
         for (self.routes) |route| {
             if (std.mem.eql(u8, route.url, url)) return allocator.dupe(u8, route.body);
         }
@@ -4229,7 +4229,7 @@ const UpdateStubState = struct {
 
 test "the update command: up to date, --check, refusal, install, and a bad checksum" {
     const tmp = "test_update_target.bin";
-    const asset_url = "https://example.invalid/tigershark-bin";
+    const asset_url = "https://example.invalid/snek-bin";
     const checksum_url = asset_url ++ ".sha256";
     const binary_new = "the-new-binary";
 
@@ -4242,27 +4242,27 @@ test "the update command: up to date, --check, refusal, install, and a bad check
 
     const digest = try cli.update.sha256Hex(testing.allocator, binary_new);
     defer testing.allocator.free(digest);
-    const good_checksum = try std.fmt.allocPrint(testing.allocator, "{s}  tigershark-bin\n", .{digest});
+    const good_checksum = try std.fmt.allocPrint(testing.allocator, "{s}  snek-bin\n", .{digest});
     defer testing.allocator.free(good_checksum);
     const wrong_checksum = try std.fmt.allocPrint(
         testing.allocator,
-        "{s}  tigershark-bin\n",
+        "{s}  snek-bin\n",
         .{"0000000000000000000000000000000000000000000000000000000000000000"},
     );
     defer testing.allocator.free(wrong_checksum);
 
     // Two releases: the version this binary already is, and a newer one.
     const release_same =
-        \\{"tag_name":"v0.1.0","assets":[{"name":"tigershark-bin","size":14,"browser_download_url":"https://example.invalid/tigershark-bin"}]}
+        \\{"tag_name":"v0.1.0","assets":[{"name":"snek-bin","size":14,"browser_download_url":"https://example.invalid/snek-bin"}]}
     ;
     const release_newer =
-        \\{"tag_name":"v0.9.0","assets":[{"name":"tigershark-bin","size":14,"browser_download_url":"https://example.invalid/tigershark-bin"}]}
+        \\{"tag_name":"v0.9.0","assets":[{"name":"snek-bin","size":14,"browser_download_url":"https://example.invalid/snek-bin"}]}
     ;
 
     const UpdateCmd = comptime App.updateCommand(.{
         .owner = "93ams",
         .repo = "snek",
-        .asset = "tigershark-bin",
+        .asset = "snek-bin",
         .current_version = "0.1.0",
         .target_path = tmp,
         .fetcher_factory = UpdateStubState.make,

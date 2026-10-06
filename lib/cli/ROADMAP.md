@@ -36,7 +36,7 @@ is deliberate: the gap between them is the argument for every remaining item.
 | `zig build --summary all` | `48/48 steps succeeded` | `48/48 steps succeeded` |
 | Files tracked in git | 2 of 64 (`cli.zig`, `config.zig`) | 2 of 65 — **C-3 is still open** |
 | `lib/cli` dependency direction | only `std` + siblings; no `anyerror` | unchanged |
-| Only consumer | `app/cli/` (the `tigershark` binary) | unchanged |
+| Only consumer | `app/cli/` (the `snek` binary) | unchanged |
 
 Evidence for the "before" column, so it can be re-checked: the 91 tests were
 confirmed real with `zig test app/cli/lib/cli_test.zig` → `All 91 tests passed`,
@@ -404,7 +404,7 @@ one §8.5 records: an audit is a claim, and the compiler is the arbiter.
 ### B-4 · `high` · The shipped prompt path mis-renders and can use freed memory · **[FIXED, verified]**
 
 `tea.zig` is the only code in this group a user actually runs, via
-`prompt.zig` → `app/cli/commands/add.zig` → the `tigershark` binary. Two defects:
+`prompt.zig` → `app/cli/commands/add.zig` → the `snek` binary. Two defects:
 
 1. `tea.zig:152`/`:189` compute `prev_lines = std.mem.count(u8, view_bytes, "\n")`,
    which is one short for any view ending in a newline — the normal case — so the
@@ -586,7 +586,7 @@ this item *verifiable*, and is its own task.
 **Update, measured later (the session behind §7.5):** the `cli.zig` half of that note
 is gone, and the cross-build is **green**: `zig build -Dtarget=x86_64-linux-musl`
 with a *fresh* cache directory (so nothing was reused) → **5/5 steps succeeded**,
-both `cfg` and `tigershark` compiled for `x86_64-linux-musl`.
+both `cfg` and `snek` compiled for `x86_64-linux-musl`.
 `error.NotATerminal`/`error.ProcessOrphaned` no longer appear anywhere in `cli.zig`.
 This does **not** clear B-6: the other two paths in the note (`app/scp`, `app/bus`)
 are not part of this build's target set, and the per-OS branches in `sys.zig`,
@@ -738,7 +738,7 @@ the `-M` flags; placed after them it is silently ignored and the host target is 
 instead. Two consecutive runs gave identical counts.
 
 **Still open in this item:** the cross-build of the *executables* (`zig build -Dtarget=…`) is
-green, but nothing runs `cfg`/`tigershark` on Linux, so a per-OS branch reachable only from
+green, but nothing runs `cfg`/`snek` on Linux, so a per-OS branch reachable only from
 `main.zig` would still be caught by the compile gate alone.
 
 
@@ -775,7 +775,7 @@ once, from that root. The convention is recorded in `.agents/AGENTS.md`.
 zero files. There is now no `commands/` folder anywhere under `app/`, so the two
 spellings cannot drift apart again.
 
-*Verified:* `zig build` 48/48; `tigershark --version` and `--help` unchanged, with
+*Verified:* `zig build` 48/48; `snek --version` and `--help` unchanged, with
 all four subcommands (`repl`, `config`, `add`, `init`) still listed; no remaining
 reference to `app.zig` or `commands/` anywhere in the tree; `zig fmt --check` 0;
 `test-lib` 199/199; `test-scp` 26/26; `test-bus-direct` 14/14.
@@ -788,7 +788,7 @@ binary. Two separate problems, fixed together:
 1. The only config command in the tree was `app/cli/cmd/config.zig`, and it was a
    **demonstration**: it hardcoded a fictional `ServerConfig{port, host,
    enable_cors, api_key}` to show the merge engine working. Nothing about it was
-   specific to `tigershark`, and nothing else could use it.
+   specific to `snek`, and nothing else could use it.
 2. All four binaries have configuration, and all four deserve the same commands.
    The specified suite (`setup`, `doctor`, `backup`, `restore`, `sync`, `eject`)
    would have been written into `app/cli` and then extracted.
@@ -847,8 +847,8 @@ secret is never printed on any path, only its length.
 move. The current state is in section 3c - `test-app-cfg` 51 (the operations' and the
 command group's tests share one root), `test-kvs-config` 4, `test-lib` 327/327.
 
-*Verified:* `zig build` 48/48; `tigershark --help` still lists `repl`, `config`,
-`add`, `init`; `tigershark config` resolves and prints; `config --schema` emits
+*Verified:* `zig build` 48/48; `snek --help` still lists `repl`, `config`,
+`add`, `init`; `snek config` resolves and prints; `config --schema` emits
 draft-07; `config --help` shows both flags; `test-lib` **200/200** with
 `test-app-cfg 1 pass`; `test-scp` 26/26; `test-bus-direct` 14/14; `zig fmt --check`
 0; all 54 folders still have a `root.zig`.
@@ -1366,7 +1366,7 @@ both unreviewable.
 file**, and byte deltas exactly accounted for by the longer import paths
 (`cli.zig` +476 bytes for 57 rewritten imports, `prompt` +14, `widgets` +10,
 `test` +3). `zig fmt --check` 0, `zig build` 48/48, `test-lib` 173/173 with
-`test-lib-cli` at 93, `test-scp` 21/21, and `tigershark --help` unchanged.
+`test-lib-cli` at 93, `test-scp` 21/21, and `snek --help` unchanged.
 
 *This item also produced the two findings below, both of which cost real time
 and are worth not rediscovering.*
@@ -1501,7 +1501,7 @@ branch being moved, **add the test before moving it**.
 
 ### S-4 · `medium` · Every consumer compiles all 11,400 lines
 
-`cli.zig`'s 62 `pub const X = @import` lines mean the `tigershark` binary
+`cli.zig`'s 62 `pub const X = @import` lines mean the `snek` binary
 analyses `mmap.zig`, `fido2.zig`, `wasm_bridge.zig`, `systemd_exporter.zig` and
 58 others whether or not it calls them. Comptime work that is never used is not
 free, and more importantly it means a change to any one file is a change to
@@ -1729,7 +1729,7 @@ not a cleanup, and each names the evidence a decision needs.
 Asked directly ("should all these files be under `lib/cli`?"), the measured
 answer is **no**. A module boundary is a claim about reuse, and a large part of
 this directory is not reusable *as CLI* — it is a general-purpose stdlib that
-happens to live in the only library the `tigershark` executable links, which is
+happens to live in the only library the `snek` executable links, which is
 also the only library with a test root. That made `lib/cli` the path of least
 resistance for anything that needed to compile and be tested.
 
@@ -1933,7 +1933,7 @@ The only consumer is `app/cli/` and it is a good canary:
   `zig fetch` — real behaviour with no test, in the one place the framework's
   ergonomics are exercised end to end.
 
-*Action:* a small integration test that drives the real `tigershark` binary
+*Action:* a small integration test that drives the real `snek` binary
 (`--version`, `--help`, a bad subcommand → exit 127) is cheap and would catch the
 errors the framework's own unit tests cannot see, because they use `TestHarness`
 with `.io = undefined` (S-7).
@@ -2381,7 +2381,7 @@ the next migration "fixes" or preserves them by accident.
 ## 3b-3. `cfg` as a standalone binary · **[done]**
 
 The specification describes two tools - `cli` for workspace work and `cfg` for
-configuration - and both existed only as subcommands of `tigershark`, so a machine that
+configuration - and both existed only as subcommands of `snek`, so a machine that
 needed `cfg get` installed the component registry, the scaffolder and the REPL with it.
 
 `build.zig` now produces a second executable, `zig-out/bin/cfg`, whose root mounts the
@@ -2473,7 +2473,7 @@ Detailed in `app/cli/lib/secrets/encrypted_config.zig`, `app/cli/lib/secrets/sec
 the three were described wrongly here for several revisions:
 
 **(1) Configuration encryption KDF.** Was a **single unsalted, uniterated SHA-256** over
-`"tigershark-cfg-salt::" || nonce || "::" || passphrase`, with the **nonce used as the
+`"snek-cfg-salt::" || nonce || "::" || passphrase`, with the **nonce used as the
 salt** - a value the payload stores in the clear. Work factor 1: a GPU tests billions of
 passphrases per second. Now PBKDF2-HMAC-SHA256 with a **random 16-byte salt** drawn from
 `std.Io.random`. Format is `[0x01][salt][nonce][tag][ciphertext]`; the **legacy format is
@@ -2539,8 +2539,8 @@ its `Allocating` writers per `run` and its buffers are not readable afterwards.
 **Symptom.** Every unimplemented command is a silent success.
 
 ```text
-$ tigershark config get port   -> prints the whole config,  exit 0
-$ tigershark update            -> prints the root banner,   exit 0
+$ snek config get port   -> prints the whole config,  exit 0
+$ snek update            -> prints the root banner,   exit 0
 ```
 
 This is why the 26 missing features in the spec all "passed" a smoke test. A script
@@ -2742,7 +2742,7 @@ do **not** analyse the body. Only *calling* it did. That is M-2's rule again, an
 it is the second time in this document that a "verify the function exists" check
 gave false confidence.
 
-*Verified:* `zig build` 48/48; `tigershark --version` / `--help` / no-args all
+*Verified:* `zig build` 48/48; `snek --version` / `--help` / no-args all
 exit 0 with correct output; the `Debug print works!` that ran on **every**
 invocation is gone; `zig fmt --check` clean; `test-lib` 196/196; `test-scp` 26/26;
 `test-bus-direct` 14/14.
@@ -2913,7 +2913,7 @@ legible.
 ### M-4 · `low` · `--help` scans for `--help` after routing
 
 `execute` routes subcommands first (line 550) and only then scans all args for
-`--help`/`-h` (line 613). So `tigershark add --help` prints help for `add`, which
+`--help`/`-h` (line 613). So `snek add --help` prints help for `add`, which
 is right, but the scan is over the *full* arg list including values, so a
 positional or flag value equal to `--help` triggers help instead of being passed
 through. The 91 tests cover `--help` for a command; they do not cover a *value*
@@ -2987,7 +2987,7 @@ linter (`linter.zig`) and the test root matter more than any individual fix.
 ### 5.2 The live path is the broken one
 
 The audit's most important *ranking* conclusion: `prompt.zig` →
-`app/cli/commands/add.zig` → the shipped `tigershark` binary is the **only**
+`app/cli/commands/add.zig` → the shipped `snek` binary is the **only**
 production path through the terminal group, and it is exactly what is broken.
 
 | Item | Evidence | Action |
@@ -3230,7 +3230,7 @@ Three defects were also found by reading the *resolution order*, not the feature
 - `zig build test --summary all` → **15/15 steps, 502/502 tests**, of which
   `test-lib-cli` is **250** (was 216).
 - `zig fmt --check build.zig build lib app` → clean.
-- `zig build` → 15/15 steps; `tigershark --help`, `tigershark add --help`,
+- `zig build` → 15/15 steps; `snek --help`, `snek add --help`,
   `cfg --help`, `generate-completions zsh`, `generate-docs markdown` and
   `--version`/`-V` were all checked by running the binaries.
 
@@ -3269,7 +3269,7 @@ Three more gaps, all of them "the capability exists but nothing uses it":
    any depth, and labels a subcommand's own sections as paragraphs - a `.SH` inside a
    `.SS` silently returns to the top level, which is why the level is a parameter
    rather than a literal.
-3. **`cfg` and `tigershark` had no root description**, so their help printed a usage
+3. **`cfg` and `snek` had no root description**, so their help printed a usage
    line with nothing under it and their man pages read `cfg - `. Both roots now carry
    one; two existing tests asserted the old man macros and were updated with the new
    structure.
@@ -3288,10 +3288,10 @@ table was not the one in use:
 
 | Command | Before | Now |
 |---|---|---|
-| `tigershark nope` (unknown command) | 1 | **127** |
-| `tigershark --versoin` (unknown flag) | 1 | **2** |
-| `tigershark --output zz` (bad value) | **0**, after printing an error | **2** |
-| `tigershark repl` piped | 1 (printed help) | 1, with a message |
+| `snek nope` (unknown command) | 1 | **127** |
+| `snek --versoin` (unknown flag) | 1 | **2** |
+| `snek --output zz` (bad value) | **0**, after printing an error | **2** |
+| `snek repl` piped | 1 (printed help) | 1, with a message |
 
 Two causes, both in the one function no test could reach:
 
@@ -3315,7 +3315,7 @@ prompt's value is already assigned where it is parsed, so the counter now counts
 argv positionals, which is what the fill pass reads.
 
 *Measured after this pass:* **15/15 steps, 564/564 tests** (`test-lib-cli` 308); the exit
-codes in the table above were re-measured from `zig-out/bin/tigershark.exe`.
+codes in the table above were re-measured from `zig-out/bin/snek.exe`.
 
 ---
 
@@ -3396,7 +3396,7 @@ Two decisions are worth recording, because both are seams rather than assumption
   `/proc/self/exe` symlink (so a `PATH`-resolved or linked invocation still names the real
   file), and any other platform returns `error.Unsupported` rather than a plausible-looking
   wrong path. `app/cli` registers the command with `.resolve_target = cli.self_exe.resolveTarget`,
-  so `tigershark update --check` runs the whole pipeline against the real registry.
+  so `snek update --check` runs the whole pipeline against the real registry.
 
 Its test drives all five paths through a stub transport and a temporary file: up to date
 (no prompt, no `--yes`), `--check` (one request, nothing written), refusal without `--yes`

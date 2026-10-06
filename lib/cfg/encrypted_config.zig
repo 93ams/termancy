@@ -6,7 +6,7 @@
 //! ## The defect this replaces
 //!
 //! Keys used to come from a **single unsalted, uniterated SHA-256** over
-//! `"tigershark-cfg-salt::" || nonce || "::" || passphrase`, and the salt passed in was
+//! `"snek-cfg-salt::" || nonce || "::" || passphrase`, and the salt passed in was
 //! the **nonce** - which the payload then stored in the clear. Two separate problems:
 //!
 //! 1. **No work factor.** One SHA-256 compression function per guess. A GPU tests
@@ -198,13 +198,19 @@ fn openWith(
     return plaintext;
 }
 
-/// The pre-PBKDF2 key derivation, kept only to read old blobs.
+/// The pre-PBKDF2 key derivation, kept only to read blobs in that layout.
 ///
 /// Named so its presence is explicable rather than looking like the bug coming back.
 /// It is unreachable from `encrypt`.
+///
+/// **The salt prefix below is part of the derived key, and renaming the project changed
+/// it** (from `tigershark-cfg-salt::`). Blobs written by a build that used the old prefix
+/// therefore no longer authenticate - see the test that pins that failure. This stays the
+/// only prefix rather than growing a list of historical ones: trying several would weaken
+/// the derivation's binding to this program for the sake of blobs no build here produced.
 fn legacyDeriveKey(passphrase: []const u8, salt: []const u8) [key_length]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("tigershark-cfg-salt::");
+    hasher.update("snek-cfg-salt::");
     hasher.update(salt);
     hasher.update("::");
     hasher.update(passphrase);
@@ -271,7 +277,7 @@ test "the derived key is not a single SHA-256 of the passphrase" {
     const derived = Self.deriveKey("password", salt);
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("tigershark-cfg-salt::");
+    hasher.update("snek-cfg-salt::");
     hasher.update(salt);
     hasher.update("::");
     hasher.update("password");
@@ -281,9 +287,54 @@ test "the derived key is not a single SHA-256 of the passphrase" {
     try std.testing.expect(!std.mem.eql(u8, &derived, &cheap));
 }
 
-test "a legacy blob still decrypts" {
-    // Built here with the old construction, then read back through the public
-    // `decrypt`, so an upgrade cannot orphan ciphertext a user already has.
+test "legacy blobs written under the previous salt prefix no longer decrypt" {
+    // **This is a recorded consequence of renaming the project, not an oversight.**
+    //
+    // `legacyDeriveKey` used to prefix its SHA-256 input with `tigershark-cfg-salt::`.
+    // That string is part of the key derivation, so renaming it changed every derived key
+    // - and any pre-PBKDF2 blob a user already has is now unreadable. There is no
+    // compatibility path, and the only ways to add one are to keep the old prefix (which
+    // is what the rename was for) or to try both prefixes on decrypt (which weakens the
+    // derivation's binding to this program for no user who does not have such a blob).
+    //
+    // The assertion is deliberately the *failure*, so the day someone restores the old
+    // prefix this test fails and tells them the consequence they are changing.
+    const plaintext = "legacy = true\n";
+
+    // The old construction, byte for byte, frozen here on purpose.
+    var old_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    old_hasher.update("tigershark-cfg-salt::");
+    old_hasher.update(&test_nonce);
+    old_hasher.update("::");
+    old_hasher.update("old-password");
+    var old_key: [key_length]u8 = undefined;
+    old_hasher.final(&old_key);
+
+    var blob: [nonce_length + tag_length + plaintext.len]u8 = undefined;
+    @memcpy(blob[0..nonce_length], &test_nonce);
+    var tag: [tag_length]u8 = undefined;
+    XChaCha20Poly1305.encrypt(
+        blob[nonce_length + tag_length ..],
+        &tag,
+        plaintext,
+        "",
+        test_nonce,
+        old_key,
+    );
+    @memcpy(blob[nonce_length .. nonce_length + tag_length], &tag);
+
+    try std.testing.expect(!Self.isCurrentFormat(&blob));
+    // The current `legacyDeriveKey` uses the new prefix, so authentication fails.
+    try std.testing.expectError(
+        error.AuthenticationFailed,
+        Self.decrypt(std.testing.allocator, &blob, "old-password"),
+    );
+}
+
+test "a legacy blob written under the current prefix still decrypts" {
+    // The format-compatibility half still holds: a pre-PBKDF2 blob produced by *this*
+    // build reads back, so the nonce||tag||ciphertext layout has not changed. Only the
+    // salt prefix above did.
     const plaintext = "legacy = true\n";
     const key = legacyDeriveKey("old-password", &test_nonce);
 

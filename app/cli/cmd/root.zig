@@ -32,9 +32,9 @@ pub const State = struct {};
 /// so all three spellings work and none of them is lost.
 pub const App = cli.App(State, cli.Config{ .version = "v0.1.0" });
 
-/// `tigershark add` - add a UI component from the registry.
+/// `snek add` - add a UI component from the registry.
 pub const add = @import("add.zig");
-/// `tigershark init` - scaffold a new project.
+/// `snek init` - scaffold a new project.
 pub const init = @import("init.zig");
 
 test {
@@ -44,14 +44,14 @@ test {
     std.testing.refAllDecls(@import("init.zig"));
 }
 
-// -- The `tigershark` binary's root command ----------------------------------
+// -- The `snek` binary's root command ----------------------------------
 //
 // This file is the package root of `app/cli/cmd`, and `AGENTS.md` 3.2 keeps a file named
 // `main.zig` to `main` alone. The root command belongs here with the rest of the command
 // tree rather than in the entry point: it is the same kind of declaration as `add` and
 // `init` above, and putting it here means one file names the whole command set.
 
-/// Flags for `tigershark` itself.
+/// Flags for `snek` itself.
 pub const RootFlags = struct {
     version: bool = false,
 
@@ -63,16 +63,16 @@ pub const RootFlags = struct {
     };
 };
 
-/// `tigershark repl` - the interactive shell.
+/// `snek repl` - the interactive shell.
 ///
 /// `is_repl` marks it for the framework's own interactive path, and the body below
 /// enters the shell. Without the body this command was *advertised and did nothing*:
 /// routing reached a command with no `run`, which printed help instead of starting the
-/// shell - so `tigershark repl` and `tigershark --interactive` disagreed about what the
+/// shell - so `snek repl` and `snek --interactive` disagreed about what the
 /// subcommand was for.
 const repl_meta = .{
     .name = "repl",
-    .description = "Start interactive Tigershark REPL",
+    .description = "Start interactive Snek REPL",
     .is_repl = true,
 };
 
@@ -107,9 +107,9 @@ const update_cmd = App.updateCommand(.{
     .owner = "93ams",
     .repo = "snek",
     .asset = if (@import("builtin").os.tag == .windows)
-        "tigershark-windows-x86_64.exe"
+        "snek-windows-x86_64.exe"
     else
-        "tigershark-linux-x86_64",
+        "snek-linux-x86_64",
     .current_version = "0.1.0",
     .resolve_target = cli.self_exe.resolveTarget,
 });
@@ -120,8 +120,8 @@ const update_cmd = App.updateCommand(.{
 /// than owned by this one. It is a function of `App` because a command is a type
 /// specialised to the app's state - see `app/cfg/root.zig`.
 const root_meta = .{
-    .name = "tigershark",
-    .description = "Tigershark CLI Framework - project scaffolder and component manager",
+    .name = "snek",
+    .description = "Snek CLI Framework - project scaffolder and component manager",
     .flags = RootFlags,
     .subcommands = .{
         repl_cmd,
@@ -140,9 +140,9 @@ pub const RootCmd = App.command(root_meta, rootRun);
 /// `Config.version` before the body runs.
 fn rootRun(ctx: App.Ctx, flags: App.Flags(RootFlags)) !void {
     if (flags.version) {
-        try ctx.out.writeAll("tigershark v0.1.0\n");
+        try ctx.out.writeAll("snek v0.1.0\n");
         return;
     }
     // Print help if no subcommands match
-    try ctx.out.writeAll("Tigershark CLI Framework - Project scaffolder and component manager" ++ "\n\nUse --help to see available commands.\n");
+    try ctx.out.writeAll("Snek CLI Framework - Project scaffolder and component manager" ++ "\n\nUse --help to see available commands.\n");
 }

@@ -1,14 +1,20 @@
-//! Vendored subset of `tigershark`'s `src/zig/lib/util`, carried into `snek` so
-//! that this repository has **no dependency on the monorepo it came from**.
+//! Vendored subset of the upstream `snek` monorepo's `src/zig/lib/util`, carried
+//! into this repository so that it has **no dependency on the monorepo it came
+//! from**.
 //!
 //! ## Why this is a copy, and why it is small
 //!
-//! `snek` was extracted from `tigershark`, which still consumes `snek`'s `cfg`
-//! and `cli` modules from `app/kvs`, `app/bus` and `app/git`. That makes the
-//! edge one-directional by construction: `tigershark` depends on `snek`, so
-//! `snek` may not depend on `tigershark`. The nine `@import("util")` sites inside
-//! the migrated apps therefore cannot resolve to the monorepo's module, and the
-//! modules they touch are copied here instead.
+//! This repository was extracted from the upstream monorepo, which still
+//! consumes this repository's `cfg` and `cli` modules from its own `app/kvs`,
+//! `app/bus` and `app/git`. That makes the edge one-directional by construction:
+//! the monorepo depends on this repository, so this repository may not depend on
+//! the monorepo. The nine `@import("util")` sites inside the migrated apps
+//! therefore cannot resolve to the monorepo's module, and the modules they touch
+//! are copied here instead.
+//!
+//! (The two share a name, which is why this header says "the upstream monorepo"
+//! and "this repository" rather than using it: the direction of the dependency,
+//! not the name, is what the rule is about.)
 //!
 //! The copy is deliberately the **closure actually used**, not the whole
 //! library. `lib/io`, `lib/net` and `lib/crypto` are not represented at all:

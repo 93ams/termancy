@@ -1,8 +1,8 @@
-# Tigershark Engineering Standard
+# Snek Engineering Standard
 
 **The Zig Tree (`src/zig`) Style and Architecture Guide**
 
-This document defines *how* Zig code must be written, *where* it must live, and *what* every Tigershark application must ship. Our design goals, in order of priority, are **Safety, Performance, and Developer Experience** (derived from [TigerStyle](https://github.com/tigerbeetle/tigerbeetle/raw/main/docs/TIGER_STYLE.md)). 
+This document defines *how* Zig code must be written, *where* it must live, and *what* every Snek application must ship. Our design goals, in order of priority, are **Safety, Performance, and Developer Experience** (derived from [TigerStyle](https://github.com/tigerbeetle/tigerbeetle/raw/main/docs/TIGER_STYLE.md)). 
 
 When making technical tradeoffs, resolve conflicts using this hierarchy:
 1. **Performance** (on a measured hot path) overrides all below.
@@ -131,7 +131,7 @@ pub const RawTerminal = struct { ... };
 
 ## 4. The Artifact Set
 
-A Tigershark app is a domain with a standard set of artifacts. Every app must explicitly declare its artifacts in its `root.zig` header. If one is missing, note *why*.
+A Snek app is a domain with a standard set of artifacts. Every app must explicitly declare its artifacts in its `root.zig` header. If one is missing, note *why*.
 
 1. **Server Binary:** The daemon or process (`main.zig`).
 2. **SDK Client:** An in-tree API surface speaking the wire protocol.

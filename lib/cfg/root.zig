@@ -14,7 +14,7 @@
 //!                        get wrong.
 //!   * `loader.zig`     - `load` / `mergeJson` / `generateSchema` and the
 //!                        profile + watcher helpers. This is the entry point the
-//!                        `tigershark` CLI uses.
+//!                        `snek` CLI uses.
 //!   * the remaining files are the *tooling* around a configuration: provenance
 //!     (`config_lineage`), presentation (`config_diff`, `config_dryrun`),
 //!     profiles and TOML mutation (`profiles`, `toml_mutator`), versioning
@@ -31,7 +31,7 @@
 //! **Still open, and recorded rather than hidden:** `cfg.Manager` and
 //! `loader.load` are two resolvers that overlap on defaults, environment
 //! binding and JSON overlay. They are both correct and both tested; unifying
-//! them is a deliberate piece of work, not a move, because the `tigershark
+//! them is a deliberate piece of work, not a move, because the `snek
 //! config` command and its tests depend on `loader`'s exact semantics. See
 //! `app/cli/lib/ROADMAP.md` U-2.
 

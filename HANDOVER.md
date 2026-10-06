@@ -12,7 +12,7 @@ Last verified numbers (run them yourself before trusting anything here):
 | `zig build test-direct --summary all` | `13/13 steps succeeded` |
 | `zig build test-linux-compile --summary all` | `6/6 steps succeeded` — compiles every root for the shipping OS |
 | `zig fmt --check build.zig build lib app` | exit 0, no output |
-| `zig build` | exit 0; `.\zig-out\bin\tigershark.exe --version` → `v0.1.0` |
+| `zig build` | exit 0; `.\zig-out\bin\snek.exe --version` → `v0.1.0` |
 | `git status --porcelain` | empty |
 
 **Two traps in this environment, both paid for:**
@@ -95,7 +95,7 @@ in 0.16 carries no executable path), `platform/update.zig` gained GitHub Release
 checksum-file parsing and Ed25519 verification, `platform/telemetry.zig` gained an opt-in
 reporter with an injected transport.
 
-**`App.updateCommand`** (in `lib/cli/cli.zig`) + **`tigershark update`** registered in
+**`App.updateCommand`** (in `lib/cli/cli.zig`) + **`snek update`** registered in
 `app/cli/cmd/root.zig` with `.resolve_target = cli.self_exe.resolveTarget`.
 
 **Crash reporting installed**: `pub const panic = cli.crash.Panic(…)` plus

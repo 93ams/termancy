@@ -11,7 +11,7 @@ pub const cmd = App.command(meta, initRun);
 
 /// No flags, so the body takes the context alone.
 fn initRun(ctx: App.Ctx) !void {
-    try ctx.out.writeAll("Scaffolding Tigershark CLI project...\n");
+    try ctx.out.writeAll("Scaffolding Snek CLI project...\n");
 
     try std.Io.Dir.cwd().createDirPath(ctx.io, "src/ui");
 
@@ -65,7 +65,7 @@ fn initRun(ctx: App.Ctx) !void {
         \\const std = @import("std");
         \\
         \\pub fn main() !void {
-        \\    std.debug.print("Welcome to your new Tigershark CLI!\n", .{});
+        \\    std.debug.print("Welcome to your new Snek CLI!\n", .{});
         \\}
     ;
 

@@ -604,7 +604,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         ///
         /// **This is the only mapping.** `failWith` used to consult `exit_map` and then
         /// hardcode `1`, so the table above was documented and tested while the shipped
-        /// binaries returned `1` for every failure - measured: `tigershark nope` exited
+        /// binaries returned `1` for every failure - measured: `snek nope` exited
         /// `1`, not `127`. Every exit in the framework now goes through here.
         pub fn getExitCode(err: anyerror) u8 {
             // A caller-supplied mapping first: it is the only way to give a domain error a
@@ -1110,7 +1110,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// const meta = .{
         ///     .owner = "93ams",
         ///     .repo = "snek",
-        ///     .asset = "tigershark-windows-x86_64.exe",
+        ///     .asset = "snek-windows-x86_64.exe",
         ///     .current_version = "0.1.0",
         ///     .resolve_target = myExePath,
         /// };

@@ -3,7 +3,7 @@
 //! ## What this repository is
 //!
 //! `snek` is the standalone home of two subsystems that were extracted from the
-//! `tigershark` monorepo (`src/zig/app/cli` and `src/zig/app/cfg`):
+//! `snek` monorepo (`src/zig/app/cli` and `src/zig/app/cfg`):
 //!
 //! * `lib/cli`  - the command framework: routing, flag parsing, render, interact.
 //! * `lib/cfg`  - the configuration framework: loader, TOML document model,
@@ -19,7 +19,7 @@
 //! second module would need a second test root and would buy nothing, since the
 //! files are only ever reached through `app/cfg/root.zig`'s `ops` surface.
 //!
-//! The two binaries are `app/cli/main.zig` (installed as `tigershark`) and
+//! The two binaries are `app/cli/main.zig` (installed as `snek`) and
 //! `app/cfg/main.zig` (installed as `cfg`).
 //!
 //! ## One build root, and why that removes a whole class of duplication
@@ -131,7 +131,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const cli_exe = b.addExecutable(.{
-        .name = "tigershark",
+        .name = "snek",
         .root_module = b.createModule(.{
             .root_source_file = b.path("app/cli/main.zig"),
             .target = target,

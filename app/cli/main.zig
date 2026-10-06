@@ -1,4 +1,4 @@
-//! The `tigershark` binary - the CLI framework's own entry point.
+//! The `snek` binary - the CLI framework's own entry point.
 //!
 //! `AGENT.md` 3.2: a file named `main.zig` holds `main` and nothing else. The command tree,
 //! the flags struct, the `App` alias, the root command and its `run` are in `cmd/root.zig`,
@@ -12,12 +12,12 @@ const cmd = @import("cmd/root.zig");
 ///
 /// A panic prints a boxed banner naming the app, OS and architecture, dumps the stack
 /// trace, and - because `install` arms the report writer below - writes a JSON report to
-/// `.cache/tigershark-crash-<timestamp>.json` that a user can attach to an issue. The
+/// `.cache/snek-crash-<timestamp>.json` that a user can attach to an issue. The
 /// report deliberately contains the message, app, OS, architecture, Zig version and
 /// timestamp: no argv, no environment, no paths, because a panic is exactly the moment a
 /// secret from the command line would otherwise be copied somewhere durable.
 pub const panic = cli.crash.Panic(.{
-    .app_name = "tigershark",
+    .app_name = "snek",
     .report_dir = ".cache",
 });
 

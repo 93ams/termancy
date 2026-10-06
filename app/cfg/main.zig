@@ -4,7 +4,7 @@
 //!
 //! The specification describes two tools: `cli` for workspace and framework work, and
 //! `cfg` for configuration. Both existed only as subcommands of one binary, so a user who
-//! wanted `cfg get` had to invoke `tigershark config get`, and a machine that needed only
+//! wanted `cfg get` had to invoke `snek config get`, and a machine that needed only
 //! configuration tooling had to install the component registry, the scaffolder and the
 //! REPL with it.
 //!

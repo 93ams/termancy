@@ -3,11 +3,13 @@
 A Zig toolkit for building command-line applications: a command framework, a
 configuration framework, and the pieces an operator-facing binary needs.
 
-`snek` was extracted from the [tigershark](https://github.com/93ams/tigershark)
-monorepo, where these two subsystems lived as `src/zig/app/cli` and
-`src/zig/app/cfg`. They are mutually dependent — `app/cli` imports `app_cfg` and
-`app/cfg` imports `cli` — which is why they move together and why they are worth
-owning in one repository rather than two.
+This repository was extracted from the **upstream `snek` monorepo**, where these
+two subsystems lived as `src/zig/app/cli` and `src/zig/app/cfg`. They are mutually
+dependent — `app/cli` imports `app_cfg` and `app/cfg` imports `cli` — which is why
+they move together and why they are worth owning in one repository rather than two.
+The two share a name, so where the distinction matters this README says "the upstream
+monorepo" and "this repository": the dependency direction is the point, and the name
+cannot carry it.
 
 ## Layout
 
@@ -17,7 +19,7 @@ build/targets.zig    Target policy and the test-root plumbing
 lib/cli/             The command framework (module `cli`)
 lib/cfg/             The configuration framework (module `cfg`)
 lib/util/            Vendored primitives, so this repo depends on nothing else
-app/cli/             The `tigershark` binary and its command set
+app/cli/             The `snek` binary and its command set
 app/cfg/             The `cfg` binary and the `config` command group
 app/cfg/lib/ops/     Configuration operations, no CLI dependency (module `app_cfg`)
 ```
@@ -30,15 +32,15 @@ Two design points worth knowing before reading the code:
   through its `ops` surface; a module of their own bought nothing but a second test
   root. That makes "no `cli` here" a review rule rather than a build error - while
   `ops` was its own module, the module's import table enforced it.
-* **`lib/util` is a deliberate copy.** The monorepo that `snek` came from still
-  consumes `snek`'s `cfg` and `cli` modules, so a back-dependency would be a
-  package cycle. `lib/util/root.zig` records what was copied and why it is the
-  closure actually used rather than the whole library.
+* **`lib/util` is a deliberate copy.** The upstream monorepo still consumes this
+  repository's `cfg` and `cli` modules, so a back-dependency would be a package
+  cycle. `lib/util/root.zig` records what was copied and why it is the closure
+  actually used rather than the whole library.
 
 ## Building
 
 ```sh
-zig build                          # installs `tigershark` and `cfg` into zig-out/bin
+zig build                          # installs `snek` and `cfg` into zig-out/bin
 zig build test                     # every unit test
 zig build test-direct              # the same tests, as direct child processes
 ```

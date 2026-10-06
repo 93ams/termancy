@@ -1,4 +1,4 @@
-//! `app/cli` - the `tigershark` binary.
+//! `app/cli` - the `snek` binary.
 //!
 //! `main.zig` is the executable entry point and is deliberately **not** imported
 //! here: a module root must not depend on the entry point. What this file names is
@@ -23,7 +23,7 @@ test {
     std.testing.refAllDecls(cmd);
 }
 
-test "`tigershark repl` reaches its body instead of falling back to help" {
+test "`snek repl` reaches its body instead of falling back to help" {
     // The regression this pins: `repl` was registered with no `run`, so routing reached
     // a command with no body and *printed help* - an advertised subcommand that did
     // nothing. It now reaches `replRun`, which needs a terminal and says so.

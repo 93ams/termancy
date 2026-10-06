@@ -10,6 +10,11 @@ zig-pkg/
 # Build and test output captured from a shell.
 *.log
 
+# Crash reports: `cli.crash.Panic` writes `.cache/crash-<timestamp>.json` beside the
+# working directory (`app/cli/main.zig`'s `report_dir`). Those are artefacts of a failure,
+# not sources, and a secret could plausibly be in one.
+.cache/
+
 # Editor and OS noise.
 .vscode/
 .idea/
