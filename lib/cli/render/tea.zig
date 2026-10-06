@@ -344,8 +344,73 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             testing.allocator.destroy(reader.ctx.channel);
             testing.allocator.destroy(reader.ctx);
         }
+
+        test "run reaches its quit path and returns, without reading a real terminal" {
+            // The coverage the B-4 entry says is missing: nothing drove `run` itself,
+            // because the first attempt at this item drove it against a real terminal and
+            // hung `zig build test`. This drives it with a finite source instead, so the
+            // reader thread reaches end of stream on its own and `run` always returns.
+            //
+            // What this pins is the *shape* of the quit path: one key reaches `update`,
+            // a `.quit` command is honoured, and the cursor is restored on the way out. It
+            // deliberately does not assert anything about the two allocations `run` makes
+            // - it cannot see them, because `run` uses `std.heap.page_allocator` on purpose
+            // (see `StdinContext`). Measuring that leak is a separate, larger change.
+            //
+            // The model lives at file scope (`QuitModel`) rather than here: a struct with
+            // methods declared inside a test that is itself inside a generic was enough to
+            // exhaust the compiler's memory, reproducibly. Nothing about the test needs it
+            // to be local, so it is not.
+            const testing = std.testing;
+
+            // A single 'q' and then end of stream: the reader thread ends on its own, so
+            // nothing here can block and nothing here can outlive the stack buffers.
+            var source_bytes: [1]u8 = .{'q'};
+            var out_buf: [256]u8 = undefined;
+            var out = std.Io.Writer.fixed(&out_buf);
+
+            var prog = Program(QuitModel, void).init(.{}, testing.io);
+            const ctx = .{
+                .in = &std.Io.Reader.fixed(&source_bytes),
+                .out = &out,
+            };
+            try prog.run(ctx);
+
+            try testing.expect(prog.model.quit);
+            try testing.expectEqual(@as(u8, 'q'), prog.model.seen);
+            const written = out_buf[0 .. out_buf.len - out.unusedCapacityLen()];
+            // The final view is drawn on the quit path, and the cursor is shown again.
+            try testing.expect(std.mem.endsWith(u8, written, "\x1b[?25h"));
+            try testing.expect(std.mem.indexOf(u8, written, "byebye") != null);
+            // The cursor was hidden on entry and restored on exit, in that order.
+            try testing.expect(std.mem.startsWith(u8, written, "\x1b[?25l"));
+        }
     };
 }
+
+/// The model for `run`'s quit-path test, at file scope on purpose: see the note in that
+/// test. It quits on `q` and records the character it was given, so the test can prove the
+/// key travelled from the byte source, through the reader thread and the channel, into
+/// `update` - rather than asserting a shape that only looks right.
+pub const QuitModel = struct {
+    seen: u8 = 0,
+    quit: bool = false,
+
+    pub fn update(self: *@This(), msg: Msg(void)) !Command(void) {
+        switch (msg) {
+            .key => |k| {
+                self.seen = k.char orelse 0;
+                if (k.key == .char and k.char == 'q') self.quit = true;
+            },
+            else => {},
+        }
+        return if (self.quit) .quit else .none;
+    }
+
+    pub fn view(self: *@This(), writer: *std.Io.Writer) !void {
+        try writer.writeAll(if (self.quit) "byebye\n" else "menu\n");
+    }
+};
 
 pub fn visualWidth(str: []const u8) usize {
     var width: usize = 0;

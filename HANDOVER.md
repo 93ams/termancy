@@ -8,7 +8,7 @@ Last verified numbers (run them yourself before trusting anything here):
 
 | Gate | Expected |
 |---|---|
-| `zig build test --summary all` | `13/13 steps succeeded; 588/589 tests passed (1 skipped)` |
+| `zig build test --summary all` | `13/13 steps succeeded; 591/592 tests passed (1 skipped)` |
 | `zig build test-direct --summary all` | `13/13 steps succeeded` |
 | `zig build test-linux-compile --summary all` | `6/6 steps succeeded` — compiles every root for the shipping OS |
 | `zig fmt --check build.zig build lib app` | exit 0, no output |
@@ -45,9 +45,10 @@ was an accounting artifact, not a lost test. Read `lib/cli/ROADMAP.md` item **C-
 for the full method and the two control experiments; the short version:
 
 * All **471 named** declarations in `lib/` execute (cli 318 + cfg 123 + util 30), as
-  measured when the audit ran. `util` is **31** now: porting B-6 added a direct test
-  for the monotonic clock, which had none — and that missing test was the whole of why
-  its POSIX branch rotted. The tree currently reports **589** tests, 588 passing.
+  measured when the audit ran. The tree has grown since — `util` added a direct test for
+  the monotonic clock and `cli` gained a headless `Program.run` test, so it currently
+  reports **592** tests, 591 passing (cli 326, util 32). The audit's arithmetic is
+  unaffected; only the totals moved.
   Verified by running each module root directly and pairing every declaration with
   the executed name that served it, allowing for the instantiation-qualified prefix
   a test inside a generic container runs under.
@@ -128,10 +129,14 @@ B-2/B-3/B-4/B-5/B-6 carry their measured resolutions.
    **7**, across `mmap.zig`, `platform/telemetry.zig` and `util/trace.zig`.
    `zig build test-linux-compile` now gates this class, and the Linux suite was
    **executed under WSL**, where the `MmapFile` test passes.**
-3. **B-4's deliberate leak.** One reader context plus one channel per prompt is allocated
-   from `page_allocator` and never freed, because 0.16 cannot cancel a blocked stdin read
-   (the full analysis is in the B-4 entry). If a pollable-stdin mechanism ever appears, the
-   leak can go.
+3. **B-4's deliberate leak — half closed.** The `run` path now *has* the headless
+   regression test three documents said was impossible (a finite `Reader.fixed` source,
+   not a thread-capable stdin), and it passes. What remains is the **measurement**: `run`
+   allocates its reader context and channel from `page_allocator` on purpose, so a test
+   cannot see them. Observing the leak needs `Program.init` to take an allocator — a
+   public-API change that belongs with the "if a future std gains pollable stdin" work.
+   Until then the leak is structural, not measured; do not claim otherwise.
+   The full analysis is in the B-4 entry, which records the attempt and revert.
 4. **Run the Linux suite properly.** `test-linux-compile` proves the code *compiles* for
    the shipping OS; it does not execute it. WSL can, and doing so found no POSIX defect —
    but four tests are unrunnable there because they spawn the bare string `"zig"`
@@ -169,9 +174,11 @@ zig test -target x86_64-linux-musl -lc --test-no-exec --dep cfg --dep util `
 wsl -d Ubuntu -- bash -lc "cp /mnt/c/<path>/x /tmp/x && chmod +x /tmp/x && cd /tmp && /tmp/x"
 ```
 
-Expect **318 passed, 1 skipped, 4 failed**, where all four failures are the missing `zig`
-on WSL's `PATH`. `--test-filter` is not a runtime flag in 0.16; the runner takes no filter
-argument, so filter by reading the output.
+Expect **326 tests: 321 passed, 1 skipped, 4 failed**, where all four failures are the
+missing `zig` on WSL's `PATH` (`process.zig` and `detach.zig` spawn it by name). Count
+failures from that summary line, not by grepping `...FAIL` — one of the four prints
+`FAIL (TestUnexpectedError)` on the following line. `--test-filter` is not a runtime flag
+in 0.16; the runner takes no filter argument, so filter by reading the output.
 
 Use `--prefix` for cross-builds: without it the Linux binaries overwrite `zig-out/bin`, and
 then you must re-run a plain `zig build` before the Windows binaries work again.
@@ -225,6 +232,15 @@ then you must re-run a plain `zig build` before the Windows binaries work again.
   unchanged, which upgraded the mmap fix from "compiles" to "passes". Before writing a
   limitation into a document, test the limitation — the cost of being wrong is a class of
   verification nobody attempts.
+* **A `struct` with methods declared *inside a test that is inside a generic* makes the
+  compiler exit `error: OutOfMemory`** — reproducibly, with 5 GB free. It is not a disk
+  problem and not a real OOM: the same code compiles the moment the type moves to file
+  scope. If the compiler reports `OutOfMemory` on a change that only added a test, suspect
+  this before suspecting the machine.
+* **Tests inside a generic container are collected per instantiation.** `Program(Model, T)`
+  declares tests; each distinct `Program(A, T)` and `Program(B, T)` runs them again. Adding
+  one model type can therefore add several tests, and a test-count assertion pinned to an
+  exact number will need updating for a reason that has nothing to do with the change.
 
 ## 6. Zig 0.16 spellings this session had to discover
 
