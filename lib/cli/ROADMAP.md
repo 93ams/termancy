@@ -1543,6 +1543,69 @@ usefully, removes 14 places where a test can forget to `defer`.
 `app/cli/lib/cli_test.zig` also has `5` empty function bodies and 133 occurrences of
 `undefined`; a `Fixture` shrinks that surface too.
 
+#### Re-measured, and the correctness half of this item does not hold
+
+**Every one of the 19 `ExecutionChain.init` sites in `cli_test.zig` is matched by a
+`defer <chain>.deinit(allocator)`** - verified by pairing each `var <name> = try …ExecutionChain.init(...)`
+with the following two lines. `ExecutionChain.init` does allocate (two slices,
+`cli.zig:556-559`), so a missed `deinit` would fail under `testing.allocator`; none is
+missed and the suite is green. The "14 places a test can forget to `defer`" is therefore a
+*hazard*, not a live defect, and the item's own evidence does not support the stronger
+reading.
+
+**And the file already has the better pattern - it is now the dominant one.** `Rig`
+(`cli_test.zig:2603`) owns the two buffers and the env map as fields, with
+`init`/`deinit`/`reset`/`stdout`/`stderr`, and the `runCmd` helper owns the chain. **Measured:
+118 `runCmd` call sites against 13 `testExecute` ones**, out of 151 test declarations. So
+the migration is largely *done* and this item's "25 copies" describes a minority of the
+file. Tests on `Rig` are strictly cleaner than the ones S-6 describes: no fixed buffer size
+chosen per test, no `defer` to forget, and `reset()` lets one test drive several
+invocations.
+
+So the work here is **finishing the migration onto the pattern the file already invented**,
+not adding a new `Fixture` alongside it. The remaining sites are the `testExecute` helpers
+and the hand-built `App.Ctx` blocks that predate `Rig`.
+
+**Counts are stale, as the file has grown.** Latest measurement: `out_buf` ×26,
+`Environ.Map.init` ×21, `App.Ctx{` ×15 (13 by hand + `Rig`/`runCmd`), `ExecutionChain.init`
+×19, `Writer.fixed` ×108, and the file is 5,003 lines over 328 tests.
+
+**Recommendation: defer, and do not do it blind.** It is a `low`-priority item whose only
+remaining value is line count, the majority of the file already uses the good pattern, and
+— as `S-2` and the `tea.zig` work showed twice — a volume refactor of tests is exactly where
+a semantic drift hides, because the tests still pass either way. If it is done, finish the
+`Rig` migration in slices of a few tests with the suite green between each, and re-measure
+the saving rather than believing "~200 lines".
+
+### S-8 · `medium` · Sequential prompts race each other for stdin
+
+Found by reading `prompt.zig` while measuring B-4, and recorded rather than fixed: it is a
+design question, not an edit.
+
+**Every prompt starts its own reader thread over the same `ctx.in`.** `confirm`
+(`prompt.zig:82`), `select` (`:157`), `multiSelect` (`:253`) and `multiSelectDynamic`
+(`:360`) each call `tea.Program.run`, and `run` calls `startReader` (`tea.zig:318`) — one
+`stdinReaderThread` per prompt. Those threads are **never joined**: that is precisely the
+deliberate leak B-4 documents, and it is correct *as a leak* (nothing is freed while the
+thread may run).
+
+The consequence nobody has looked at is the one the leak hides. A command that prompts
+twice leaves the first prompt's thread alive and still blocked in `readVec` on the same
+`std.Io.Reader`. When the second prompt starts, **two threads are reading one stream**, and
+which one gets a given byte is a race. The second prompt then sees a partial answer, or the
+first thread consumes the bytes meant for it.
+
+**Why it stays open here rather than being demonstrated:** the orphan's lifetime is
+unbounded by design, so the repro is inherently non-deterministic, and this session already
+paid twice for tests that hang instead of fail. A convincing demonstration needs a
+deterministic seam (a shared, single reader owner), which is the fix, not a probe.
+
+**The shape of the fix**, for whoever takes it: promote the reader to one owner per `App`
+(or per `Ctx`) rather than per `Program`, so `run` attaches to an existing reader instead of
+starting one. That removes the race, and it is also what finally makes the B-4 leak
+unnecessary — with one long-lived reader a stop flag has somewhere to live. It is a real
+API change to `tea.Program`, so it needs a plan and the spec treatment, not a patch.
+
 ### S-7 · `low` · `.io = undefined` in 14 tests is a live tripwire · **[FIXED, 15 sites]
 
 `App.Ctx.io` is assigned `undefined` in every test that builds a `Ctx` by hand.
