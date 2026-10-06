@@ -1577,13 +1577,13 @@ a semantic drift hides, because the tests still pass either way. If it is done, 
 `Rig` migration in slices of a few tests with the suite green between each, and re-measure
 the saving rather than believing "~200 lines".
 
-### S-8 · `medium` · Sequential prompts race each other for stdin
+### S-8 · `medium` · Sequential prompts race each other for stdin · **[PLANNED — see the design below]**
 
 Found by reading `prompt.zig` while measuring B-4, and recorded rather than fixed: it is a
 design question, not an edit.
 
 **Every prompt starts its own reader thread over the same `ctx.in`.** `confirm`
-(`prompt.zig:82`), `select` (`:157`), `multiSelect` (`:253`) and `multiSelectDynamic`
+(`prompt.zig:82`), `select` (`:157`), `multiSelect` (`:254`) and `multiSelectDynamic`
 (`:360`) each call `tea.Program.run`, and `run` calls `startReader` (`tea.zig:318`) — one
 `stdinReaderThread` per prompt. Those threads are **never joined**: that is precisely the
 deliberate leak B-4 documents, and it is correct *as a leak* (nothing is freed while the
@@ -1593,18 +1593,66 @@ The consequence nobody has looked at is the one the leak hides. A command that p
 twice leaves the first prompt's thread alive and still blocked in `readVec` on the same
 `std.Io.Reader`. When the second prompt starts, **two threads are reading one stream**, and
 which one gets a given byte is a race. The second prompt then sees a partial answer, or the
-first thread consumes the bytes meant for it.
+first thread consumes the bytes meant for it. The symptom a user would report is a prompt
+that appears to ignore what they typed.
 
-**Why it stays open here rather than being demonstrated:** the orphan's lifetime is
-unbounded by design, so the repro is inherently non-deterministic, and this session already
-paid twice for tests that hang instead of fail. A convincing demonstration needs a
-deterministic seam (a shared, single reader owner), which is the fix, not a probe.
+**Why it cannot be demonstrated first, and what replaces the demonstration.** The orphan's
+lifetime is unbounded by design, so a repro through the real stdin is inherently
+non-deterministic, and this session already paid twice for tests that hang instead of fail.
+The deterministic seam is to stop using a real reader in the test: `Channel` is the
+thread-safe queue the reader pushes into, and a test can push into one itself. See
+"verification" below — the test proves the *program* side (two sequential `run`s over one
+channel each get their own message), which is the half that is broken.
 
-**The shape of the fix**, for whoever takes it: promote the reader to one owner per `App`
-(or per `Ctx`) rather than per `Program`, so `run` attaches to an existing reader instead of
-starting one. That removes the race, and it is also what finally makes the B-4 leak
-unnecessary — with one long-lived reader a stop flag has somewhere to live. It is a real
-API change to `tea.Program`, so it needs a plan and the spec treatment, not a patch.
+#### The design
+
+**The rule that is wrong is `run` starting a reader.** A reader's lifetime is the *dialog's*,
+not the *prompt's*. So:
+
+1. **`Program.run` must be able to consume a channel it did not create.** Add
+   `Program.initWithChannel(model, io, allocator, channel: *Channel(MsgT))`, which records
+   the channel instead of starting a reader. `run` then uses `self.channel` whether it
+   started the reader or was handed one; `init`/`initWithAllocator` keep today's behaviour,
+   so nothing outside `prompt.zig` changes.
+2. **The dialog owns one `PromptReader`.** A small type in `prompt.zig` — one channel, one
+   `StdinContext`, one reader thread, created once per dialog and threaded through the four
+   prompt functions (which already take `ctx`, so this is a second parameter passed down the
+   same call chain). It is deliberately **never freed**, which is the *same* decision B-4
+   already made and documented, moved from "per prompt" to "per dialog" — four leaks become
+   one, and the leak stops being load-bearing for correctness.
+3. **`program` gains nothing else.** `Program` still owns the model, the update loop and the
+   view; it simply stops being the thing that owns stdin.
+
+**The subtlety the design has to answer, and it is the reason this is a plan rather than a
+patch:** with one channel shared across prompts, a message left over from prompt *N* is
+delivered to prompt *N+1*. Press Enter at `confirm`, and `select` may consume that same
+Enter as its own answer. Two options, and the choice should be made deliberately:
+
+* **Drain on entry (recommended).** Add `Channel.tryPop() ?T` (non-blocking; `pop`'s body
+  with the `while` removed) and have `run` discard whatever is already queued before its
+  first `pop`. This is the smallest change and it makes each `run` start from a clean slate,
+  which matches the user's mental model: a prompt shows, then it waits.
+* Drain at exit. Rejected: it needs `run` to know the next prompt exists, and it drops a
+  keystroke that arrived during the previous frame — a real input, not a stale one.
+
+#### Verification
+
+* **A deterministic regression test, no real stdin.** Add to `cli_test.zig`: build one
+  `Channel(Msg(void))`, push `'y'` and then `'q'`, drive two sequential `Program(QuitModel, void)`
+  `run`s over that channel via `initWithChannel`, and assert the first run consumed the
+  `'y'` (and not the `'q'`) and the second consumed the `'q'`. It must fail against today's
+  code path — that is the control — and it needs no thread, so it cannot hang.
+* **A drain test.** Push two messages, run once with `tryPop`-on-entry, and assert the
+  second message survives for the next `run`.
+* **The existing 328 tests stay green**, including the four `*_prompted` tests, which are
+  unaffected because they drive a single prompt.
+
+#### Out of scope, deliberately
+
+Making the reader **stoppable** (the true fix for the leak) needs the `io` to expose a
+pollable or cancellable read, which B-4 established it does not. This plan does not depend
+on that: one reader per dialog is correct whether or not it can be stopped, and if a
+stoppable read ever appears, `PromptReader` is the single place that gains a stop flag.
 
 ### S-7 · `low` · `.io = undefined` in 14 tests is a live tripwire · **[FIXED, 15 sites]
 
