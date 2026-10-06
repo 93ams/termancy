@@ -3060,7 +3060,7 @@ each must become real or stop claiming to be real.
 | File | What the name promises vs what is there |
 |---|---|
 | `fido2.zig` | The entire "FIDO2" flow is one `print` (`:15`); `challenge` is stored and never used; no CBOR/WebAuthn anywhere. |
-| `sandbox.zig` | `isPathAllowed` (`:21`) is a **prefix** match, so `/data` allows `/database`; `:18` fails open; `allow_network` (`:6`) is never read by anything. |
+| `sandbox.zig` | **FIXED** — `isPathAllowed` was a **prefix** match, so `/data` allowed `/database`. It is containment now (path-component boundaries, both separators), with the sibling cases asserted. Still recorded: an empty list fails open (a decision, not a bug), and `allow_network` is read by nothing. |
 | `cas.zig` | No `get`/`put`/read/write at all — only `computeKey`/`formatKeyHex`. `cache_dir` and `init` are dead fields. |
 | `config_dryrun.zig` | Contains **no validation whatsoever**; the caller must hand it a pre-computed `[]ValidationResult`. 29 lines. |
 | `comptime_config.zig` | Doc says "evaluates or extracts JSON from a programmable Zig config file"; it greps for the sentinel strings `JSON_START`/`JSON_END` in a **single 4096-byte read** (`:25-27`), so a larger file silently truncates to the fallback. |
