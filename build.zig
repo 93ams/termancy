@@ -181,7 +181,39 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(snek_exe);
 
+    // -- Source lint --
+    //
+    // `@import` paths are always spelled with `/`. This is not stylistic: Zig reads `\c` as
+    // an invalid escape, so a backslash path is a compile error whose message points at the
+    // wrong thing. The repository has been bitten once, by its own tooling - a PowerShell
+    // string-replace round-trip rewrote six import paths and the symptom was
+    // `expected '{', found 't'`. `MIGRATION.md` records the incident.
+    //
+    // It is a build dependency rather than a unit test because the property is about source
+    // text and a test artifact cannot read its own tree portably: the binary runs elsewhere,
+    // and `@embedFile` needs one literal path per file it wants to see. So this compiles a
+    // tiny scanner and runs it over the source directories the build already knows about.
+    const lint_exe = b.addExecutable(.{
+        .name = "import-lint",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("build/import_lint.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const lint_run = b.addRunArtifact(lint_exe);
+    lint_run.setName("lint: no backslash import paths");
+    lint_run.addArg(b.pathFromRoot("src"));
+    lint_run.addArg(b.pathFromRoot("build"));
+    const lint_step = b.step("lint", "Check that no @import path uses a backslash");
+    lint_step.dependOn(&lint_run.step);
+
     const test_step = b.step("test", "Run all snek unit tests");
+    // Part of `test`, so a violation cannot reach a commit without failing the same command
+    // a contributor already runs. `test-direct` deliberately does not depend on it: that
+    // step exists to re-run the *same* test artifacts uncached, and this is a different
+    // kind of check.
+    test_step.dependOn(&lint_run.step);
     // `build/targets.zig` opens each artifact through the `--listen=-` test runner,
     // which emits spurious failures on sandboxed Windows hosts. Passing a
     // `direct_step` opens the *same* artifacts a second time as direct child

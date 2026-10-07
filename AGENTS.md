@@ -33,6 +33,19 @@ We strictly mandate **PowerShell 7+ (`pwsh`)** for all development scripts. Powe
 *   `zig fmt` is law. `zig fmt --check` is a required CI gate.
 *   **100 columns maximum**, without exception.
 *   4 spaces, no tabs.
+*   **`@import` paths use `/`, never a backslash.** This is not stylistic: Zig reads `\c` as
+    an invalid escape, so a Windows separator in a path is a compile error whose message
+    points at the wrong line - the observed symptom was `expected '{', found 't'`. The rule
+    was adopted after a bulk edit rewrote six import paths and cost several rounds of
+    misdiagnosis. `zig build lint` (part of `zig build test`) enforces it over `src/` and
+    `build/`; see `build/import_lint.zig`.
+
+### 1.3 Bulk source edits
+*   A bulk text rewrite over source is the riskiest tool in this repository. The incident in
+    `MIGRATION.md` corrupted 23 tokens (`@import` → `iimport`, `@min` → `imin`, and so on)
+    with replacements that were right in intent and wrong in mechanism.
+*   After any bulk edit: **diff the result against `git`** and build, before reading anything
+    else into an error message. Every one of those 23 corruptions was found that way.
 
 ---
 
