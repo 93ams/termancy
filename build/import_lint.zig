@@ -23,8 +23,12 @@ const std = @import("std");
 /// should not bury the first useful line.
 const max_reported = 20;
 
+/// How many unnamed files to list per module before "and N more".
+const max_missing_reported = 8;
+
 var violations: usize = 0;
 var files_scanned: usize = 0;
+var unnamed: usize = 0;
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -39,27 +43,132 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
     const out = &stdout_writer.interface;
 
+    var scanned_any = false;
     for (args[1..]) |arg| {
+        // `--modules=<lib dir>` switches this program to the second check: every `.zig`
+        // file under a module directory must be named by that module's own collector.
+        if (std.mem.startsWith(u8, arg, "--modules=")) {
+            try checkModules(init.io, allocator, arg["--modules=".len..], out);
+            continue;
+        }
         var dir = std.Io.Dir.cwd().openDir(init.io, arg, .{ .iterate = true }) catch |err| {
             try out.print("import-lint: cannot open {s}: {t}\n", .{ arg, err });
             try out.flush();
             return err;
         };
         defer dir.close(init.io);
+        scanned_any = true;
         try scanDir(init.io, allocator, dir, arg, out);
     }
 
-    if (violations == 0) {
-        try out.print("import-lint: {d} files scanned, no backslash imports\n", .{files_scanned});
-        try out.flush();
-        return;
+    // Each mode reports only its own result: printing "0 files scanned" after a modules-only
+    // run reads as though nothing was checked, when 7 modules were.
+    if (scanned_any) {
+        if (violations == 0) {
+            try out.print("import-lint: {d} file(s) scanned, no backslash imports\n", .{files_scanned});
+        } else {
+            try out.print(
+                "import-lint: {d} backslash import(s) in {d} file(s) scanned. Use '/', never '\\'.\n",
+                .{ violations, files_scanned },
+            );
+        }
     }
-    try out.print(
-        "import-lint: {d} backslash import(s) in {d} files scanned. Use '/', never '\\'.\n",
-        .{ violations, files_scanned },
-    );
+    if (unnamed != 0) {
+        try out.print(
+            "import-lint: {d} file(s) are not named by their module's collector, so any tests in them never run. See ROADMAP.md M-2.\n",
+            .{unnamed},
+        );
+    }
     try out.flush();
-    return error.BackslashImport;
+    if (violations != 0 or unnamed != 0) return error.LintFailed;
+}
+
+/// Every `.zig` file in a module directory must appear **by name** in that module's collector
+/// (`root.zig`, or `lib.zig` when the root re-exports through one).
+///
+/// This is the check that makes a silent failure loud. `refAllDecls` is shallow, so a sibling
+/// file that no declaration references contributes no tests - the build stays green and the
+/// suite simply gets smaller. That is exactly how four `tea.Program` tests were lost during
+/// the layout migration, and it is the class `ROADMAP.md` M-2 documents. Naming is the fix;
+/// this verifies the naming happened.
+///
+/// It deliberately does not require a `refAllDecls` call, only the name: `framework/root.zig`
+/// legitimately reaches its files through `pub const i18n = framework.i18n`, and a file may
+/// hold no tests at all. What it catches is a file nobody mentioned.
+fn checkModules(io: std.Io, allocator: std.mem.Allocator, lib_dir: []const u8, out: *std.Io.Writer) !void {
+    var modules = std.Io.Dir.cwd().openDir(io, lib_dir, .{ .iterate = true }) catch |err| {
+        try out.print("import-lint: cannot open {s}: {t}\n", .{ lib_dir, err });
+        return err;
+    };
+    defer modules.close(io);
+
+    var it = modules.iterate();
+    var checked: usize = 0;
+    var modules_with_missing: usize = 0;
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .directory) continue;
+        // Copied out of the iterator: `entry.name` is only valid until the next `next()`, and
+        // the second walk below invalidates it. Reporting a stale name printed `root.zigig`
+        // in the control experiment - the symptom of reusing that slice.
+        const module_name = try allocator.dupe(u8, entry.name);
+        const module_path = try std.fs.path.join(allocator, &.{ lib_dir, module_name });
+        var dir = modules.openDir(io, module_name, .{ .iterate = true }) catch continue;
+        defer dir.close(io);
+
+        // `lib.zig` is the collector when present, otherwise `root.zig` is.
+        var collector_name: []const u8 = "root.zig";
+        if (dir.access(io, "lib.zig", .{})) |_| {
+            collector_name = "lib.zig";
+        } else |_| {}
+
+        const collector_text = dir.readFileAlloc(io, collector_name, allocator, .limited(4 * 1024 * 1024)) catch |err| {
+            try out.print("import-lint: {s} has no {s}: {t}\n", .{ module_path, collector_name, err });
+            unnamed += 1;
+            modules_with_missing += 1;
+            continue;
+        };
+
+        var files = dir.iterate();
+        var missing = std.ArrayList([]const u8).empty;
+        var total: usize = 0;
+        while (try files.next(io)) |file_entry| {
+            if (file_entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, file_entry.name, ".zig")) continue;
+            const name = try allocator.dupe(u8, file_entry.name);
+            const base = name[0 .. name.len - ".zig".len];
+            // The collector itself is the entry point; `lib` is the other collector.
+            if (std.mem.eql(u8, base, "root") or std.mem.eql(u8, base, "lib")) continue;
+            total += 1;
+            if (std.mem.indexOf(u8, collector_text, base) == null) {
+                try missing.append(allocator, name);
+            }
+        }
+        checked += 1;
+        if (missing.items.len != 0) {
+            unnamed += missing.items.len;
+            modules_with_missing += 1;
+            try out.print("{s}/{s} does not name {d} of its {d} files:\n", .{
+                module_path, collector_name, missing.items.len, total,
+            });
+            for (missing.items[0..@min(missing.items.len, max_missing_reported)]) |name| {
+                try out.print("  {s}\n", .{name});
+            }
+            if (missing.items.len > max_missing_reported) {
+                try out.print("  ... and {d} more\n", .{missing.items.len - max_missing_reported});
+            }
+        }
+    }
+    // Guard the guard: a wrong directory would otherwise pass by having nothing to check.
+    if (checked == 0) {
+        try out.print("import-lint: no module directories under {s}\n", .{lib_dir});
+        unnamed += 1;
+    } else if (modules_with_missing == 0) {
+        try out.print("import-lint: {d} module(s) under {s} named every file\n", .{ checked, lib_dir });
+    } else {
+        try out.print("import-lint: {d} of {d} module(s) under {s} are incomplete\n", .{
+            modules_with_missing, checked, lib_dir,
+        });
+    }
 }
 
 fn scanDir(

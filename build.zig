@@ -183,16 +183,18 @@ pub fn build(b: *std.Build) void {
 
     // -- Source lint --
     //
-    // `@import` paths are always spelled with `/`. This is not stylistic: Zig reads `\c` as
-    // an invalid escape, so a backslash path is a compile error whose message points at the
-    // wrong thing. The repository has been bitten once, by its own tooling - a PowerShell
-    // string-replace round-trip rewrote six import paths and the symptom was
-    // `expected '{', found 't'`. `MIGRATION.md` records the incident.
+    // Two checks, both about source text, which is why they are a build step rather than
+    // unit tests: a test artifact cannot read its own tree portably (it runs elsewhere, and
+    // `@embedFile` needs one literal path per file).
     //
-    // It is a build dependency rather than a unit test because the property is about source
-    // text and a test artifact cannot read its own tree portably: the binary runs elsewhere,
-    // and `@embedFile` needs one literal path per file it wants to see. So this compiles a
-    // tiny scanner and runs it over the source directories the build already knows about.
+    // 1. `@import` paths are always spelled with `/`. Zig reads `\c` as an invalid escape,
+    //    so a backslash path is a compile error whose message points at the wrong thing; the
+    //    repository has been bitten once by its own tooling. `MIGRATION.md` records it.
+    //
+    // 2. Every `.zig` file under a module directory is named by that module's collector.
+    //    `refAllDecls` is shallow, so a file nobody references contributes no tests - the
+    //    build stays green and the suite just gets smaller. That is how four `tea.Program`
+    //    tests were lost during the migration; see `ROADMAP.md` M-2.
     const lint_exe = b.addExecutable(.{
         .name = "import-lint",
         .root_module = b.createModule(.{
@@ -202,10 +204,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const lint_run = b.addRunArtifact(lint_exe);
-    lint_run.setName("lint: no backslash import paths");
+    lint_run.setName("lint: import paths and module test collection");
     lint_run.addArg(b.pathFromRoot("src"));
     lint_run.addArg(b.pathFromRoot("build"));
-    const lint_step = b.step("lint", "Check that no @import path uses a backslash");
+    lint_run.addArg(b.fmt("--modules={s}", .{b.pathFromRoot("src/lib")}));
+    const lint_step = b.step("lint", "Check import paths and module test collection");
     lint_step.dependOn(&lint_run.step);
 
     const test_step = b.step("test", "Run all snek unit tests");

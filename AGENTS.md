@@ -278,6 +278,12 @@ are the actual product surface and are each usable and testable on their own.
     fails the test rather than shrinking it. `ROADMAP.md` M-2 records the rule and the
     control experiment.
 
+    **`zig build lint` verifies the naming happened.** For every directory under `src/lib` it
+    reads the module's collector (`lib.zig` when present, otherwise `root.zig`) and fails if any
+    `.zig` file in that directory is not named by it. Adding a file and forgetting to name it
+    now fails the build instead of quietly shrinking the suite - which is the failure mode that
+    lost four `tea.Program` tests during the layout migration.
+
     A hand-rolled deep walk is *possible* (measured on this tree: a guarded recursive
     `walk(framework)` compiles in ~3s with no memory trouble), so the shallow form here is a
     deliberate choice about *intent*, not a workaround. Two reasons it is the right one: the
