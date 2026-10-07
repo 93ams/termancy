@@ -1,6 +1,6 @@
 # Snek Engineering Standard
 
-**The Zig Tree (`src/zig`) Style and Architecture Guide**
+**Zig Style and Architecture Guide**
 
 This document defines *how* Zig code must be written, *where* it must live, and *what* every Snek application must ship. Our design goals, in order of priority, are **Safety, Performance, and Developer Experience** (derived from [TigerStyle](https://github.com/tigerbeetle/tigerbeetle/raw/main/docs/TIGER_STYLE.md)). 
 
@@ -9,6 +9,18 @@ When making technical tradeoffs, resolve conflicts using this hierarchy:
 2. **Clarity** overrides Maintainability and Consistency.
 3. **Maintainability** overrides Consistency.
 4. **Consistency** is the baseline.
+
+### Scope of the paths in this document
+
+This repository is the **single-app extraction** of the upstream Snek monorepo. The upstream
+tree is `src/zig/`, holds several apps (`app/cli`, `app/cfg`, `app/bus`, `app/kvs`, `app/scp`),
+and is where paths like `src/zig/app/<app>/` and `src/zig/lib/` are literal. Here those are
+`src/app/` and `src/lib/`, and there is one app.
+
+Read a path in this document as **relative to the tree root of whichever repository you are
+in**. Where the two differ beyond that prefix, the rule states the exception inline and names
+the file that records it - `SPEC.md` here, the upstream `ROADMAP.md` there. The rules are the
+same rules; only the depth of the prefix changes.
 
 ---
 
@@ -85,6 +97,13 @@ app/cfg/cfg_bin.zig        # Ambiguous, looks like a helper file
 app/cli/cmd/cli_main.zig   # Redundant naming
 ```
 
+**One measured exception, in this repository only.** A Zig module root may not import a file
+outside its own directory. The single app here has to reach both `app/` and `lib/`, so its
+executable's root source file is `src/root.zig` - the only position from which both are inside
+the module - and `pub fn main` necessarily lives there, delegating to `app/main.zig`. The rule
+still holds in spirit: `src/root.zig` is a wire-up and a delegation, and `app/main.zig` holds
+the boot sequence and nothing else. `SPEC.md` records the compile probe.
+
 ### 2.2 The `cmd/` Directory
 The `cmd/` directory holds secondary artifacts (like CLIs or test tools) and subcommand implementations. 
 
@@ -100,6 +119,11 @@ app/bus/cmd/bench/main.zig   # Compiles to `bus-bench`
 app/bus/cmd/bus-bench/main.zig 
 ```
 
+`cmd/` also holds **subcommand implementations** that are not separate binaries - one file per
+subcommand, plus a `root.zig` that names the whole set. A single-binary app therefore still has
+a `cmd/`, and a large command group may take a subdirectory (`cmd/config/`). This repository has
+one binary and uses `cmd/` this way.
+
 ---
 
 ## 3. File & Module Organization
@@ -110,7 +134,40 @@ Any directory exporting a module or shared interface **must** have a `root.zig`.
 ### 3.2 The Residency Rule (App vs. Shared Libraries)
 Code lives with its domain. 
 *   **`app/<app>/lib/`**: For modules that know about a specific app's domain (even if other apps import it). E.g., The RESP protocol codec belongs in `app/kvs/lib/resp`, not a global folder.
-*   **`src/zig/lib/`**: Strictly for domain-agnostic code with **at least two** consumers (e.g., bytes, buffers, TLS, generic data structures).
+*   **`src/zig/lib/`** (here, **`src/lib/`**): Strictly for domain-agnostic code with **at least two** consumers (e.g., bytes, buffers, TLS, generic data structures).
+
+### 3.2a Module Boundaries (`@import` by name)
+
+A Zig module **cannot import a file outside its own directory**. When one module needs
+another, it says so by **module name** - `@import("cfg")`, `@import("render")` - and the
+dependency must be declared in that module's import table in `build.zig`:
+
+```zig
+const cfg_mod = b.addModule("cfg", .{ .root_source_file = b.path("src/lib/cfg/root.zig"), ... });
+const framework_mod = b.addModule("framework", .{
+    .root_source_file = b.path("src/lib/framework/root.zig"),
+    .imports = &.{.{ .name = "cfg", .module = cfg_mod }},
+});
+```
+
+The import table must be **flat and complete for every file in that module**, not just for its
+root: a file deep inside resolves `@import("x")` against its own module's table, so a table
+that is a subset of what a deep file needs fails against the deep file rather than at its
+declaration. Within one module, file imports are ordinary relative paths.
+
+Three consequences worth knowing, each of which has already cost time here:
+
+*   **An undeclared module name does not always error.** A bare `zig test` on a file whose root
+    names a module that was never declared can report **`All 0 tests passed`** - silent
+    under-collection, not a failure. Cross-module test roots must be built through
+    `build.zig` so the tables are present.
+*   **The graph must be acyclic**, and the direction is one-way: nothing in `src/lib` may
+    import the app or the framework itself. `src/app/lib/ops` is the app's own private code,
+    imported by relative path, and it must never reach the framework - a rule the source
+    guard in `src/app/lib/ops/root.zig` enforces, because the compiler no longer can.
+*   **A test inside a generic is collected only where the generic is instantiated.** Splitting
+    modules can silently reduce a suite; the `Program` tests in `src/lib/render` did exactly
+    that, and `MIGRATION.md` records how it was found and fixed.
 
 ### 3.3 File-Level Structs (Avoid Redundant Wrappers)
 If a file's sole subject is a single type, the file *is* the type. Use `const Self = @This();` at the file scope. Do not wrap it in a redundant struct.
@@ -137,8 +194,9 @@ pub const RawTerminal = struct { ... };
 *(Exception: `union(enum)` cannot be declared at file scope and must keep its wrapper).*
 
 ### 3.4 Dependency Management
-*   **Minimal Dependencies:** Avoid third-party dependencies for functionality that can be trivially implemented using the Zig standard library or our shared `src/zig/lib/`.
+*   **Minimal Dependencies:** Avoid third-party dependencies for functionality that can be trivially implemented using the Zig standard library or our shared `src/zig/lib/` (here, `src/lib/`).
 *   **Explicit Pinning:** All external dependencies in `build.zig.zon` must be explicitly pinned with hashes to ensure reproducible builds.
+*   **Declare the edge in `build.zig`.** A module dependency that exists in the source but not in the import table does not exist at all; see 3.2a. `build.zig` is the single place the graph is stated.
 
 ---
 
@@ -151,6 +209,13 @@ A Snek app is a domain with a standard set of artifacts. Every app must explicit
 3. **In-Memory SDK:** A local, in-memory implementation of the SDK interface. **This is not a mock.** It is a real backend verified against the exact same compile-time assertions as the wire client, used for offline operation and fast testing.
 4. **CLI:** A command-line interface driven by the SDK (`cmd/`).
 5. **Test Classes:** End-to-End (`test/`), Fuzzers (`cmd/fuzz/`), and Benchmarks (`cmd/bench/`).
+
+**This repository ships a subset of that set deliberately.** It is the extraction of a CLI
+framework and a configuration framework, not a server domain: there is no wire protocol, so
+there is no SDK client and no in-memory SDK, and those three absences are stated here rather
+than left as missing artifacts. What it does ship is the CLI (`zig-out/bin/snek`), the
+end-to-end class (`src/test/`), and - in place of an SDK - the seven `src/lib` modules, which
+are the actual product surface and are each usable and testable on their own.
 
 ---
 
@@ -193,14 +258,62 @@ A Snek app is a domain with a standard set of artifacts. Every app must explicit
 *   **Relative Paths:** `b.path()` is relative to the *build root* (the directory holding the `build.zig.zon`), not the file calling it.
 
 ### 6.2 Testing
-*   **Recursive Collection:** Take advantage of modern Zig testing by using recursive declaration collection in `root.zig` files. This replaces manual namespace chaining and prevents tests from silently failing to run.
+*   **Test collection is shallow, and this is the version's whole story.** Zig 0.16 has
+    **only** `std.testing.refAllDecls`, which references the *direct* declarations of one
+    type and stops there. `refAllDeclsRecursive` existed in earlier versions and does not
+    exist in 0.16 — there is no deprecated shim, so code that calls it does not compile.
+    Verified against `lib/std/testing.zig` at 1213.
+
+    The consequence is the rule this repository follows: **each module root names its own
+    sub-modules explicitly**, and an omission loses tests *silently* rather than failing the
+    build.
     ```zig
     test {
-        std.testing.refAllDeclsRecursive(@This());
+        std.testing.refAllDecls(lib);            // only `lib`'s own declarations
+        std.testing.refAllDecls(@import("tea.zig"));  // so each one is named
     }
     ```
+*   **Guard the collector.** Because omission is silent, the counts are asserted - the
+    pattern `src/app/lib/ops/root.zig` uses, where the list is also counted so a lost entry
+    fails the test rather than shrinking it. `ROADMAP.md` M-2 records the rule and the
+    control experiment.
+
+    A hand-rolled deep walk is *possible* (measured on this tree: a guarded recursive
+    `walk(framework)` compiles in ~3s with no memory trouble), so the shallow form here is a
+    deliberate choice about *intent*, not a workaround. Two reasons it is the right one: the
+    collected set stays explicitly reviewable rather than "everything transitively
+    reachable", and only naming a namespace makes it clear that someone thought about that
+    namespace's tests. A walk must also guard on `@typeInfo` - recursing into a
+    `*const fn` declaration fails to compile, which is how the first attempt died.
+*   **A test inside a generic is collected only where the generic is instantiated.** A test
+    declared in a generic container that nothing instantiates never runs, and the only
+    symptom is a smaller number. If a generic has tests, reference an instantiation from a
+    collector — see `src/lib/render/root.zig`, where a file-scope model exists purely so the
+    `tea.Program` tests run in that module's artifact.
 *   **Memory Leak Detection:** Always use `std.testing.allocator` in tests. This guarantees that memory leaks within the tested unit are caught automatically during the test run.
 *   **E2E vs. Benchmarks:** 
     *   *End-to-End (`test/`)* suites cross process/socket boundaries. If a test can be a unit test, it should be a unit test.
     *   *Benchmarks (`cmd/bench/`)* are for measuring host-dependent performance and are **deliberately excluded** from `zig build test` to avoid spurious CI failures.
 *   **Fuzzing:** Fuzzing uses deterministic seeded PRNGs with the malformed targets committed directly to source for immediate reproducibility. Do not pull in heavy external fuzzing dependencies.
+
+### 6.3 The gate set
+
+Every change must leave all of these green. They are cheap, and each one exists because
+something got past the others:
+
+```sh
+zig build test                 # the source lint, then every unit test
+zig build test-direct          # the same artifacts, as direct child processes
+zig build test-linux-compile   # compiles every root for x86_64-linux-musl, does not run
+zig fmt --check build.zig build src
+zig build                      # must produce one binary
+```
+
+`test-linux-compile` is not redundant: `test` runs the *host* target, so a branch guarded by
+`builtin.os.tag` is analysed only for this OS. A file can pass every local gate while its
+Linux half references an API that no longer exists — which is how `src/lib/util/mmap.zig`
+rotted. Compiling is the assertion; the suite cannot execute here.
+
+**Report the count.** `zig build test --summary all` prints the total, and a total that moved
+without an explanation is a finding, not noise. It has already caught one silent coverage loss
+in this repository; `MIGRATION.md` has the method that proved it.
