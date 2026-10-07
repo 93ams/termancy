@@ -7,7 +7,7 @@ every phase; the test count is the instrument (baseline **598/599**, 1 skipped).
 
 | Gate | Result |
 |---|---|
-| `zig build test` | 19/19 steps, **592/593** (1 skipped) |
+| `zig build test` | 19/19 steps, **600/601** (1 skipped) |
 | `zig build test-direct` | exit 0 |
 | `zig build test-linux-compile` | 10/10 steps |
 | `zig fmt --check build.zig build src` | exit 0 |
@@ -16,33 +16,36 @@ every phase; the test count is the instrument (baseline **598/599**, 1 skipped).
 `snek --help` lists `repl`, `update`, `config`, `add`, `init`; `snek --version` prints
 `snek v0.1.0`.
 
-Per-root counts: util 32, cfg 125, render 45, platform 106 (+1 skip), secrets 2, interact 18,
-framework 4, app 108, integration 152.
+Per-root counts: util 32, cfg 125, render **53**, platform 106 (+1 skip), secrets 2,
+interact 18, framework 4, app 108, integration 152.
 
-### One open discrepancy, measured rather than smoothed over
+### The coverage gap, found and closed
 
-The baseline was **598 passed / 1 skipped**; this is **592 / 1**. Five tests fewer, and the
-declared-vs-executed reconciliation shows where it is *not*:
+Mid-migration this tree reported **592/593** against a 598 baseline, and `render` declared 49
+tests but executed 45. That was a real regression, not a counting artifact. The method that
+proved it is worth recording:
 
-| Module | declared | executed |
-|---|---|---|
-| cfg | 125 | 125 |
-| util | 32 | 32 |
-| platform | 107 | 107 |
-| interact | 18 | 18 |
-| app | 109 | 108 |
-| integration | 152 | 152 |
-| framework | 4 | 4 |
-| secrets | 2 | 2 |
-| render | 49 | **45** |
+1. **Ran the pre-migration tree from a `git worktree`** at the commit before the file moves
+   and captured per-test names. It showed **eight** `Program` tests: four under
+   `Program(render.tea.QuitModel, void)` and four under
+   `Program(interact.prompt.confirm's model, void)`.
+2. **Ran the new `render` artifact** the same way. It showed **four** — only `QuitModel`'s.
 
-`render` is the only material gap: 47 named + 2 anonymous declared, 45 executed. Those are
-tests declared **inside generic containers** that no instantiation reaches, which is the same
-mechanism `ROADMAP.md` C-6 documents — a test in an uninstantiated generic is never collected.
-It is not yet proven whether those 4 ran before the move (in which case a container that used
-to be instantiated through the old root no longer is) or never ran at all. **This is the one
-thing to check next**, and the method is the one C-6 used: pair each declaration with the
-executed name that serves it. The remaining 1-test difference across `app` is the same shape.
+The cause is the module split's own success. Those tests live inside `tea.Program`, which is a
+**generic**, and a generic's tests are collected only when an instantiation is reached. The
+old single root reached `Program` through `interact.prompt.confirm`'s model as well; `render`
+cannot name `interact` (that edge would be a dependency cycle), so one instantiation was left
+uncollected.
+
+**Fixed by instantiating in the module that owns the generic.** `src/lib/render/root.zig` now
+declares a file-scope `RenderTestModel` and references `tea.Program(RenderTestModel, void)` in
+its test block, so all four run inside `render`'s own artifact — `render` 45 → **53**. The
+other instantiation stays covered by `src/test/cli_test.zig`, which can see both modules by
+design.
+
+**Final total 600/601** against the 598 baseline. The difference is the tests added after the
+baseline was taken (the monotonic-clock test, the `Program.run`/`deinit` tests, the sandbox
+containment tests). No test was lost, and that is now measured rather than assumed.
 
 Nothing else is unresolved: no `@import("cli")`, `@import("app_cfg")` or `@import("zconfig")`
 remains, the tree builds for the shipping target, and `src/lib` imports are by module name
