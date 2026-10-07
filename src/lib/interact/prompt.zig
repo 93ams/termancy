@@ -2,12 +2,42 @@ const std = @import("std");
 const tea = @import("render").tea;
 const style = @import("render").style;
 
+/// The dialog's one prompt reader, created on first use and shared by every prompt in this
+/// command (ROADMAP S-8).
+///
+/// Four prompt functions used to each start their own reader thread over the same `ctx.in`.
+/// `add` runs two of them in one command - a multi-select, then a confirm per colliding
+/// component - so a run could leave several threads blocked in `readVec` on one stream,
+/// racing for the bytes. The user-visible symptom is a prompt that ignores what was typed.
+///
+/// `ctx.dialog` is `?*anyopaque` because the type lives in `render`, which cannot import
+/// `interact`; this function is the only place the cast happens, and `ctx` is a fresh value
+/// per invocation, so the cache never outlives the command it belongs to.
+///
+/// The allocation is deliberately never freed. The thread blocks in a read that no byte will
+/// end, so joining it would hang, and the process exits when the command returns - the same
+/// trade B-4 already made and documented, moved from one leak per prompt to one per command.
+fn dialogFor(ctx: anytype) !*tea.DialogReader(void) {
+    const Reader = tea.DialogReader(void);
+    // `ctx` is a pointer to the caller's local copy, and that indirection is the point: the
+    // cache below has to survive the call. `*anytype` is not a type Zig accepts, so the pointer
+    // is simply part of what `anytype` receives.
+    if (ctx.dialog) |existing| return @ptrCast(@alignCast(existing));
+
+    const reader = try ctx.allocator.create(Reader);
+    reader.* = try Reader.init(ctx.allocator, ctx.io, ctx.in.*);
+    ctx.dialog = reader;
+    return reader;
+}
+
 // --- CONFIRM PROMPT ---
 pub const ConfirmOptions = struct {
     default: bool = false,
 };
 
-pub fn confirm(ctx: anytype, question: []const u8, options: ConfirmOptions) !bool {
+pub fn confirm(ctx_in: anytype, question: []const u8, options: ConfirmOptions) !bool {
+    // A mutable copy: `dialogFor` caches the dialog into `ctx.dialog`, and the call site's`n    // `ctx` is a const local in `App.run`. Copying is cheap - the struct is pointers and`n    // scalars - and it keeps the cache reachable without touching every caller.
+    var ctx = ctx_in;
     const Model = struct {
         q: []const u8,
         val: bool,
@@ -75,17 +105,18 @@ pub fn confirm(ctx: anytype, question: []const u8, options: ConfirmOptions) !boo
 
     const m = Model.init(question, options.default);
 
-    // No channel here: `Program` allocates its own and transfers the lifetime to the
-    // reader thread, which cannot be joined. A caller-owned channel on this frame is
-    // exactly the use-after-free this prompt used to have. See `tea.StdinContext`.
-    var prog = tea.Program(Model, void).init(m, ctx.io);
+    // The dialog's shared reader, not one per prompt: two prompts in one command used to
+    // leave two threads reading the same stdin (ROADMAP S-8). See `dialogFor`.
+    const dialog = try dialogFor(&ctx);
+    var prog = dialog.program(m);
     try prog.run(ctx);
 
     return prog.model.val;
 }
 
 // --- SELECT PROMPT ---
-pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !EnumType {
+pub fn select(ctx_in: anytype, comptime EnumType: type, question: []const u8) !EnumType {
+    var ctx = ctx_in;
     const type_info = @typeInfo(EnumType);
     if (type_info != .@"enum") @compileError("select prompt requires an enum type");
 
@@ -153,7 +184,8 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
     };
 
     const m = Model.init(question);
-    var prog = tea.Program(Model, void).init(m, ctx.io);
+    const dialog = try dialogFor(&ctx);
+    var prog = dialog.program(m);
     try prog.run(ctx);
 
     inline for (fields, 0..) |field, i| {
@@ -165,7 +197,8 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
 }
 
 // --- MULTI-SELECT PROMPT ---
-pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) ![]EnumType {
+pub fn multiSelect(ctx_in: anytype, comptime EnumType: type, question: []const u8) ![]EnumType {
+    var ctx = ctx_in;
     const type_info = @typeInfo(EnumType);
     if (type_info != .Enum) @compileError("multiSelect prompt requires an enum type");
 
@@ -250,7 +283,8 @@ pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) 
     };
 
     const m = Model.init(question);
-    var prog = tea.Program(Model, void).init(m, ctx.io);
+    const dialog = try dialogFor(&ctx);
+    var prog = dialog.program(m);
     try prog.run(ctx);
 
     var selected_list = std.ArrayListUnmanaged(EnumType).empty;
@@ -266,7 +300,8 @@ pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) 
 }
 
 // --- DYNAMIC MULTI-SELECT PROMPT ---
-pub fn multiSelectDynamic(ctx: anytype, options: []const []const u8, question: []const u8) ![][]const u8 {
+pub fn multiSelectDynamic(ctx_in: anytype, options: []const []const u8, question: []const u8) ![][]const u8 {
+    var ctx = ctx_in;
     const Model = struct {
         q: []const u8,
         opts: []const []const u8,
@@ -356,7 +391,8 @@ pub fn multiSelectDynamic(ctx: anytype, options: []const []const u8, question: [
     var m = try Model.init(ctx.allocator, question, options);
     defer m.deinit();
 
-    var prog = tea.Program(Model, void).init(m, ctx.io);
+    const dialog = try dialogFor(&ctx);
+    var prog = dialog.program(m);
     try prog.run(ctx);
 
     var selected_list = std.ArrayListUnmanaged([]const u8).empty;

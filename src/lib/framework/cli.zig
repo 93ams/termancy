@@ -446,6 +446,20 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             is_tty: bool = false,
             color_enabled: bool = false,
             output_format: OutputFormat = .text,
+            /// The one prompt reader this command's dialog shares, created on first use.
+            ///
+            /// Opaque here on purpose: the type lives in `interact`, and naming it would make
+            /// `framework` depend on a module that already depends on `framework`. `prompt.zig`
+            /// owns the cast, and these are the only two files that touch it.
+            ///
+            /// It exists because every prompt used to start its own reader thread over the
+            /// same stdin (ROADMAP S-8). A command that asks two questions left two threads
+            /// blocked on one stream, racing for the bytes - `add` does exactly that, once per
+            /// component. One dialog, one reader, one thread.
+            ///
+            /// Never freed while the process lives: the reader blocks in a stdin read no byte
+            /// will end, so it cannot be joined. See `tea.Program.DialogReader`.
+            dialog: ?*anyopaque = null,
 
             /// Whether this invocation is a dry run: report what would happen, change
             /// nothing.

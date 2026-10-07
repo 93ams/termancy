@@ -171,7 +171,7 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
         allocator: std.mem.Allocator,
         /// The reader thread `run` started, once it has started one. `deinit` joins it
         /// before freeing anything; `null` means `run` never got that far.
-        reader: ?Reader = null,
+        reader: ?ReaderOf(CustomMsgT) = null,
         /// The queue `run` consumes. `null` means "start a reader and make one", which is
         /// `init`'s behaviour; non-null means the caller owns it (see `initWithChannel`).
         channel: ?*Channel(MsgT) = null,
@@ -179,6 +179,10 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
         /// skipped. See `initWithChannel` for why this is the caller's number rather than
         /// something `run` can compute.
         skip: usize = 0,
+        /// Called as `run` finishes with this run's channel and how many messages that run
+        /// left queued. See `onRunEnd` for why the caller cannot take this measurement itself.
+        run_end_ctx: ?*anyopaque = null,
+        run_end_hook: ?*const fn (*anyopaque, *Channel(MsgT), usize) void = null,
 
         pub fn init(model: ModelT, io: std.Io) Self {
             return .{ .model = model, .io = io, .allocator = default_allocator };
@@ -222,6 +226,37 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             };
         }
 
+        /// Registers a function to run as `run` finishes, handed this run's channel and the
+        /// number of messages that run left queued.
+        ///
+        /// This exists to close the accounting gap `initWithChannel` left open (ROADMAP S-8).
+        /// A dialog shares one channel across several prompts, and the `skip` for prompt N+1
+        /// is "messages that were queued during prompt N and that prompt did not consume".
+        /// The prompt layer cannot measure that itself, and the reason is precise:
+        ///
+        /// * Measured at the *start* of prompt N+1, the count is wrong, because the orphaned
+        ///   reader thread may have queued messages in the interim. Those belong to N+1 and
+        ///   counting them as stale silently discards the user's input - the same mistake
+        ///   that made the first version of `skip` hang.
+        /// * Measured at the *end* of prompt N, inside `run`, the queue is settled: no one is
+        ///   waiting on it, and anything left in it provably arrived while prompt N was on
+        ///   screen.
+        ///
+        /// So the measurement has to happen here, at the moment of transition. The hook is
+        /// called on every exit path, including an error, so a run that fails does not leave
+        /// the next prompt with an unaccounted queue.
+        ///
+        /// `context` is the caller's own pointer - a function pointer alone cannot carry the
+        /// dialog to record the count into, and a channel cannot name its owner.
+        pub fn onRunEnd(
+            self: *Self,
+            context: *anyopaque,
+            hook: *const fn (*anyopaque, *Channel(MsgT), usize) void,
+        ) void {
+            self.run_end_ctx = context;
+            self.run_end_hook = hook;
+        }
+
         /// Releases what `run` allocated, **after** joining the reader thread.
         ///
         /// This is the half of B-4 that was missing. Production does not call it: the
@@ -248,109 +283,10 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             self.allocator.destroy(reader.ctx);
         }
 
-        /// What the reader thread is allowed to touch, and for how long.
-        ///
-        /// Ownership rule: the thread owns nothing that its spawner can free. The context
-        /// and the channel it points at are allocated by `startReader` and are never
-        /// released, because a thread blocked in a stdin read cannot observe a stop flag
-        /// - the flag is only reachable between reads, and the read blocks until a byte
-        /// arrives, which on the quit path may be never. Hence the other half of the
-        /// rule: whoever starts a reader thread must keep the context and channel alive
-        /// for the thread, and must not free them while it runs. `startReader` takes the
-        /// allocator, so a test can use `std.testing.allocator` and assert the exact
-        /// inverse on a source that reaches end of stream: there the thread does stop on
-        /// its own, and there joining it before `free` is what proves nothing was freed
-        /// early. `run` uses `std.heap.page_allocator` and deliberately never frees.
-        ///
-        /// This is not hypothetical. The context used to be a `run` local while the
-        /// thread held its address, and `prompt.zig` `defer`red `channel.deinit()` on the
-        /// quit path while the thread was still pushing into that queue.
-        const StdinContext = struct {
-            /// A copy of the input interface. The thread reads the byte source the
-            /// interface points at; the interface itself is owned here, so it cannot be
-            /// freed out from under the reader either.
-            in: std.Io.Reader,
-            channel: *Channel(MsgT),
-        };
-
-        /// Reads the input source into `ctx_ptr.channel` until end of stream or a read
-        /// error, then returns.
-        ///
-        /// The thread's lifetime is the source's lifetime. Nothing here may free the
-        /// context, the channel, or the input's backing buffer: see the ownership rule on
-        /// `StdinContext`. The loop is bounded by the source: a source that reaches end of
-        /// stream returns zero bytes, which ends the loop, which lets an owner that owns a
-        /// finite source join this thread and then free in either order.
-        fn stdinReaderThread(ctx_ptr: *StdinContext) void {
-            // No assertion on `ctx_ptr.channel.mutex` here, and that is deliberate. This
-            // used to assert the queue's lock was `.unlocked` at thread start, which is
-            // not an invariant: `Channel.pop` holds that lock for the whole time it is
-            // blocked in `cond.wait`, so the main loop is *normally* holding it when this
-            // thread starts. The assert was a latent flake that crashed the suite
-            // intermittently (`reached unreachable code` in `std.debug.assert`) the moment
-            // the surrounding timing shifted - a scheduling-dependent failure, which is
-            // the worst kind to leave in a test path.
-            //
-            // The real invariant is checked by the spawner, where it can be observed
-            // without racing another thread: `startReader` asserts the channel it hands
-            // over is freshly created and empty. A reader that wanted to assert about the
-            // lock would have to hold it.
-            std.debug.assert(ctx_ptr.in.buffer.len > 0);
-            var buf: [16]u8 = undefined;
-            while (true) {
-                var vecs = [_][]u8{buf[0..]};
-                const read_bytes = ctx_ptr.in.readVec(&vecs) catch return;
-                if (read_bytes == 0) return;
-
-                const slice = buf[0..read_bytes];
-                const key_msg = parseAnsi(slice);
-
-                ctx_ptr.channel.push(.{ .key = key_msg }) catch return;
-            }
-        }
-
-        /// Allocates the reader's context and channel together and starts the reader
-        /// thread, returning the thread with the context it reads through.
-        ///
-        /// The caller owns both allocations through `Reader.ctx` and must keep them alive
-        /// for as long as the thread runs (see `StdinContext`). `Reader.ctx` is returned so
-        /// an owner with a finite source can join the thread and then release the channel,
-        /// in that order. Spawning only fails on `error.ThreadQuota`/`error.SystemResources`,
-        /// in which case the storage is freed again - there is no thread to outlive it.
-        const Reader = struct {
-            thread: std.Thread,
-            ctx: *StdinContext,
-        };
-
-        fn startReader(
-            allocator: std.mem.Allocator,
-            io: std.Io,
-            in: std.Io.Reader,
-        ) !Reader {
-            // The channel starts empty: it is the reader's only queue, so a non-empty one
-            // would mean another producer is already pushing into it.
-            const channel = try allocator.create(Channel(MsgT));
-            errdefer allocator.destroy(channel);
-            channel.* = Channel(MsgT).init(allocator, io);
-            std.debug.assert(channel.queue.items.len == 0);
-
-            const ctx = try allocator.create(StdinContext);
-            errdefer allocator.destroy(ctx);
-            ctx.* = .{ .in = in, .channel = channel };
-            // The reader pushes into the very channel this context carries, so the two
-            // allocations the caller must keep alive are the two the thread reaches.
-            std.debug.assert(ctx.channel == channel);
-            std.debug.assert(ctx.in.buffer.ptr == in.buffer.ptr);
-
-            const thread = try std.Thread.spawn(.{}, stdinReaderThread, .{ctx});
-            return .{ .thread = thread, .ctx = ctx };
-        }
-
         const ExecContext = struct {
             func: *const fn () CustomMsgT,
             channel: *Channel(MsgT),
         };
-
         fn execThread(ctx_ptr: *ExecContext) void {
             const result_msg = ctx_ptr.func();
             ctx_ptr.channel.push(.{ .custom = result_msg }) catch return;
@@ -381,7 +317,7 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             // then `run` starts nothing and `self.reader` stays null. That is what keeps one
             // dialog (four prompts) on one thread instead of four racing over one stdin.
             if (self.channel == null) {
-                const reader = try startReader(self.allocator, self.io, ctx.in.*);
+                const reader = try startReader(CustomMsgT, self.allocator, self.io, ctx.in.*);
                 // Recorded before anything that can fail, so `deinit` can always reach them.
                 // `deinit` joining the thread is what keeps this safe: the thread is gone
                 // before either allocation is released.
@@ -389,6 +325,18 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
                 self.channel = reader.ctx.channel;
             }
             const channel = self.channel.?;
+            // Registered before the loop so a run that fails part-way still accounts for what
+            // it left queued; see `onRunEnd`. A caller that registered no hook pays nothing.
+            //
+            // This `errdefer` is not redundant with the `defer` at the end of the loop: a
+            // `defer` nested in an `if` block would fire as that block ended, before the loop
+            // ever ran, and the error path never reaches the end of the loop.
+            const run_end_ctx = self.run_end_ctx;
+            const run_end_hook = self.run_end_hook;
+            // Unconditional `defer` with the null check inside it. `defer` and `errdefer`
+            // attach to the *block* they appear in, so a conditional or nested one silently
+            // attaches to the wrong scope and never fires for the function.
+            defer if (run_end_hook) |hook| hook(run_end_ctx.?, channel, channel.queuedCount());
             // A reader `run` started needs a buffer to read into, and asserts the same
             // precondition from its own side before it reads anything. A caller-supplied
             // channel may have no reader at all (a test pushing messages directly), which is
@@ -480,7 +428,7 @@ pub fn Program(comptime ModelT: type, comptime CustomMsgT: type) type {
             var source_bytes: [1]u8 = .{'h'};
             const source = std.Io.Reader.fixed(&source_bytes);
 
-            const reader = try startReader(testing.allocator, testing.io, source);
+            const reader = try startReader(void, testing.allocator, testing.io, source);
             reader.thread.join(); // Ends at end of stream; see the source above.
 
             const message = reader.ctx.channel.pop();
@@ -676,6 +624,63 @@ pub const QuitModel = struct {
     }
 };
 
+test "a dialog's two prompts share one channel, and the second skips only what the first left" {
+    // The regression this pins (ROADMAP S-8): each prompt used to start its **own** reader
+    // over the same stdin, so a command asking two questions left two threads racing for the
+    // same bytes. `add` does exactly that - a multi-select, then a confirm per colliding
+    // component.
+    //
+    // The channel here is driven directly, so there is no thread and nothing can hang.
+    const testing = std.testing;
+    const Dialog = DialogReader(void);
+
+    // A source that reaches end of stream immediately: `init` starts the reader, the reader
+    // returns on its own, and then `deinit` can join it. Nothing here can block.
+    //
+    // An empty fixed reader returns zero bytes forever, so the reader thread exits at once
+    // without pushing anything and `deinit` can join it. Nothing here can block.
+    var dialog = try Dialog.init(testing.allocator, testing.io, std.Io.Reader.fixed(&[_]u8{}));
+    defer dialog.deinit();
+
+    // Both prompts in the dialog must be handed the *same* channel. That is the property the
+    // old code broke: two `Program.init` calls produced two channels and two reader threads.
+    var first = dialog.program(QuitModel{});
+    const second = dialog.program(QuitModel{});
+    try testing.expectEqual(dialog.channel(), first.channel.?);
+    try testing.expectEqual(first.channel.?, second.channel.?);
+    try testing.expectEqual(@as(usize, 0), dialog.pendingSkip());
+
+    var out1_buf: [128]u8 = undefined;
+    var out1 = std.Io.Writer.fixed(&out1_buf);
+    const ctx1 = .{ .in = &std.Io.Reader.fixed(&[_]u8{}), .out = &out1 };
+
+    // The first prompt answers and quits, leaving nothing behind.
+    try dialog.channel().push(.{ .key = .{ .key = .char, .char = 'q' } });
+    try first.run(ctx1);
+    try testing.expectEqual(@as(u8, 'q'), first.model.seen);
+    // `noteRunEnd` ran, and it measured an empty queue.
+    try testing.expectEqual(@as(usize, 0), dialog.pendingSkip());
+
+    // Now the case the accounting exists for: a second question, with one message the first
+    // prompt never consumed. The first prompt leaves it queued, so `skipped` must record it
+    // and the next program must be built with that count - not zero, and not guessed later.
+    try dialog.channel().push(.{ .key = .{ .key = .char, .char = 'x' } });
+    var out2_buf: [128]u8 = undefined;
+    var out2 = std.Io.Writer.fixed(&out2_buf);
+    const ctx2 = .{ .in = &std.Io.Reader.fixed(&[_]u8{}), .out = &out2 };
+
+    var third = dialog.program(QuitModel{});
+    // Measured before this prompt ran, so the leftover is still queued and is counted.
+    try testing.expectEqual(@as(usize, 0), dialog.pendingSkip());
+    try testing.expectEqual(@as(usize, 1), dialog.channel().queuedCount());
+
+    // One run consumes the leftover (the count is measured at its *end*), leaving the queue
+    // empty and `skipped` accurate for whoever asks next.
+    try dialog.channel().push(.{ .key = .{ .key = .char, .char = 'q' } });
+    try third.run(ctx2);
+    try testing.expectEqual(@as(usize, 0), dialog.pendingSkip());
+}
+
 pub fn visualWidth(str: []const u8) usize {
     var width: usize = 0;
     var in_escape = false;
@@ -827,4 +832,229 @@ pub fn getTerminalSize() TerminalSize {
     }
     // Default fallback
     return .{ .width = 80, .height = 24 };
+}
+
+/// The reader thread's storage, and the function that starts it.
+///
+/// At file scope rather than inside `Program`, because `DialogReader` needs the same type and
+/// `Program` does not own stdin any more (ROADMAP S-8): a dialog does.
+fn ReaderOf(comptime CustomMsgT: type) type {
+    return struct {
+        thread: std.Thread,
+        ctx: *StdinContextOf(CustomMsgT),
+    };
+}
+
+/// Allocates the reader's context and channel together and starts the reader thread, returning
+/// the thread with the context it reads through.
+///
+/// The caller owns both allocations through `Reader.ctx` and must keep them alive for as long
+/// as the thread runs (see `StdinContext`). `Reader.ctx` is returned so an owner with a finite
+/// source can join the thread and then release the channel, in that order. Spawning only fails
+/// on `error.ThreadQuota`/`error.SystemResources`, in which case the storage is freed again -
+/// there is no thread to outlive it.
+fn startReader(
+    comptime CustomMsgT: type,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    in: std.Io.Reader,
+) !ReaderOf(CustomMsgT) {
+    const MsgT = Msg(CustomMsgT);
+    // The channel starts empty: it is the reader's only queue, so a non-empty one would mean
+    // another producer is already pushing into it.
+    const channel = try allocator.create(Channel(MsgT));
+    errdefer allocator.destroy(channel);
+    channel.* = Channel(MsgT).init(allocator, io);
+    std.debug.assert(channel.queue.items.len == 0);
+
+    const Context = StdinContextOf(CustomMsgT);
+    const ctx = try allocator.create(Context);
+    errdefer allocator.destroy(ctx);
+    ctx.* = .{ .in = in, .channel = channel };
+    // The reader pushes into the very channel this context carries, so the two allocations the
+    // caller must keep alive are the two the thread reaches.
+    std.debug.assert(ctx.channel == channel);
+    std.debug.assert(ctx.in.buffer.ptr == in.buffer.ptr);
+
+    const thread = try std.Thread.spawn(.{}, stdinReaderThreadFor(CustomMsgT), .{ctx});
+    return .{ .thread = thread, .ctx = ctx };
+}
+
+/// One reader thread and one channel, shared by every prompt in a dialog (ROADMAP S-8).
+///
+/// A command that asks two questions used to start **two** reader threads over the same stdin,
+/// because each `Program.run` started its own. Both block in `readVec` on one stream and race
+/// for the bytes, so the second prompt could see a partial answer or the first could consume
+/// what the second was owed. The symptom a user reports is a prompt that appears to ignore what
+/// they typed. `add` does exactly this: a multi-select, then a confirm once per colliding
+/// component.
+///
+/// This type makes the reader's lifetime the **dialog's**, not the prompt's: create it once,
+/// get one `Program` per question from `program`, and drop it when the last answer is in.
+/// `Program` then never owns stdin.
+///
+/// The `skip` each program needs is measured, not guessed. `skipped` holds the number of
+/// messages the previous prompt left queued, computed by `noteRunEnd` at the exact moment that
+/// prompt's `run` finished - see `Program.onRunEnd` for why the measurement cannot be taken
+/// later.
+///
+/// Not freed on the quit path, deliberately and for the same reason B-4 gives: a thread blocked
+/// in a read cannot be joined without a stop signal that `std.Io` does not offer, and the
+/// process exits when the command returns. `deinit` exists for a caller whose source is finite
+/// - a test - where joining is both possible and the thing that proves nothing was freed early.
+pub fn DialogReader(comptime CustomMsgT: type) type {
+    return struct {
+        const Self = @This();
+        const MsgT = Msg(CustomMsgT);
+
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        reader: ReaderOf(CustomMsgT),
+        /// Messages this dialog has queued but no prompt has consumed. Written by `noteRunEnd`
+        /// and read by `program`, both on the calling thread; the reader thread never touches
+        /// it, so no lock is needed.
+        skipped: usize = 0,
+        /// Set once a caller has joined and freed, so a second `deinit` is a no-op.
+        joined: bool = false,
+
+        /// Starts the dialog's single reader over `in`.
+        pub fn init(allocator: std.mem.Allocator, io: std.Io, in: std.Io.Reader) !Self {
+            return .{
+                .allocator = allocator,
+                .io = io,
+                .reader = try startReader(CustomMsgT, allocator, io, in),
+            };
+        }
+
+        /// The channel every prompt in this dialog shares.
+        pub fn channel(self: *Self) *Channel(MsgT) {
+            return self.reader.ctx.channel;
+        }
+
+        /// How many messages the previous prompt left queued.
+        pub fn pendingSkip(self: *Self) usize {
+            return self.skipped;
+        }
+
+        /// A `Program` for the next question, carrying this dialog's channel and the `skip`
+        /// that a program created at this moment needs.
+        ///
+        /// Generic over the model because each prompt declares its own: the four in `prompt.zig`
+        /// have four distinct anonymous model types, and all four speak the same
+        /// `Msg(CustomMsgT)` - which is what lets one channel serve them all.
+        pub fn program(self: *Self, model: anytype) Program(@TypeOf(model), CustomMsgT) {
+            const ModelT = @TypeOf(model);
+            var prog = Program(ModelT, CustomMsgT).initWithChannel(
+                model,
+                self.io,
+                self.allocator,
+                self.reader.ctx.channel,
+                self.skipped,
+            );
+            prog.onRunEnd(self, noteRunEnd);
+            return prog;
+        }
+
+        /// The `onRunEnd` hook: records what this prompt left queued, so the next `program`
+        /// call can tell which messages are not its own.
+        ///
+        /// `context` is the dialog that registered it, which is what lets a plain function
+        /// pointer reach per-dialog state.
+        fn noteRunEnd(context: *anyopaque, ended_channel: *Channel(MsgT), queued: usize) void {
+            const self: *Self = @ptrCast(@alignCast(context));
+            std.debug.assert(ended_channel == self.reader.ctx.channel);
+            // Read here rather than at the next prompt's start, because a message queued in
+            // between belongs to the next prompt and must not be counted as stale.
+            self.skipped = queued;
+        }
+
+        /// Joins the reader and frees what `init` allocated. Safe only when the source is
+        /// finite; see the doc comment above. Idempotent.
+        pub fn deinit(self: *Self) void {
+            if (self.joined) return;
+            self.joined = true;
+            self.reader.thread.join();
+            self.reader.ctx.channel.deinit();
+            self.allocator.destroy(self.reader.ctx.channel);
+            self.allocator.destroy(self.reader.ctx);
+        }
+    };
+}
+
+/// What the reader thread is allowed to touch, and for how long.
+///
+/// Ownership rule: the thread owns nothing that its spawner can free. The context and the
+/// channel it points at are allocated by `startReader` and are never released, because a thread
+/// blocked in a stdin read cannot observe a stop flag - the flag is only reachable between
+/// reads, and the read blocks until a byte arrives, which on the quit path may be never. Hence
+/// the other half of the rule: whoever starts a reader thread must keep the context and channel
+/// alive for the thread, and must not free them while it runs. `startReader` takes the
+/// allocator, so a test can use `std.testing.allocator` and assert the exact inverse on a
+/// source that reaches end of stream: there the thread does stop on its own, and there joining
+/// it before `free` is what proves nothing was freed early. `run` uses
+/// `std.heap.page_allocator` and deliberately never frees.
+///
+/// This is not hypothetical. The context used to be a `run` local while the thread held its
+/// address, and `prompt.zig` `defer`red `channel.deinit()` on the quit path while the thread
+/// was still pushing into that queue.
+/// `StdinContext` for a dialog that speaks a custom message type as well as keys.
+///
+/// A factory rather than one struct with a `CustomMsgT` parameter, because a plain `struct`
+/// cannot take a type parameter: only a function can. `prompt.zig` uses the `void`
+/// instantiation, which is what the four prompts speak.
+fn StdinContextOf(comptime CustomMsgT: type) type {
+    return struct {
+        /// A copy of the input interface. The thread reads the byte source the interface
+        /// points at; the interface itself is owned here, so it cannot be freed out from under
+        /// the reader either.
+        in: std.Io.Reader,
+        channel: *Channel(Msg(CustomMsgT)),
+    };
+}
+
+/// Reads the input source into `ctx_ptr.channel` until end of stream or a read error, then
+/// returns.
+///
+/// The thread's lifetime is the source's lifetime. Nothing here may free the context, the
+/// channel, or the input's backing buffer: see the ownership rule above. The loop is bounded by
+/// the source: a source that reaches end of stream returns zero bytes, which ends the loop,
+/// which lets an owner that owns a finite source join this thread and then free in either
+/// order.
+///
+/// A factory for the same reason `StdinContextOf` is one: the thread's parameter type depends
+/// on the message type, and a non-generic function cannot name it.
+fn stdinReaderThreadFor(comptime CustomMsgT: type) fn (*StdinContextOf(CustomMsgT)) void {
+    return struct {
+        fn run(ctx_ptr: *StdinContextOf(CustomMsgT)) void {
+            // No assertion on `ctx_ptr.channel.mutex` here, and that is deliberate. This used
+            // to assert the queue's lock was `.unlocked` at thread start, which is not an
+            // invariant: `Channel.pop` holds that lock for the whole time it is blocked in
+            // `cond.wait`, so the main loop is *normally* holding it when this thread starts.
+            // The assert was a latent flake that crashed the suite intermittently (`reached
+            // unreachable code` in `std.debug.assert`) the moment the surrounding timing
+            // shifted - a scheduling-dependent failure, which is the worst kind to leave in a
+            // test path.
+            //
+            // The real invariant is checked by the spawner, where it can be observed without
+            // racing another thread: `startReader` asserts the channel it hands over is freshly
+            // created and empty.
+            //
+            // A second assert used to live here, `in.buffer.len > 0`, and it was removed for
+            // the same reason as the lock one: it is not an invariant. An empty fixed reader
+            // returns zero bytes forever, which makes it a legitimate - and, for a test that
+            // must not block, the *only clean* - way to drive a dialog with no thread. The
+            // assert turned that case into a crashed reader thread instead of a passing test.
+            var buf: [16]u8 = undefined;
+            while (true) {
+                var vecs = [_][]u8{buf[0..]};
+                const read_bytes = ctx_ptr.in.readVec(&vecs) catch return;
+                if (read_bytes == 0) return;
+
+                const slice = buf[0..read_bytes];
+                const key_msg = parseAnsi(slice);
+
+                ctx_ptr.channel.push(.{ .key = key_msg }) catch return;
+            }
+        }
+    }.run;
 }

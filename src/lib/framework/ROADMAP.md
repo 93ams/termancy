@@ -1577,7 +1577,7 @@ a semantic drift hides, because the tests still pass either way. If it is done, 
 `Rig` migration in slices of a few tests with the suite green between each, and re-measure
 the saving rather than believing "~200 lines".
 
-### S-8 · `medium` · Sequential prompts race each other for stdin · **[tea.zig half DONE; `prompt.zig` half needs a design decision]**
+### S-8 · `medium` · Sequential prompts race each other for stdin · **[DONE - one reader per dialog, `skip` measured]**
 
 Found by reading `prompt.zig` while measuring B-4, and recorded rather than fixed: it is a
 design question, not an edit.
@@ -1669,18 +1669,64 @@ fixable now exists and is tested.
 
 #### What the remaining work needs
 
-The `PromptReader` itself is straightforward (one channel, one `StdinContext`, one thread,
-threaded to the four prompt functions the way `ctx` already is, never freed — the same
-decision B-4 made, moved from per prompt to per dialog). The open question is purely the
-stale-message accounting above, and it should be settled before the wiring lands, because
-getting it wrong reintroduces exactly the hang this session already paid for twice.
+**DONE.** The stale-message accounting was closed by *measuring* it rather than by adding
+sequence numbers or dropping type-ahead, and the mechanism the original plan did not consider
+is `Channel.queuedCount()`, which already existed.
+
+The insight that makes it work is **when** the measurement is taken. Both of the recorded
+options assumed the prompt layer had to know the number *before* the next prompt started:
+
+* Measured at the *start* of prompt N+1, the count is wrong: the orphaned reader may have
+  queued messages in the interim, those belong to N+1, and counting them as stale silently
+  discards the user's input - the same mistake that made the first version of `skip` hang.
+* Measured at the *end* of prompt N, inside `run`, the queue is settled: anything left in it
+  provably arrived while prompt N was on screen.
+
+So `Program.onRunEnd(context, hook)` fires the hook as `run` finishes, on every exit path, and
+the hook records `channel.queuedCount()` into the dialog. The next `program` call is built with
+that number. No `Msg` change, and no keystroke lost.
+
+What landed:
+
+* `Program.onRunEnd` - a `*anyopaque` context plus a `fn (ctx, channel, queued)` hook. The
+  context pointer is required, not incidental: a bare function pointer cannot reach per-dialog
+  state, and a channel cannot name its owner.
+* `tea.DialogReader(CustomMsgT)` - one channel, one `StdinContext`, one reader thread, created
+  once per dialog. `program(model)` hands out a `Program` over that channel with the measured
+  `skip`. Generic over `CustomMsgT` and its `program` generic over the model, because the four
+  prompts have four distinct anonymous model types that all speak `Msg(void)`.
+* `Reader`, `StdinContext` and the reader thread moved to file scope as `ReaderOf` /
+  `StdinContextOf` / `stdinReaderThreadFor` factories. They cannot stay nested in `Program`:
+  they do not depend on `ModelT`, and `DialogReader` needs them for a different model per
+  prompt.
+* `Ctx.dialog: ?*anyopaque` - the cache. `?*anyopaque` because the type lives in `render`,
+  which cannot import `interact`; `prompt.zig` is the only place it is cast. The four prompt
+  functions take a mutable local copy of `ctx` and pass its address, because the call site's
+  `ctx` is a `const` local in `App.run` and the cache has to outlive the call.
+* `prompt.zig`'s four functions reach the shared dialog through `dialogFor(&ctx)` instead of
+  each calling `Program.init`. Four reader threads per dialog became one.
+
+**The bug was real, not theoretical.** `add` runs `multiSelectDynamic` and then `confirm` once
+per colliding component, so a single command could leave N+1 threads blocked on one stdin.
+
+**Verified by a test that cannot hang:** `tea` gains a test that drives the channel directly
+over a dialog whose reader gets an empty source. It asserts both programs share one channel,
+that `skipped` is zero when nothing is left, that a leftover message is still counted as
+pending *before* the next run, and that `skipped` is correct afterwards. No thread blocks,
+because an empty fixed reader returns zero bytes forever.
+
+**Not verified, honestly:** the *interactive* path. Reaching a prompt needs a TTY - `add`'s
+multi-select requires raw mode, and `update` fails at its network fetch before it prompts - so
+the end-to-end behaviour under a real terminal was not exercised here. The unit test covers the
+accounting and the single-channel property, which is the whole of the change; what is untested
+is the terminal itself, not the fix.
 
 #### Out of scope, deliberately
 
 Making the reader **stoppable** (the true fix for the leak) needs the `io` to expose a
 pollable or cancellable read, which B-4 established it does not. This plan does not depend
 on that: one reader per dialog is correct whether or not it can be stopped, and if a
-stoppable read ever appears, `PromptReader` is the single place that gains a stop flag.
+stoppable read ever appears, `DialogReader` is the single place that gains a stop flag.
 
 ### S-7 · `low` · `.io = undefined` in 14 tests is a live tripwire · **[FIXED, 15 sites]
 
