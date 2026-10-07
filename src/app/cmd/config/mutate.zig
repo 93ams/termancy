@@ -5,7 +5,7 @@
 //! The specification's `set` says it "mutates a configuration file without destroying
 //! comments or indentation". The previous implementation could not honour that: it matched
 //! lines by text, re-emitted `key = value` with no indentation, and preserved only a
-//! trailing `# comment`. `app/cfg/lib/cfg/toml_doc.zig` is the document model these are built on,
+//! trailing `# comment`. `src/lib/cfg/toml_doc.zig` is the document model these are built on,
 //! and it round-trips an untouched file byte for byte.
 //!
 //! ## The file is the target, not the loaded config

@@ -1,18 +1,18 @@
-//! `app/cfg/lib/ops` - configuration operations, framework-agnostic.
+//! `src/app/lib/ops` - configuration operations, framework-agnostic.
 //!
 //! ## Why this folder exists
 //!
-//! `app/cfg` used to expose exactly one thing: `Commands(comptime AppT: type)`,
+//! `src/app/cmd/config` used to expose exactly one thing: `Commands(comptime AppT: type)`,
 //! whose `AppT` must be a `cli.App(...)`. `app/kvs` and `app/scp` have no `App` and
-//! do not import `lib/cli`, so they could not reach *any* config management. The
+//! do not import `src/lib/framework`, so they could not reach *any* config management. The
 //! shared config home was unreachable without adopting the whole CLI framework
 //! first, which is why "make the apps use the shared libraries" had stalled.
 //!
-//! These operations fix that by depending on nothing but `std`, `lib/cfg` and
-//! `lib/util`. They are plain functions taking a writer and what they need - no
+//! These operations fix that by depending on nothing but `std`, `src/lib/cfg` and
+//! `src/lib/util`. They are plain functions taking a writer and what they need - no
 //! `cli.Ctx`, no `App`, no exit. A command, a server binary or a test can call them.
 //!
-//! They are files of the `app_cfg` module, reached through `app/cfg/root.zig`'s
+//! They are files of the `app_cfg` module, reached through `src/app/cmd/config/root.zig`'s
 //! `ops` surface. They used to be a module of their own (`app_cfg_ops`); the folder
 //! is what the split needs, and the second module only bought a second test root.
 //!
@@ -37,7 +37,7 @@
 //!
 //! Each was chosen because its library already existed and needed only wiring:
 //! `util.systemd_exporter`, `cfg.config_dryrun` and `cfg.config_lineage`
-//! respectively. See `app/cfg/PLAN.md` for what remains and in what order.
+//! respectively. See `src/app/cmd/config/PLAN.md` for what remains and in what order.
 
 const std = @import("std");
 
@@ -57,7 +57,7 @@ test {
     // `refAllDecls` is shallow: it reaches the declarations of the namespaces it
     // is handed, and a `test` block is collected only when a declaration in that
     // namespace references it. Each namespace is named explicitly.
-    // `app/cli/lib/ROADMAP.md` M-2 records the rule and the control experiment.
+    // `src/lib/framework/ROADMAP.md` M-2 records the rule and the control experiment.
     std.testing.refAllDecls(exporter);
     std.testing.refAllDecls(dry_run);
     std.testing.refAllDecls(inspect);
@@ -66,7 +66,7 @@ test {
 
 test "no file in this folder imports the CLI" {
     // This is the invariant that the merge into `app_cfg` stopped enforcing. The ops
-    // layer's reason to exist is being usable *without* `lib/cli` - its own header says
+    // layer's reason to exist is being usable *without* `src/lib/framework` - its own header says
     // so, and that is what lets a non-CLI consumer manage configuration. Before the merge
     // the build graph guaranteed it: the deleted `app_cfg_ops` module named only `cfg` and
     // `util`, so `@import("framework")` did not resolve. `app_cfg` must name `cli` (its `cmd/`

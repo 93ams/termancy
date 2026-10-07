@@ -1,12 +1,11 @@
-//! `app/cli` - the `snek` binary.
+//! `app` - the `snek` application: its `App` alias and its whole command set.
 //!
-//! `main.zig` is the executable entry point and is deliberately **not** imported
-//! here: a module root must not depend on the entry point. What this file names is
-//! the app's surface - the `App` alias and the command set, both of which live in
-//! `cmd/`.
+//! `app/main.zig` holds the boot sequence and `src/root.zig` (the module root) holds
+//! `pub fn main`; neither is imported here. What this file names is the app's surface - the
+//! `App` alias and the command tree, both of which live in `cmd/`.
 //!
-//! The folder is `cmd/`, matching `app/bus/cmd`, `app/kvs/cmd` and
-//! `app/scp/cmd`. See repo-wide `ROADMAP.md` item O-3.
+//! The folder is `cmd/`, matching the naming convention in `AGENTS.md` 2.2 and repo-wide
+//! `ROADMAP.md` item O-3.
 
 const std = @import("std");
 

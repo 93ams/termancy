@@ -6,7 +6,7 @@
 //! * **systemd** - a `[Service]` unit with `Environment=` lines, the "wire the
 //!   current working config into a daemon" case.
 //!
-//! Both renderers are `lib/util/systemd_exporter.zig`; what this file adds
+//! Both renderers are `src/lib/util/systemd_exporter.zig`; what this file adds
 //! is the part that was missing - reflecting a config *type* into a list of
 //! variables.
 //!
@@ -26,7 +26,7 @@
 //! whose entire purpose is to be read by something else.
 //!
 //! This mirrors `generateSchema`'s `writeOnly`, and it calls
-//! `app/cfg/lib/cfg/loader.isSecret` rather than re-deriving the answer, so the schema and
+//! `src/lib/cfg/loader.isSecret` rather than re-deriving the answer, so the schema and
 //! the export cannot disagree about which fields are secret.
 
 const std = @import("std");

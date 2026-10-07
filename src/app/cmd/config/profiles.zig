@@ -1,6 +1,6 @@
 //! `config format`, `config profile list`, and `config profile switch`.
 //!
-//! All three operate on a **file**, through `lib/cfg/toml_doc.zig`, and all three are
+//! All three operate on a **file**, through `src/lib/cfg/toml_doc.zig`, and all three are
 //! whitespace-only or single-value edits - which is what makes them safe to run on a file a
 //! human maintains by hand.
 //!

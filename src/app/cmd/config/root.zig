@@ -1,4 +1,4 @@
-//! `app/cfg/cmd` - the `App.command` registrations over `app/cfg/lib/ops`.
+//! `src/app/cmd/config` - the `App.command` registrations over `src/app/lib/ops`.
 //!
 //! Each command is **thin by design**: parse flags, call an operation, render.
 //! Anything that decides *what* the answer is belongs in `ops/`, so it can be called
@@ -292,7 +292,7 @@ pub fn Commands(comptime AppT: type, comptime ConfigT: type) type {
                 return;
             }
 
-            // Buffered then written positionally, which is how `app/cfg/lib/cfg/remote_config.zig`
+            // Buffered then written positionally, which is how `src/lib/cfg/remote_config.zig`
             // and the rest of this tree write a whole file.
             var schema_buf: [16384]u8 = undefined;
             var w = std.Io.Writer.fixed(&schema_buf);
@@ -451,139 +451,9 @@ test "the demo config is reportable end to end, with its secret withheld" {
     try std.testing.expect(std.mem.indexOf(u8, out, "demo-secret-value") == null);
 }
 
-// -- The `cfg` binary's own root command -------------------------------------
-//
-// This lives here rather than in a sibling `cfg.zig` because this file **is** the
-// package root of `app/cfg/cmd`: it already owns the command-type declarations that
-// need `AppT`, and the `cfg` binary's root command is the same kind of thing. An
-// earlier revision put it in `cmd/cfg.zig`, which made `cfg` appear twice in the path
-// (`app/cfg/cmd/cfg.zig`) for no gain.
-//
-// It must NOT move into `app/cfg/root.zig` instead: that file is `app_cfg`'s **module
-// root**, and the module is compiled by `app/cli` too, which has no use for the `cfg`
-// binary's root command.
-
-/// The `cfg` binary's framework state.
-///
-/// `struct {}` because `cfg` holds no session state: every command reads, validates or
-/// renders a configuration and exits. The `cli` binary needs state for its REPL; this
-/// one would be carrying an empty struct for no reason if it copied that shape.
-pub const State = struct {};
-
-/// The `cfg` binary's `App`, which is what `Commands` specialises its command types
-/// against. `Config` is the real shared schema: no per-app
-/// configuration type has been threaded through yet. When one is, this is the single
-/// line that changes - which is what taking `ConfigT` as a parameter bought.
-pub const CfgApp = cli.App(State, cli.Config{ .version = "v0.1.0" });
-
-/// `Commands` returns a **type**, so the group is instantiated with `{}` to get the
-/// command values a root tuple needs. Named `CfgGroup` rather than `Group` because the
-/// file already declares command namespaces and a bare `Group` would read as one.
-const CfgGroup = Commands(CfgApp, Config);
-
-/// Flags for `cfg` itself.
-pub const RootFlags = struct {
-    version: bool = false,
-
-    pub const meta = .{
-        .version = .{ .short = 'v', .help = "Print the version" },
-    };
-};
-
-/// The `cfg` root command.
-///
-/// The group is exposed **directly** as the root's subcommands rather than nested under
-/// a `config` subcommand: `cfg get port` is the documented spelling, and requiring
-/// `cfg config get port` would defeat the point of a dedicated binary.
-pub const RootCmd = CfgApp.command(.{
-    .name = "cfg",
-    .description = "Inspect, validate and export a configuration",
-    .flags = RootFlags,
-    .subcommands = .{
-        CfgGroup.export_cmd,
-        CfgGroup.dry_run_cmd,
-        CfgGroup.inspect_cmd,
-        CfgGroup.schema_cmd,
-        CfgGroup.get_cmd,
-        CfgGroup.keys_cmd,
-        CfgGroup.cast_cmd,
-        CfgGroup.set_cmd,
-        CfgGroup.del_cmd,
-        CfgGroup.format_cmd,
-        CfgGroup.profile_cmd,
-        CfgGroup.encrypt_cmd,
-        CfgGroup.decrypt_cmd,
-        CfgGroup.redact_cmd,
-    },
-}, cfgRootRun);
-
-fn cfgRootRun(ctx: CfgApp.Ctx, flags: CfgApp.Flags(RootFlags)) !void {
-    if (flags.version) {
-        try ctx.out.writeAll("cfg v0.1.0\n");
-        return;
-    }
-    // No subcommand matched, so nothing was asked for. Printing the resolved
-    // configuration would be a guess at intent, and on a machine with secrets set it
-    // would print more than the user asked for. Usage is the only safe default.
-    //
-    // Written out rather than delegating to the framework's help renderer, which is
-    // private (`app/cli/lib/cli.zig`). `cfg --help` still goes through the framework's
-    // own interception, so this text is only what a *bare* `cfg` prints.
-    try ctx.out.writeAll(
-        \\Usage: cfg <command> [options]
-        \\
-        \\Commands:
-        \\  get <path>        Print one configuration value (--raw to strip decoration)
-        \\  keys [prefix]     List key paths, one per line
-        \\  cast <path> <type>  Coerce a value into a named type
-        \\  set <path> <value>  Set a key in a TOML file (--file)
-        \\  inspect [path]    Explain where a value came from
-        \\  schema [output]   Emit a JSON Schema
-        \\  export            Write the config as environment variables
-        \\                    (--format dotenv|systemd|bash|json)
-        \\  del <path>        Remove a key from a TOML file (--file)
-        \\  format            Normalise whitespace in a TOML file (--file)
-        \\  profile list|switch  List or switch contexts (--file)
-        \\  encrypt           Encrypt a config file at rest (--out)
-        \\  decrypt           Decrypt an encrypted blob
-        \\  redact            Print a config with sensitive values replaced
-        \\  dry-run           Validate overrides without applying them
-        \\
-        \\Run 'cfg <command> --help' for a command's flags.
-        \\
-    );
-}
-
-test "the cfg root exposes the config commands and nothing else" {
-    // `subcommands` is a declaration on the command's type, not a field of the value,
-    // so it is reached through `@TypeOf`.
-    const subcommands = @TypeOf(RootCmd).subcommands;
-    try std.testing.expectEqual(@as(usize, 14), subcommands.len);
-    try std.testing.expectEqualStrings("export", subcommands[0].name);
-    try std.testing.expectEqualStrings("dry-run", subcommands[1].name);
-    try std.testing.expectEqualStrings("inspect", subcommands[2].name);
-    try std.testing.expectEqualStrings("schema", subcommands[3].name);
-    try std.testing.expectEqualStrings("get", subcommands[4].name);
-    try std.testing.expectEqualStrings("keys", subcommands[5].name);
-    try std.testing.expectEqualStrings("cast", subcommands[6].name);
-    try std.testing.expectEqualStrings("set", subcommands[7].name);
-    try std.testing.expectEqualStrings("del", subcommands[8].name);
-    try std.testing.expectEqualStrings("format", subcommands[9].name);
-    try std.testing.expectEqualStrings("profile", subcommands[10].name);
-    try std.testing.expectEqualStrings("encrypt", subcommands[11].name);
-    try std.testing.expectEqualStrings("decrypt", subcommands[12].name);
-    try std.testing.expectEqualStrings("redact", subcommands[13].name);
-
-    // The group is reachable **directly** as the root's subcommands, so `cfg get port`
-    // works rather than `cfg config get port`.
-    try std.testing.expectEqualStrings("cfg", RootCmd.name);
-
-    // The workspace tools must NOT be reachable from here. Their absence is the reason
-    // this binary exists; adding one should be a deliberate decision, not a drift.
-    inline for (subcommands) |sub| {
-        try std.testing.expect(!std.mem.eql(u8, sub.name, "add"));
-        try std.testing.expect(!std.mem.eql(u8, sub.name, "init"));
-        try std.testing.expect(!std.mem.eql(u8, sub.name, "repl"));
-        try std.testing.expect(!std.mem.eql(u8, sub.name, "config"));
-    }
-}
+// The deleted `cfg` binary's own root command (`CfgApp`, `RootFlags`, `RootCmd`, its
+// `run`, and the test that pinned its 14 subcommands) stood here until the two apps were
+// merged into one. Nothing referenced it any more - the app builds its group with
+// `Commands(App, Config).config` in `src/app/cmd/root.zig` - and it was the last place a
+// comment still described a second binary. The group shape it asserted is covered by the
+// `Commands builds a config group` test above, which reaches the same 14 subcommands

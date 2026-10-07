@@ -1,6 +1,5 @@
-//! Vendored subset of the upstream `snek` monorepo's `src/zig/lib/util`, carried
-//! into this repository so that it has **no dependency on the monorepo it came
-//! from**.
+//! Vendored subset of the upstream `snek` monorepo's `lib/util`, carried into this
+//! repository so that it has **no dependency on the monorepo it came from**.
 //!
 //! ## Why this is a copy, and why it is small
 //!
@@ -22,15 +21,15 @@
 //!
 //! ## Why eleven of these look unused
 //!
-//! `lib/cli/cli.zig` re-exports eleven of these modules under their historical
+//! `src/lib/framework/cli.zig` re-exports eleven of these modules under their historical
 //! `cli.X` names (`vfs`, `tasks`, `cancellation`, `mmap`, `linter`, `dag`, `cas`,
 //! `btree_store`, `object_pipe`, `footprint`, `dry_run`), and
-//! `lib/cli/root.zig` carries a comptime guard asserting that every `pub` decl of
+//! `src/lib/framework/root.zig` carries a comptime guard asserting that every `pub` decl of
 //! `cli.zig` is re-exported from `root.zig`. Both halves have to compile, so all
 //! eleven modules must exist here even though nothing calls them directly.
 //!
 //! `trace`, `systemd_exporter` and `spin_lock` are the three that are named
-//! directly, by `platform/*`, `render/progress.zig` and `app/cfg/lib/ops/exporter.zig`.
+//! directly, by `platform/*`, `render/progress.zig` and `src/app/lib/ops/exporter.zig`.
 
 const std = @import("std");
 
@@ -48,7 +47,7 @@ pub const cancellation = @import("cancellation.zig");
 pub const cas = @import("cas.zig");
 
 /// A string-keyed workspace store. Carries a known defect in the update path,
-/// recorded in `lib/cli/ROADMAP.md` B-2.
+/// recorded in `src/lib/framework/ROADMAP.md` B-2.
 pub const btree_store = @import("btree_store.zig");
 
 /// Task dependency graphs and stage layering.
@@ -75,7 +74,7 @@ pub const tasks = @import("tasks.zig");
 /// A virtual filesystem: one interface over memory, disk and embedded assets.
 ///
 /// **This file has diverged from the copy it started as.** Everything else here is
-/// byte-identical to the monorepo's `lib/util`; `vfs.zig` was a comptime asset
+/// byte-identical to the monorepo's `src/lib/util`; `vfs.zig` was a comptime asset
 /// table with no interface, and now carries the `Vfs` vtable plus the in-memory
 /// and disk backends. So "vendored" is accurate for the other thirteen modules and
 /// no longer accurate for this one - recorded here rather than left for someone to

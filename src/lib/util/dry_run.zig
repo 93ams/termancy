@@ -54,8 +54,8 @@ pub const DryRunLedger = struct {
 
     /// Renders the ledger as a diff of what *would* have happened.
     ///
-    /// `color` is a parameter rather than a lookup because this module is in `lib/util` and
-    /// cannot see `lib/cli`'s capability decision - and unconditional escapes are the bug
+    /// `color` is a parameter rather than a lookup because this module is in `src/lib/util` and
+    /// cannot see `src/lib/framework`'s capability decision - and unconditional escapes are the bug
     /// this signature exists to prevent: piping the ledger through `grep`, `less` or a file
     /// used to fill it with `\x1b[33;1m`. A caller with a terminal passes `ctx.caps().color`.
     pub fn renderDiff(self: DryRunLedger, writer: anytype, color: bool) !void {

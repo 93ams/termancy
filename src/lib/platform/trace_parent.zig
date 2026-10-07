@@ -4,7 +4,7 @@
 //! writes `const TraceParent = @import("trace_parent.zig");`. See the
 //! file-layout rule in `.agents/AGENTS.md`.
 //!
-//! The W3C Trace Context *codec* is `lib/util/trace.zig`, shared with the message
+//! The W3C Trace Context *codec* is `src/lib/util/trace.zig`, shared with the message
 //! bus. What lives here is the framework's own header shape: a fixed 55-byte
 //! array and a `generate()` that needs no `std.Random` argument.
 
@@ -25,7 +25,7 @@ pub const header_length = trace.header_length;
 ///
 /// **Known defect, deliberately preserved.** Seeding a PRNG from
 /// `getMonotonicMs()` makes trace IDs predictable and collides for two processes
-/// started in the same millisecond. It is recorded in `app/cli/lib/ROADMAP.md`;
+/// started in the same millisecond. It is recorded in `src/lib/framework/ROADMAP.md`;
 /// changing it is a behaviour change that deserves its own test rather than a
 /// silent edit during a move.
 pub fn generate() Self {

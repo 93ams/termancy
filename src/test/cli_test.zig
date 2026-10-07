@@ -1013,7 +1013,8 @@ test "Widgets: System Clipboard Integration via OSC 52" {
 }
 
 test "Widgets: Fuzzy Finder scoring" {
-    const target = "src/zig/app/cli/lib/tea.zig";
+    // A path in this tree, so the fixture is a real one rather than a plausible string.
+    const target = "src/lib/render/tea.zig";
 
     const match1 = cli.widgets.fuzzyScore("tea", target);
     try testing.expect(match1 != null);

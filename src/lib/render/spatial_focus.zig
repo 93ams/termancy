@@ -28,7 +28,7 @@ pub const SpatialFocusGrid = struct {
     /// hidden window, a pty still starting up), so rejecting the size would
     /// force every caller to invent an error path for a state the type can
     /// simply represent. The only caller in this tree today is the literal
-    /// `SpatialFocusGrid.init(3, 2, true)` in `lib/cli/test/cli_test.zig`, and
+    /// `SpatialFocusGrid.init(3, 2, true)` in `src/lib/framework/test/cli_test.zig`, and
     /// staying infallible keeps it compiling unchanged. The guards in the
     /// movement functions below are what keep each `- 1` in range.
     pub fn init(rows: usize, cols: usize, wrap: bool) SpatialFocusGrid {

@@ -1,4 +1,4 @@
-//! `app/cli/lib/platform` - the OS and process surface a command-line program needs.
+//! `src/lib/platform` - the OS and process surface a command-line program needs.
 //!
 //! Everything here is about *running* a CLI: daemons and pid files, process
 //! titles, sandboxing, self-update, distribution specs, shell/service
@@ -6,14 +6,14 @@
 //!
 //! What is deliberately **not** here any more, and where it went:
 //!
-//!   * configuration (`config`, `profiles`, `schema_migration`, ...) -> `lib/cfg`
+//!   * configuration (`config`, `profiles`, `schema_migration`, ...) -> `src/lib/cfg`
 //!   * application-agnostic primitives (`mmap`, `cas`, `tasks`, `dag`, `vfs`,
 //!     `dry_run`, `object_pipe`, `cancellation`, `linter`, `footprint`,
-//!     `btree_store`) -> `lib/util`
-//!   * the shared W3C trace context -> `lib/util/trace.zig`, which
+//!     `btree_store`) -> `src/lib/util`
+//!   * the shared W3C trace context -> `src/lib/util/trace.zig`, which
 //!     `telemetry.zig` here is now a thin adapter over
 //!
-//! See `app/cli/lib/ROADMAP.md` U-0. `app/cli/lib/cli.zig` re-exports each file below
+//! See `src/lib/framework/ROADMAP.md` U-0. `src/lib/framework/cli.zig` re-exports each file below
 //! under its historical flat name (`cli.sys`, `cli.panic`, ...).
 
 const std = @import("std");
@@ -55,12 +55,12 @@ pub const signal = @import("signal.zig");
 pub const log = @import("log.zig");
 /// Detaching the process so it outlives the terminal that started it.
 pub const detach = @import("detach.zig");
-/// `.env` and systemd unit export. Now owned by `lib/util`; re-exported here under
+/// `.env` and systemd unit export. Now owned by `src/lib/util`; re-exported here under
 /// its historical name so `cli.systemd_exporter` keeps resolving.
 pub const systemd_exporter = @import("util").systemd_exporter;
 /// Telemetry opt-out (`DO_NOT_TRACK`, `CI`). Free functions, not a type.
 pub const telemetry = @import("telemetry.zig");
-/// The framework's `traceparent` header type. The codec is `lib/util/trace.zig`.
+/// The framework's `traceparent` header type. The codec is `src/lib/util/trace.zig`.
 pub const trace_parent = @import("trace_parent.zig");
 /// A coarse parse/execute phase timer.
 pub const profiler = @import("profiler.zig");
@@ -72,7 +72,7 @@ pub const update = @import("update.zig");
 pub const wasm_bridge = @import("wasm_bridge.zig");
 
 test {
-    // Shallow by design; every namespace is named. See `app/cli/lib/ROADMAP.md` M-2.
+    // Shallow by design; every namespace is named. See `src/lib/framework/ROADMAP.md` M-2.
     std.testing.refAllDecls(daemon);
     std.testing.refAllDecls(dist_specs);
     std.testing.refAllDecls(dynlib_reloader);

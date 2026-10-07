@@ -1,7 +1,7 @@
 //! `config export` - write the resolved configuration as environment variables.
 //!
 //! Renders either a `.env` file or a systemd unit. All the work happens in
-//! `app/cfg/lib/ops/exporter.zig`; this file parses flags and calls it.
+//! `src/app/lib/ops/exporter.zig`; this file parses flags and calls it.
 //!
 //! ## Why `ConfigT` is a parameter here
 //!

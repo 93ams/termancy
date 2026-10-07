@@ -13,9 +13,9 @@
 //!    nesting, so `network.port` is checked against `ConfigT.network.port`), and
 //! 2. the value parses into that field's declared type.
 //!
-//! That is deliberately *structural*, not semantic. `lib/cfg`'s meta supports
+//! That is deliberately *structural*, not semantic. `src/lib/cfg`'s meta supports
 //! `.help`, `.env` and `.secret`, but it does **not** have a `.validate` hook - the
-//! format specification assumed one and `app/cli/lib/ROADMAP.md` P-2 records the gap. So
+//! format specification assumed one and `src/lib/framework/ROADMAP.md` P-2 records the gap. So
 //! "is port 99999 within this deployment's range" cannot be answered here, and this
 //! module does not pretend otherwise. Adding `.validate` is what turns this from a
 //! shape check into a policy check.
@@ -88,7 +88,7 @@ pub fn checkAll(
     return out;
 }
 
-/// Renders verdicts through `lib/cfg`'s matrix renderer, which already emits the
+/// Renders verdicts through `src/lib/cfg`'s matrix renderer, which already emits the
 /// `[PASS]` / `[FAIL]` form the format specification asked for.
 pub fn render(writer: anytype, verdicts: []const Verdict) !void {
     var results: std.ArrayListUnmanaged(dryrun.ValidationResult) = .empty;
@@ -114,7 +114,7 @@ pub fn render(writer: anytype, verdicts: []const Verdict) !void {
 /// framework grows repeatable flags.
 ///
 /// Values containing spaces are therefore not expressible; that limitation is real
-/// and is recorded in `app/cfg/PLAN.md` rather than hidden.
+/// and is recorded in `src/app/cmd/config/PLAN.md` rather than hidden.
 pub fn splitOverrides(allocator: std.mem.Allocator, raw: []const u8) ![][]const u8 {
     var list: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer list.deinit(allocator);

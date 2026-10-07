@@ -9,7 +9,7 @@
 //!
 //! **Not a terminal emulator.** There is no scrollback, no cursor, no escape
 //! parsing and no attributes; `Cell.char` is a single byte, so non-ASCII text
-//! cannot be stored. Recorded in `app/cli/lib/ROADMAP.md` section 5.4.
+//! cannot be stored. Recorded in `src/lib/framework/ROADMAP.md` section 5.4.
 
 const std = @import("std");
 

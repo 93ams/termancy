@@ -1,7 +1,7 @@
 //! `config dry-run` - validate overrides without applying them.
 //!
 //! Parses `--config-override path=value` (repeatable), checks each against
-//! `ConfigT` via `app/cfg/lib/ops/dry_run.zig`, prints the matrix, and exits non-zero if
+//! `ConfigT` via `src/app/lib/ops/dry_run.zig`, prints the matrix, and exits non-zero if
 //! anything failed. It never writes and never invokes the command's run block.
 
 const std = @import("std");
@@ -15,7 +15,7 @@ pub const DryRunFlags = struct {
     /// a flag value as one `[]const u8` and rejects a slice-of-slices field outright
     /// (`cli.zig:1290`). Space-separating is the honest shape until the framework
     /// grows repeatable flags; the cost is that a value containing a space cannot be
-    /// expressed, which `app/cfg/PLAN.md` records.
+    /// expressed, which `src/app/cmd/config/PLAN.md` records.
     overrides: []const u8 = "",
 
     pub const meta = .{

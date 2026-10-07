@@ -11,7 +11,7 @@
 //! type therefore declares `Supported` and compiles everywhere, doing nothing on
 //! Windows rather than failing the build.
 //!
-//! That matters beyond this file: `app/cli/lib/platform/root.zig` applies
+//! That matters beyond this file: `src/lib/platform/root.zig` applies
 //! `refAllDecls`, which is what makes a folder root a compile-time gate. A file
 //! that only compiles on one OS turns that gate into a platform-specific build
 //! break, so the guard belongs here.

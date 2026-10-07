@@ -1,7 +1,7 @@
 const std = @import("std");
 const capability = @import("capability.zig");
 
-/// The shared spin lock, from `lib/util`. This file used to carry its own
+/// The shared spin lock, from `src/lib/util`. This file used to carry its own
 /// thirteen-line copy, which was the same algorithm with the scheduler yield and
 /// `tryLock` left out - two implementations of one primitive is a correctness
 /// risk, not a tidy-up (`AGENT.md` 4.2, `ROADMAP.md` R-2). `cli` already imports

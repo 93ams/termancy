@@ -1,12 +1,12 @@
 //! Export a configuration as a `.env` file or a systemd unit.
 //!
-//! **This lives in `lib/util`, not `lib/cli`, because it mentions no terminal, no
+//! **This lives in `src/lib/util`, not `src/lib/framework`, because it mentions no terminal, no
 //! flag and no command** - it takes a `std.Io.Writer` and a slice of key/value pairs.
-//! It sat in `app/cli/lib/platform/` only because the CLI was once the only library with
+//! It sat in `src/lib/platform/` only because the CLI was once the only library with
 //! a test root, the same reason already recorded for the other files that moved.
-//! `lib/cli` re-exports it under its historical name, so no caller had to change.
+//! `src/lib/framework` re-exports it under its historical name, so no caller had to change.
 //!
-//! The move was forced by a real consumer: `app/cfg/lib/ops` must be callable from
+//! The move was forced by a real consumer: `src/app/lib/ops` must be callable from
 //! `app/kvs` and `app/scp`, neither of which imports the CLI framework, and the
 //! operations therefore have no `cli` module to import from.
 //!
@@ -19,7 +19,7 @@
 //! **Known defect, recorded not fixed:** neither exporter escapes its input, so a
 //! `"` or a newline in a value produces a malformed `.env` or unit file. A
 //! diagnostic that writes a broken unit is worse than one that refuses. See
-//! `app/cli/lib/ROADMAP.md` section 5.4.
+//! `src/lib/framework/ROADMAP.md` section 5.4.
 
 const std = @import("std");
 

@@ -4,7 +4,7 @@
 //! environment, so why is it 8080?"* With a merge order of defaults -> file ->
 //! remote -> env -> flags, a value alone does not say which layer won.
 //!
-//! `app/cfg/lib/cfg/config_lineage.zig` implements the ledger - `record` during the merge,
+//! `src/lib/cfg/config_lineage.zig` implements the ledger - `record` during the merge,
 //! `getProvenance` to ask, `inspect` to render the
 //! `Value: 8080 | Type: u16 | Source: ENV (APP_PORT)` line. What was missing is
 //! anything that reports on a *whole config* rather than one field at a time.

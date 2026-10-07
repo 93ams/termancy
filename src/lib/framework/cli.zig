@@ -5,10 +5,10 @@ const zutil = @import("util");
 // Each sub-folder has its own `root.zig`, and those are imported here so every
 // folder's surface is part of the module graph and gets compiled. The individual
 // leaf re-exports below are kept under their long-standing flat names
-// (`cli.tea`, `cli.style`, ...), because the test suite and `app/cli` use them.
+// (`cli.tea`, `cli.style`, ...), because the test suite and `src/app` use them.
 //
 // These were lost when this file was reverted. The list is mirrored from
-// `app/cli/lib/root.zig`, which is the authoritative surface: it reads
+// `src/lib/framework/root.zig`, which is the authoritative surface: it reads
 // `framework.<name>` for each of these, so a name missing here breaks the module
 // root rather than only the leaf.
 pub const render = @import("render");
@@ -108,7 +108,7 @@ pub const detach = platform.detach;
 /// A single-line spinner for a step whose total is unknown.
 pub const spinner = render.spinner;
 
-// Utilities. These live in `lib/util` and are re-exported under their flat names
+// Utilities. These live in `src/lib/util` and are re-exported under their flat names
 // because the framework's own module root lists them as `cli.<name>`.
 pub const vfs = zutil.vfs;
 pub const tasks = zutil.tasks;
@@ -135,7 +135,7 @@ pub const OutputFormat = enum { text, json, yaml };
 /// exhaustive instead of guessing at an arbitrary error's meaning.
 ///
 /// **File scope, not a member of the `App` closure.** It was declared inside `App`,
-/// which made it unreachable as `cli.AppError` - and `lib/cli/root.zig` re-exported
+/// which made it unreachable as `cli.AppError` - and `src/lib/framework/root.zig` re-exported
 /// exactly that name, so the library's declared surface did not compile. The set does
 /// not depend on `StateT` or on `config`, so it never had a reason to be per-`App`;
 /// `App.Error` remains as an alias, which is what the existing command signatures and
@@ -344,7 +344,7 @@ fn defaultConfigFileLoader(
 /// Global flags merged into every command's flag struct by `App.Flags`.
 ///
 /// File scope, not a member of the `App` closure: nothing here depends on `StateT`
-/// or on the framework configuration, and `lib/cli/root.zig` re-exports this name -
+/// or on the framework configuration, and `src/lib/framework/root.zig` re-exports this name -
 /// which it could not do while the declaration lived inside `App` (the re-export was
 /// one of nine that named something that did not exist).
 pub const GlobalFlags = struct {
@@ -2232,7 +2232,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                         }
                     }
                     // A secret inside the positional slot is reachable through the slot's
-                    // own metadata, which is where `app/cfg` documents its arguments.
+                    // own metadata, which is where `src/app/cmd/config` documents its arguments.
                     if (comptime isPositionalField(field.name)) {
                         const SlotT = field.type;
                         inline for (std.meta.fields(SlotT)) |p_field| {
@@ -3884,7 +3884,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 if (@hasField(@TypeOf(entry), "description")) return entry.description;
             }
             // The older spelling documents the slot as a whole rather than each field
-            // (`meta.positionals.description`), which is what every `app/cfg` command
+            // (`meta.positionals.description`), which is what every `src/app/cmd/config` command
             // does. It is only unambiguous when there is one positional argument, so
             // that is the only case it is used for.
             if (comptime std.meta.fields(ArgsT).len == 1) {

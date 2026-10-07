@@ -1,10 +1,10 @@
-//! `app/cli/lib/render` - turning data into terminal bytes.
+//! `src/lib/render` - turning data into terminal bytes.
 //!
 //! Styling, colour, tables, layout, graphics, progress, paging, a screen model
 //! and the escape-sequence emitters. Nothing here reads input or touches process
 //! state; everything writes to a caller-supplied writer.
 //!
-//! `app/cli/lib/cli.zig` re-exports each of these under its historical flat name
+//! `src/lib/framework/cli.zig` re-exports each of these under its historical flat name
 //! (`cli.style`, `cli.tea`, ...), so this file is the directory's own surface
 //! rather than a new one. Keeping it means the folder has an entry point like
 //! every other folder in the repository, and it is where a folder-level test
@@ -44,7 +44,7 @@ test {
     // `refAllDecls` is shallow: it reaches the declarations of the
     // namespaces named here, and a `test` block is collected only when a
     // declaration in that namespace references it. Each one is therefore
-    // listed explicitly. See `app/cli/lib/ROADMAP.md` M-2.
+    // listed explicitly. See `src/lib/framework/ROADMAP.md` M-2.
     std.testing.refAllDecls(decstbm);
     std.testing.refAllDecls(capability);
     std.testing.refAllDecls(color);

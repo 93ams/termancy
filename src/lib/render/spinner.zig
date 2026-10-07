@@ -8,7 +8,7 @@
 //! ## The frames are ASCII on purpose
 //!
 //! The familiar Braille spinner is prettier and this tree cannot currently be
-//! trusted with it: `lib/cli/ROADMAP.md` S-0a/S-0b record that **two encoders in
+//! trusted with it: `src/lib/framework/ROADMAP.md` S-0a/S-0b record that **two encoders in
 //! this environment corrupt non-ASCII text**, and that the corruption is already
 //! present in ten committed files. A widget whose default output depends on the
 //! writer's encoding is a widget that renders mojibake on someone else's machine.

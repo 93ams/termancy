@@ -238,7 +238,7 @@ pub fn generateSchema(writer: anytype, comptime ConfigT: type) !void {
                 //
                 // Before this, `generateSchema` honoured `.help` and ignored
                 // `.secret` entirely, so a secret field was documented like any
-                // other. See `app/cli/lib/ROADMAP.md` section 5.3.
+                // other. See `src/lib/framework/ROADMAP.md` section 5.3.
                 if (comptime isSecret(ConfigT, field.name)) {
                     try writer.writeAll(",\n      \"writeOnly\": true");
                 }

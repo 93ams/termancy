@@ -2,11 +2,11 @@
 //!
 //! ## Reachability
 //!
-//! These are the first commands to use `app/cfg/lib/cfg/encrypted_config.zig`, which lives in
-//! `lib/cfg` rather than `app/cli/lib/secrets` precisely so the operations in
-//! `app/cfg/lib/ops` can reach it. The cryptography was already correct after the KDF fix;
-//! what was missing was a way to run it, because the module sat behind `lib/cli` and a
-//! server binary with no `cli.App` may not import that.
+//! These are the first commands to use `src/lib/cfg/encrypted_config.zig`, which lives in
+//! `cfg` rather than `src/lib/secrets` precisely so the operations in `src/app/lib/ops` can
+//! reach it. The cryptography was already correct after the KDF fix; what was missing was a
+//! way to run it, because the module sat behind the framework and a server binary with no
+//! `App` may not import that.
 //!
 //! ## The passphrase never comes from a flag
 //!

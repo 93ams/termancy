@@ -10,7 +10,7 @@
 //! **Known defect, recorded not fixed:** `deinit` decides whether to free an
 //! origin by checking `origin.len > 0`, but `record` stores the literal `""` when
 //! no origin is given. Re-recording a key can therefore free a string literal.
-//! See `app/cli/lib/ROADMAP.md` section 5.3.
+//! See `src/lib/framework/ROADMAP.md` section 5.3.
 
 const std = @import("std");
 

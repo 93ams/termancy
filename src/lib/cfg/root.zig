@@ -1,4 +1,4 @@
-//! `lib/cfg` - configuration: resolution, layering and the tooling around it.
+//! `src/lib/cfg` - configuration: resolution, layering and the tooling around it.
 //!
 //! This is the module root, and the module's public surface. It imports only
 //! `std`; it knows nothing about any app or any CLI framework in this
@@ -23,17 +23,17 @@
 //!
 //! ## History, because it explains the shape
 //!
-//! Everything except `cfg.zig` was written under `app/cli/lib/settings/`, and
+//! Everything except `cfg.zig` was written under `src/lib/settings/`, and
 //! `cfg.zig` was a second, unused resolver that did not compile. Configuration
-//! has no CLI in it, so it now lives here and `lib/cli` re-exports it for its
-//! own consumers. `app/cli/lib/ROADMAP.md` item U-0 records that decision.
+//! has no CLI in it, so it now lives here and `src/lib/framework` re-exports it for its
+//! own consumers. `src/lib/framework/ROADMAP.md` item U-0 records that decision.
 //!
 //! **Still open, and recorded rather than hidden:** `cfg.Manager` and
 //! `loader.load` are two resolvers that overlap on defaults, environment
 //! binding and JSON overlay. They are both correct and both tested; unifying
 //! them is a deliberate piece of work, not a move, because the `snek
 //! config` command and its tests depend on `loader`'s exact semantics. See
-//! `app/cli/lib/ROADMAP.md` U-2.
+//! `src/lib/framework/ROADMAP.md` U-2.
 
 const std = @import("std");
 
@@ -125,7 +125,7 @@ test {
     // `refAllDecls` is shallow: it reaches the declarations of the namespaces it
     // is handed, and a `test` block is collected only when a declaration in that
     // namespace references it. Each namespace is therefore named explicitly.
-    // `app/cli/lib/ROADMAP.md` M-2 records the rule and the control experiment.
+    // `src/lib/framework/ROADMAP.md` M-2 records the rule and the control experiment.
     std.testing.refAllDecls(@import("cfg.zig"));
     std.testing.refAllDecls(loader);
     std.testing.refAllDecls(config_lineage);
@@ -136,7 +136,7 @@ test {
     std.testing.refAllDecls(profiles);
     std.testing.refAllDecls(toml_mutator);
     std.testing.refAllDecls(toml_doc);
-    // Moved here from app/cli/lib/secrets, which is why its tests are collected by this root
+    // Moved here from src/lib/secrets, which is why its tests are collected by this root
     // rather than by the cli test root.
     std.testing.refAllDecls(encrypted_config);
     std.testing.refAllDecls(remote_config);

@@ -1,10 +1,10 @@
-//! `app/cli/lib/interact` - reading the user.
+//! `src/lib/interact` - reading the user.
 //!
 //! Widgets, text buffers, raw mode, the TTY handle, crash-time terminal restore
 //! and the prompt helpers. This is the half of the framework that consumes
 //! input; `render/` is the half that produces output.
 //!
-//! `app/cli/lib/cli.zig` re-exports each of these under its historical flat name
+//! `src/lib/framework/cli.zig` re-exports each of these under its historical flat name
 //! (`cli.prompt`, `cli.widgets`, ...).
 
 const std = @import("std");
@@ -26,7 +26,7 @@ pub const tty_stream = @import("tty_stream.zig");
 pub const widgets = @import("widgets.zig");
 
 test {
-    // Shallow by design; every namespace is named. See `app/cli/lib/ROADMAP.md` M-2.
+    // Shallow by design; every namespace is named. See `src/lib/framework/ROADMAP.md` M-2.
     std.testing.refAllDecls(prompt);
     std.testing.refAllDecls(text_input);
     std.testing.refAllDecls(raw_terminal);

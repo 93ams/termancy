@@ -8,7 +8,7 @@
 //! `renderMatrix` takes and the two are one subject. Note what this module does
 //! **not** do: it contains no validation. `parseOverride` splits `key=value` and
 //! `renderMatrix` prints verdicts the caller already computed, which is recorded
-//! as scaffolding in `app/cli/lib/ROADMAP.md` section 5.4.
+//! as scaffolding in `src/lib/framework/ROADMAP.md` section 5.4.
 
 const std = @import("std");
 

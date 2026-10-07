@@ -6,7 +6,7 @@
 //! (REQ-LAYOUT-008) points one way: `framework` imports `render`, `platform`, `interact`,
 //! `secrets`, `cfg` and `util`, and none of them imports `framework`.
 //!
-//! History: this was `lib/cli`, a single module holding the framework, the rendering
+//! History: this was `src/lib/framework`, a single module holding the framework, the rendering
 //! layer, the platform layer, the prompts and the secret handling together. `SPEC.md`
 //! records the split; each of those is now its own module with its own root, and the
 //! aliases below (`render`, `interact`, `secrets`, `platform`) are kept so a consumer

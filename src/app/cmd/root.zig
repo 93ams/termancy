@@ -1,4 +1,4 @@
-//! `app/cli/cmd` - the shared `App` alias and one file per subcommand.
+//! `src/app/cmd` - the shared `App` alias and one file per subcommand.
 //!
 //! This is both the folder root and the `App` home, which is deliberate: the
 //! alias is what every command in this folder is built from, so it belongs beside
@@ -39,14 +39,14 @@ pub const init = @import("init.zig");
 
 test {
     // Shallow by design: `refAllDecls` reaches the declarations of the namespace
-    // it is handed, so each one is named. See `lib/cli/ROADMAP.md` M-2.
+    // it is handed, so each one is named. See `src/lib/framework/ROADMAP.md` M-2.
     std.testing.refAllDecls(@import("add.zig"));
     std.testing.refAllDecls(@import("init.zig"));
 }
 
-// -- The `snek` binary's root command ----------------------------------
+// -- The `snek` application's root command ----------------------------------
 //
-// This file is the package root of `app/cli/cmd`, and `AGENTS.md` 3.2 keeps a file named
+// This file is the package root of `src/app/cmd`, and `AGENTS.md` 2.1 keeps a file named
 // `main.zig` to `main` alone. The root command belongs here with the rest of the command
 // tree rather than in the entry point: it is the same kind of declaration as `add` and
 // `init` above, and putting it here means one file names the whole command set.

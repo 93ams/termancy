@@ -131,7 +131,7 @@ test "the two scalar types are both reached through the file" {
 /// This is the counterpart to the two grammars above: they answer "what does
 /// `2m` mean", this answers "does `2m` belong in *this* field". It exists because
 /// three callers needed that answer and each was about to grow its own copy -
-/// `app/bus/config`'s hydrator, `app/cfg`'s dry-run validator, and any future
+/// `app/bus/config`'s hydrator, `src/app/cmd/config`'s dry-run validator, and any future
 /// typed-override path.
 ///
 /// Supported field types are the ones a config file can express: integers,

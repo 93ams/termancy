@@ -11,7 +11,7 @@
 //! pane with `line.len` (raw bytes) rather than visual width, so any pane
 //! containing ANSI colour or wide characters misaligns the divider. The same job
 //! is done correctly by `style.joinHorizontal`, which uses `style.visualWidth`.
-//! See `app/cli/lib/ROADMAP.md` section 5.5.
+//! See `src/lib/framework/ROADMAP.md` section 5.5.
 
 const std = @import("std");
 

@@ -271,7 +271,7 @@ pub fn isCastType(type_name: []const u8) bool {
 /// ## What this can and cannot do
 ///
 /// It **validates and normalises**, it does not write: there is no TOML document model in
-/// this tree (`app/cfg/lib/cfg/toml_mutator.zig` is line-based text), so emitting a mutated file
+/// this tree (`src/lib/cfg/toml_mutator.zig` is line-based text), so emitting a mutated file
 /// is a separate piece of work. What it does provide is the answer `cast` exists to give -
 /// "will this value be accepted as this type" - plus the canonical rendering of it, which
 /// is what a pipeline needs before deciding to write.

@@ -7,7 +7,7 @@
 //! that caused it. A compile error naming the field is the cheapest possible place to
 //! catch all three.
 //!
-//! `lib/cli`'s `App.command` and `App.Command` run this when the command *type* is
+//! `src/lib/framework`'s `App.command` and `App.Command` run this when the command *type* is
 //! built, so a bad declaration fails the build even if the command is never executed
 //! by a test.
 
@@ -136,7 +136,7 @@ pub const ComptimeLinter = struct {
         return false;
     }
 
-    /// `dry_run` and `dry-run` name the same flag; the same equivalence `lib/cli` matches on.
+    /// `dry_run` and `dry-run` name the same flag; the same equivalence `src/lib/framework` matches on.
     fn namesEqual(comptime a: []const u8, comptime b: []const u8) bool {
         if (a.len != b.len) return false;
         for (a, b) |ca, cb| {

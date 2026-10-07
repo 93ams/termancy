@@ -6,7 +6,7 @@
 //!
 //! Found duplicated: the message bus carried a `TraceContext` with a `toW3C`
 //! serializer (generic, correct, tested, and referenced by nothing else), while
-//! `lib/cli` carried a second, stringly-typed `TraceParent` that emitted the
+//! `src/lib/framework` carried a second, stringly-typed `TraceParent` that emitted the
 //! same format. Two implementations of one wire format is a correctness risk,
 //! not just duplication - the same argument the repo-wide roadmap used when it
 //! consolidated the two S3 SigV4 signers (item R-2).
@@ -38,7 +38,7 @@ pub const TraceContext = struct {
     /// Generates a random context.
     ///
     /// `random` is explicit rather than seeded internally: an earlier version in
-    /// `lib/cli` seeded a PRNG from the monotonic clock, which makes trace IDs
+    /// `src/lib/framework` seeded a PRNG from the monotonic clock, which makes trace IDs
     /// predictable and collides across processes started in the same
     /// millisecond. The caller owns that choice.
     pub fn generate(random: std.Random, sampled: bool) TraceContext {

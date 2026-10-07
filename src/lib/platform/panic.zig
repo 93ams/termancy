@@ -56,7 +56,7 @@ pub fn writeCrashReport(
         /// `u64`, matching `trace.getMonotonicMs()`. This was `i64` and the
         /// mismatch made `writeCrashReport` fail to compile, which went unnoticed
         /// because nothing referenced it until `platform/root.zig` did - see
-        /// `app/cli/lib/ROADMAP.md` B-1.
+        /// `src/lib/framework/ROADMAP.md` B-1.
         timestamp: u64,
     };
 
