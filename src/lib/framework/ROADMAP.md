@@ -1577,7 +1577,7 @@ a semantic drift hides, because the tests still pass either way. If it is done, 
 `Rig` migration in slices of a few tests with the suite green between each, and re-measure
 the saving rather than believing "~200 lines".
 
-### S-8 · `medium` · Sequential prompts race each other for stdin · **[DONE - one reader per dialog, `skip` measured]**
+### S-8 · `medium` · Sequential prompts race each other for stdin · **[NOT FIXED - see the correction at the end of this item]**
 
 Found by reading `prompt.zig` while measuring B-4, and recorded rather than fixed: it is a
 design question, not an edit.
@@ -1667,60 +1667,59 @@ messages (a change to `Msg`) or a per-prompt drain policy, and both are decision
 than edits. So `prompt.zig` still starts one reader per prompt; the seam that makes it
 fixable now exists and is tested.
 
-#### What the remaining work needs
+#### CORRECTION — the `skip` half is right, the wiring does not work
 
-**DONE.** The stale-message accounting was closed by *measuring* it rather than by adding
-sequence numbers or dropping type-ahead, and the mechanism the original plan did not consider
-is `Channel.queuedCount()`, which already existed.
+A later session wired `prompt.zig` to a shared reader and marked this DONE. **That claim was
+wrong, and it is corrected here rather than deleted**, because the mistake is instructive.
 
-The insight that makes it work is **when** the measurement is taken. Both of the recorded
-options assumed the prompt layer had to know the number *before* the next prompt started:
+What is genuinely done and tested, in `tea.zig`:
 
-* Measured at the *start* of prompt N+1, the count is wrong: the orphaned reader may have
-  queued messages in the interim, those belong to N+1, and counting them as stale silently
-  discards the user's input - the same mistake that made the first version of `skip` hang.
-* Measured at the *end* of prompt N, inside `run`, the queue is settled: anything left in it
-  provably arrived while prompt N was on screen.
+* `Program.onRunEnd(context, hook)` fires as `run` finishes, on every exit path, with the
+  channel and `channel.queuedCount()`. Measuring the leftover **at the end of prompt N** rather
+  than at the start of prompt N+1 is the right call, and it is what makes `skip` exact without
+  sequence numbers on `Msg` or losing type-ahead. That argument stands.
+* `tea.DialogReader(CustomMsgT)` — one channel, one context, one thread — with a test proving
+  two programs made from one dialog share a channel and that `skipped` is measured correctly.
 
-So `Program.onRunEnd(context, hook)` fires the hook as `run` finishes, on every exit path, and
-the hook records `channel.queuedCount()` into the dialog. The next `program` call is built with
-that number. No `Msg` change, and no keystroke lost.
+**What does not work is the cache.** `App.Ctx` is passed **by value**: `fn addRun(ctx: App.Ctx,
+...)`, `pub fn runShell(comptime root_cmd: anytype, ctx: anytype)`, and every prompt signature.
+The wiring made `prompt.zig` take a mutable *local copy* of `ctx` and cache the dialog in it:
 
-What landed:
+```zig
+pub fn confirm(ctx_in: anytype, ...) !bool {
+    var ctx = ctx_in;                 // a fresh copy, per call
+    const dialog = try dialogFor(&ctx);  // caches into that copy
+    ...
+}                                      // copy dies here; the cache dies with it
+```
 
-* `Program.onRunEnd` - a `*anyopaque` context plus a `fn (ctx, channel, queued)` hook. The
-  context pointer is required, not incidental: a bare function pointer cannot reach per-dialog
-  state, and a channel cannot name its owner.
-* `tea.DialogReader(CustomMsgT)` - one channel, one `StdinContext`, one reader thread, created
-  once per dialog. `program(model)` hands out a `Program` over that channel with the measured
-  `skip`. Generic over `CustomMsgT` and its `program` generic over the model, because the four
-  prompts have four distinct anonymous model types that all speak `Msg(void)`.
-* `Reader`, `StdinContext` and the reader thread moved to file scope as `ReaderOf` /
-  `StdinContextOf` / `stdinReaderThreadFor` factories. They cannot stay nested in `Program`:
-  they do not depend on `ModelT`, and `DialogReader` needs them for a different model per
-  prompt.
-* `Ctx.dialog: ?*anyopaque` - the cache. `?*anyopaque` because the type lives in `render`,
-  which cannot import `interact`; `prompt.zig` is the only place it is cast. The four prompt
-  functions take a mutable local copy of `ctx` and pass its address, because the call site's
-  `ctx` is a `const` local in `App.run` and the cache has to outlive the call.
-* `prompt.zig`'s four functions reach the shared dialog through `dialogFor(&ctx)` instead of
-  each calling `Program.init`. Four reader threads per dialog became one.
+So `dialogFor` returns a **new dialog on every prompt**, and each one starts its own reader
+thread over the same stdin. The defect is unchanged; the code merely moved. The same session
+reproduced the original symptom while trying to measure it: a probe that called `confirm`
+twice hung, because two reader threads were competing for one stream.
 
-**The bug was real, not theoretical.** `add` runs `multiSelectDynamic` and then `confirm` once
-per colliding component, so a single command could leave N+1 threads blocked on one stdin.
+The test that was written for this passes and proves nothing about the wiring, because it calls
+`DialogReader.program` **directly** - it verifies the type, not that the prompts reach it.
 
-**Verified by a test that cannot hang:** `tea` gains a test that drives the channel directly
-over a dialog whose reader gets an empty source. It asserts both programs share one channel,
-that `skipped` is zero when nothing is left, that a leftover message is still counted as
-pending *before* the next run, and that `skipped` is correct afterwards. No thread blocks,
-because an empty fixed reader returns zero bytes forever.
+#### What the wiring actually needs
 
-**Not verified, honestly:** the *interactive* path. Reaching a prompt needs a TTY - `add`'s
-multi-select requires raw mode, and `update` fails at its network fetch before it prompts - so
-the end-to-end behaviour under a real terminal was not exercised here. The unit test covers the
-accounting and the single-channel property, which is the whole of the change; what is untested
-is the terminal itself, not the fix.
+The cache has to live somewhere that outlives a single prompt call. Two ways, and the choice
+should be deliberate:
 
+1. **Pass `Ctx` by pointer** through the command chain - `execute`, `runShell`, every
+   `run: *const fn (ctx: Ctx, ...)`, and the four prompt functions take `*Ctx`. Then
+   `ctx.dialog` is genuinely one per invocation and the intended design works as written. This
+   is mechanical but wide: it changes the command signature the whole framework and every
+   `App.command` call site is typed against.
+2. **A process-global dialog.** There is exactly one stdin per process, so one reader for the
+   process is defensible, and `skip` already makes it correct: the dialog that asks the
+   question consumes its own leftover, and the next one discards the rest. Lifetime becomes
+   "until the process exits", which is what the leak already is.
+
+Option 1 keeps the ownership story honest and is the design the rest of this item assumes;
+option 2 is smaller and would need a `ROADMAP.md` note that prompts in *different* commands
+share a reader. Either way, the test that matters is one that calls two prompt functions
+through the real chain and asserts a single reader - not one that calls `DialogReader` directly.
 #### Out of scope, deliberately
 
 Making the reader **stoppable** (the true fix for the leak) needs the `io` to expose a
