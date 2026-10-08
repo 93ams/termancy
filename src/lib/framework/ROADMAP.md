@@ -1539,6 +1539,41 @@ done once, deliberately, rather than worked around per function.
 Doing step 1 alone removes the worst readability problem in the file. Steps 2 and 3 are what
 turn 4,910 lines into a folder.
 
+#### Step 3's extraction inventory, measured
+
+The docs block's dependencies are now enumerated, so this is a checklist rather than an
+exploration. Every one is `comptime`-only, takes no `Ctx`, and touches nothing but `std` and
+its neighbours in this list. Moving `writeMarkdownDocs` and the man/HTML writers needs these
+**eleven** declarations, at these lines:
+
+| Declaration | Line | Why it must come along |
+|---|---|---|
+| `GetFlagsType` | 1323 | `PositionalType` falls back to it |
+| `hasSubcommands` | 1526 | `subcommandCount` uses it |
+| `subcommandCount` | 1531 | `hasAnySubcommands` uses it |
+| `hasAnySubcommands` | 1537 | 6 uses in the docs block |
+| `SubcommandsType` | 1548 | `subcommandCount` returns its field count |
+| `isFrameworkField` | 3830 | 4 uses |
+| `fieldTakesValue` | 3835 | `hasShortFlag` uses it |
+| `hasShortFlag` | 3842 | 2 uses |
+| `PositionalType` | 3849 | `positionalHelp` uses it |
+| `positionalHelp` | 3863 | 2 uses |
+| `hasFieldHelp` | 4108 | 2 uses |
+
+The docs block itself is **lines 3461-3829**: from `emitPowershellCompletions` through
+`writeManSections`, contiguous and mutually recursive (`writeManSections` calls itself,
+`writeHtmlCommand` calls itself, `writeManPage` calls `writeManSections`). `ManLevel` is
+declared inside it at 3728, so it travels with the block.
+
+Two checks before moving, both cheap:
+
+* `hasAnySubcommands` at 1537 is used by **other** parts of `App` as well, so after the move
+  `cli.zig` must import it back - the same re-export pattern `root.zig` already uses for every
+  other name. The same is true of `isFrameworkField`, used by the help printer at 4026.
+* The block must be de-indented by one level, since it moves out of the `App` closure. That is
+  mechanical (`zig fmt` will not do it for you) and is the step most likely to introduce a
+  stray brace, so extract the block with brace matching rather than line arithmetic.
+
 ### S-4 · `medium` · Every consumer compiles all 11,400 lines
 
 `cli.zig`'s 62 `pub const X = @import` lines mean the `snek` binary
