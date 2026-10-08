@@ -1720,6 +1720,37 @@ Option 1 keeps the ownership story honest and is the design the rest of this ite
 option 2 is smaller and would need a `ROADMAP.md` note that prompts in *different* commands
 share a reader. Either way, the test that matters is one that calls two prompt functions
 through the real chain and asserts a single reader - not one that calls `DialogReader` directly.
+
+#### Option 2 was implemented and reverted; the blocker is now the *test*, not the fix
+
+A later session implemented option 2 - a process-global dialog keyed on `ctx.in`, drop the
+`Ctx.dialog` field, `prompt.zig` reaches it with `dialogFor(ctx)` and no local copy - and could
+not make a test pass, so it was reverted rather than committed unverified. What that session
+learned, so the next attempt does not repeat it:
+
+* **`confirm` cannot be driven by a finite source.** When the reader thread hits end of stream it
+  returns, and `run` is left blocked in `Channel.pop` for a message that will never arrive. Two
+  attempts hung on this, each burning minutes: `confirm` twice over an empty fixed reader, and
+  `confirm` twice over a one-byte reader.
+* **Pushing a synthetic end-of-stream message from the reader did not fix it.** `tea.zig` was
+  changed so `read_bytes == 0` pushes `.ctrl_c` before returning - which is correct on its own
+  terms, since a silent return turns "the source ended" into a hang - and the test *still* hung.
+  So either that change is insufficient or the block is elsewhere; the next session should
+  determine which before rewriting the test. That change was reverted with the rest.
+* **The existing tests avoid this entirely** by pushing into the `Channel` directly and never
+  running a thread (`initWithChannel` plus `channel.push`). A test for the wiring has to do the
+  same: get the channel first, push the answer, then call the prompt. That needs the channel to
+  be reachable *before* the first prompt runs, which a `sharedDialogForTest()`-style accessor
+  cannot provide because nothing has prompted yet - the accessor needs a sibling that returns
+  the channel for a given `ctx.in`, or the test needs to build the dialog through the same code
+  path the prompts use.
+* **A hard timeout is mandatory for this work.** Three separate commands hung past 600s and were
+  killed as background jobs. Wrapping the test run in a bounded job (or `--test-filter` on the
+  single test) is the only way to iterate here without losing the session.
+
+The diagnosis above stands, and it is the valuable part: `Ctx` is passed **by value**, so the
+cache cannot live on it. That is not in doubt; only the test strategy is.
+
 #### Out of scope, deliberately
 
 Making the reader **stoppable** (the true fix for the leak) needs the `io` to expose a
