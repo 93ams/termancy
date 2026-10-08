@@ -1499,6 +1499,46 @@ its own and `parseFlags` becomes a readable tokenizer loop. This is
 behaviour-preserving; the 91-test suite is the guard, and if it does not cover a
 branch being moved, **add the test before moving it**.
 
+#### Measurements taken, and the order to work in
+
+Re-measured before starting, because two numbers in this document had drifted:
+
+* `cli.zig` is **4,910 lines**, not ~11,400. The larger figure counted the whole old
+  `lib/cli/` folder of 53 files. The tree is now 121 `.zig` files and 34,455 lines total, so
+  this file is about **14% of the source** - worth splitting, but not the emergency the larger
+  number implied.
+* The one generic closure `App(StateT, config)` spans **lines 401-4919**, so nearly every
+  declaration in the file lives inside it. That is the real reason it is one file, and it is
+  why extraction is not a matter of moving text.
+* The largest functions, measured by brace matching: `parseFlags` **535** lines,
+  `executeFrom` **414**, `assignFlag` 146, `runUpdate` 136, `run` 116.
+
+**The blocker is `Ctx`, and it is smaller than it looks.** `Ctx` (line 433) references the
+closure's `StateT` in exactly **one** place - `state: *StateT`. Nothing else in `Ctx` needs the
+closure. So a `Ctx(StateT)` factory at file scope is the single change that lets the parsing
+subsystem leave, and it is also what S-1 and S-4 need. That is the unlock, and it should be
+done once, deliberately, rather than worked around per function.
+
+**Order that minimises risk:**
+
+1. **S-3, in place.** Split `parseFlags` into `promptForMissingFlags` and `validateFlags`
+   without moving anything between files. Behaviour-preserving, guarded by the existing suite,
+   and it makes the function reviewable. This is the cheapest real win and it does not depend
+   on the `Ctx` change at all.
+2. **`Ctx(StateT)` at file scope.** Then re-measure; the closure's reachable surface shrinks
+   and the extraction targets become obvious.
+3. **The docs subsystem** - the best candidate for a separate file, and the one measured in
+   detail: `emitPowershellCompletions` through `writeManSections` is a contiguous,
+   mutually-recursive block at lines **3461-3829** (~370 lines) with **zero** `StateT` and zero
+   runtime `Ctx` use (the two `Ctx` mentions are prose in doc comments). It does need five
+   comptime helpers from elsewhere - `hasAnySubcommands`, `isFrameworkField`, `hasShortFlag`,
+   `positionalHelp`, `hasFieldHelp` - and those pull in `subcommandCount`, `SubcommandsType`,
+   `GetFlagsType`, `PositionalType` and `fieldTakesValue`. All are `comptime`-only and small,
+   so the move is one hop, not a web; it is simply more than a copy-paste.
+
+Doing step 1 alone removes the worst readability problem in the file. Steps 2 and 3 are what
+turn 4,910 lines into a folder.
+
 ### S-4 · `medium` · Every consumer compiles all 11,400 lines
 
 `cli.zig`'s 62 `pub const X = @import` lines mean the `snek` binary
