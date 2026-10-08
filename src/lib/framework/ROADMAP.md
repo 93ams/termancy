@@ -1577,7 +1577,7 @@ a semantic drift hides, because the tests still pass either way. If it is done, 
 `Rig` migration in slices of a few tests with the suite green between each, and re-measure
 the saving rather than believing "~200 lines".
 
-### S-8 · `medium` · Sequential prompts race each other for stdin · **[NOT FIXED - see the correction at the end of this item]**
+### S-8 · `medium` · Sequential prompts race each other for stdin · **[FIXED - one process-wide reader; see the resolution at the end]**
 
 Found by reading `prompt.zig` while measuring B-4, and recorded rather than fixed: it is a
 design question, not an edit.
@@ -1721,12 +1721,26 @@ option 2 is smaller and would need a `ROADMAP.md` note that prompts in *differen
 share a reader. Either way, the test that matters is one that calls two prompt functions
 through the real chain and asserts a single reader - not one that calls `DialogReader` directly.
 
-#### Option 2 was implemented and reverted; the blocker is now the *test*, not the fix
+#### RESOLVED by option 2, with the test problem solved
 
-A later session implemented option 2 - a process-global dialog keyed on `ctx.in`, drop the
-`Ctx.dialog` field, `prompt.zig` reaches it with `dialogFor(ctx)` and no local copy - and could
-not make a test pass, so it was reverted rather than committed unverified. What that session
-learned, so the next attempt does not repeat it:
+**Landed.** Option 2: a process-global `shared` dialog keyed on `ctx.in`, built on first use and
+reused afterwards. `Ctx.dialog` is gone - it was the approach that could not work - and
+`prompt.zig` calls `dialogFor(ctx)` with no local copy. `DialogReader.detach()` was added so a
+dialog can be replaced without joining a reader that may never stop.
+
+**The test problem that blocked the first attempt is solved.** The answer is to queue into the
+channel *before* prompting, and `installSharedForTest` exists to hand the test that channel.
+Driving `confirm` from a finite source instead hangs: the reader thread returns at end of stream
+and `run` is left blocked in `Channel.pop` for a message that never arrives.
+
+The regression test drives the **real** `confirm` model twice, from two separate copies of one
+context, and asserts the second reaches the same dialog. Under a deliberately broken cache the
+test hangs, so it is sensitive to the change - though it signals by hanging rather than by a
+clean assertion, which is worth improving.
+
+**Still not verified:** the interactive path. The test injects the channel rather than letting
+the reader thread fill it, so what is proven is the wiring and the models, not a real terminal.
+That is the same gap that hid the bug the first time, and it is stated rather than glossed.
 
 * **`confirm` cannot be driven by a finite source.** When the reader thread hits end of stream it
   returns, and `run` is left blocked in `Channel.pop` for a message that will never arrive. Two

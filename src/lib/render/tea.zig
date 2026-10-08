@@ -978,6 +978,22 @@ pub fn DialogReader(comptime CustomMsgT: type) type {
             self.allocator.destroy(self.reader.ctx.channel);
             self.allocator.destroy(self.reader.ctx);
         }
+
+        /// Gives up the reader thread **without** joining it, and frees nothing.
+        ///
+        /// `deinit` joins, which is correct for a caller whose source reaches end of stream and
+        /// hangs for one whose source does not - and on a real terminal stdin never ends, so the
+        /// thread stays blocked in `readVec` forever. A caller that must replace a dialog while
+        /// the process keeps running therefore cannot use `deinit`; it uses this, and
+        /// deliberately leaks, which is the trade B-4 already documents.
+        ///
+        /// Detaching is what makes that safe: the context and channel are never freed, so
+        /// nothing the thread touches can dangle, and the thread ends with the process.
+        pub fn detach(self: *Self) void {
+            if (self.joined) return;
+            self.joined = true;
+            self.reader.thread.detach();
+        }
     };
 }
 
