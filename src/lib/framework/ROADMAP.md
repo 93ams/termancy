@@ -1503,15 +1503,27 @@ branch being moved, **add the test before moving it**.
 
 Re-measured before starting, because two numbers in this document had drifted:
 
-* `cli.zig` is **4,910 lines**, not ~11,400. The larger figure counted the whole old
-  `lib/cli/` folder of 53 files. The tree is now 121 `.zig` files and 34,455 lines total, so
-  this file is about **14% of the source** - worth splitting, but not the emergency the larger
+* `cli.zig` was **4,910 lines**, not ~11,400. The larger figure counted the whole old
+  `lib/cli/` folder of 53 files. The tree is 121 `.zig` files and ~34,500 lines total, so this
+  file was about **14% of the source** - worth splitting, but not the emergency the larger
   number implied.
-* The one generic closure `App(StateT, config)` spans **lines 401-4919**, so nearly every
+* The one generic closure `App(StateT, config)` spanned **lines 401-4919**, so nearly every
   declaration in the file lives inside it. That is the real reason it is one file, and it is
   why extraction is not a matter of moving text.
 * The largest functions, measured by brace matching: `parseFlags` **535** lines,
   `executeFrom` **414**, `assignFlag` 146, `runUpdate` 136, `run` 116.
+
+**Progress since.** Two extractions have landed, both behaviour-preserving and both verified by
+the suite total staying at 601/602:
+
+* **`docs.zig` - 588 lines** out of `cli.zig`, holding the Markdown, man-page and HTML
+  generators. Pure functions of a command type: no `Ctx`, no `StateT`. This is also the shape
+  of the remaining work - anything that does not need `StateT` can leave the closure.
+* **`promptForMissingFlags` - 52 lines** out of `parseFlags`, which is now **497 lines**. The
+  prompt path is the one branch of that loop the suite *cannot* exercise without a TTY, which is
+  precisely why it is worth having a name.
+
+`cli.zig` is now **4,373 lines**, down from 4,910.
 
 **The blocker is `Ctx`, and it is smaller than it looks.** `Ctx` (line 433) references the
 closure's `StateT` in exactly **one** place - `state: *StateT`. Nothing else in `Ctx` needs the
@@ -1537,7 +1549,7 @@ done once, deliberately, rather than worked around per function.
    so the move is one hop, not a web; it is simply more than a copy-paste.
 
 Doing step 1 alone removes the worst readability problem in the file. Steps 2 and 3 are what
-turn 4,910 lines into a folder.
+turn a 4,900-line file into a folder.
 
 #### Step 3's extraction inventory, measured
 

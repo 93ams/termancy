@@ -2539,48 +2539,10 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 if (comptime (field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) continue;
                 if (comptime isPositionalField(field.name)) continue;
 
-                if (!resolved[idx]) {
-                    if (field.default_value_ptr == null and @typeInfo(field.type) != .optional and field.type != bool) {
-                        if (ctx.is_tty) {
-                            try ctx.out.print("? {s} [--{s}]: ", .{ field.name, field.name });
-                            if (ctx.in.takeDelimiter('\n') catch null) |read_str| {
-                                const input_str = std.mem.trim(u8, read_str, " \r\n\t");
-                                if (input_str.len == 0) {
-                                    try ctx.err.print("\nError: Missing required flag '--{s}'.\n", .{field.name});
-                                    return error.MissingRequiredFlag;
-                                }
-                                const parsed_missing_val =
-                                    if (comptime @hasDecl(OrigFlagsT, "parse") and @hasField(@TypeOf(OrigFlagsT.parse), field.name)) blk: {
-                                        const custom_parser = @field(OrigFlagsT.parse, field.name);
-                                        break :blk custom_parser(input_str) catch |err| {
-                                            try ctx.err.print("\nError: Invalid format for flag '--{s}'.\n", .{field.name});
-                                            return err;
-                                        };
-                                    } else if (comptime getGlobalParserIndex(field.type)) |parser_idx| blk: {
-                                        const global_parser = @field(config.type_parsers, std.meta.fields(@TypeOf(config.type_parsers))[parser_idx].name);
-                                        break :blk global_parser(input_str) catch |err| {
-                                            try ctx.err.print("\nError: Invalid format for flag '--{s}'.\n", .{field.name});
-                                            return err;
-                                        };
-                                    } else blk: {
-                                        break :blk parseValue(field.type, input_str) catch |err| {
-                                            try ctx.err.print("\nError: Invalid value '{s}' for flag '--{s}'.\n", .{ maskIfSecret(isSecretFlag(OrigFlagsT, field.name), input_str), field.name });
-                                            return err;
-                                        };
-                                    };
-                                @field(parsed_flags, field.name) = parsed_missing_val;
-                                provided[idx] = true;
-                                resolved[idx] = true;
-                            } else {
-                                return error.UserCancelled;
-                            }
-                        } else {
-                            const stderr = ctx.err;
-                            try stderr.print("Error: Missing required flag '--{s}'.\n", .{field.name});
-                            return error.MissingRequiredFlag;
-                        }
-                    }
-                }
+                // The prompt path has its own function: it needs a TTY, so it is the one
+                // branch of this loop the suite cannot exercise, and naming it makes it
+                // reviewable on its own (ROADMAP S-3).
+                try promptForMissingFlags(OrigFlagsT, FlagsType, &parsed_flags, &provided, &resolved, idx, field, ctx);
             }
 
             if (comptime has_pos_lower or has_pos_upper) {
@@ -2838,6 +2800,69 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             }
 
             return parsed_flags;
+        }
+        /// Prompts for a required flag that nothing else has supplied, and writes the answer
+        /// back into `parsed`.
+        ///
+        /// Split out of `parseFlags` (ROADMAP S-3). It is the one branch there that mixes
+        /// *policy* with parsing, and the one that cannot run without a terminal, so it is
+        /// worth reading on its own rather than four levels deep inside a tokenizer loop.
+        ///
+        /// `provided` and `resolved` are mutated on success: an answer typed at the prompt is
+        /// indistinguishable from one typed on the command line, so anything that checks
+        /// conflicts or co-requisites afterwards must see it as supplied.
+        fn promptForMissingFlags(
+            comptime OrigFlagsT: type,
+            comptime FlagsType: type,
+            parsed: *FlagsType,
+            provided: []bool,
+            resolved: []bool,
+            idx: usize,
+            comptime field: std.builtin.Type.StructField,
+            ctx: anytype,
+        ) !void {
+            if (resolved[idx]) return;
+            if (field.default_value_ptr != null) return;
+            if (field.type == bool) return;
+            if (@typeInfo(field.type) == .optional) return;
+            if (ctx.is_tty) {
+                try ctx.out.print("? {s} [--{s}]: ", .{ field.name, field.name });
+                if (ctx.in.takeDelimiter('\n') catch null) |read_str| {
+                    const input_str = std.mem.trim(u8, read_str, " \r\n\t");
+                    if (input_str.len == 0) {
+                        try ctx.err.print("\nError: Missing required flag '--{s}'.\n", .{field.name});
+                        return error.MissingRequiredFlag;
+                    }
+                    const parsed_missing_val =
+                        if (comptime @hasDecl(OrigFlagsT, "parse") and @hasField(@TypeOf(OrigFlagsT.parse), field.name)) blk: {
+                            const custom_parser = @field(OrigFlagsT.parse, field.name);
+                            break :blk custom_parser(input_str) catch |err| {
+                                try ctx.err.print("\nError: Invalid format for flag '--{s}'.\n", .{field.name});
+                                return err;
+                            };
+                        } else if (comptime getGlobalParserIndex(field.type)) |parser_idx| blk: {
+                            const global_parser = @field(config.type_parsers, std.meta.fields(@TypeOf(config.type_parsers))[parser_idx].name);
+                            break :blk global_parser(input_str) catch |err| {
+                                try ctx.err.print("\nError: Invalid format for flag '--{s}'.\n", .{field.name});
+                                return err;
+                            };
+                        } else blk: {
+                            break :blk parseValue(field.type, input_str) catch |err| {
+                                try ctx.err.print("\nError: Invalid value '{s}' for flag '--{s}'.\n", .{ maskIfSecret(isSecretFlag(OrigFlagsT, field.name), input_str), field.name });
+                                return err;
+                            };
+                        };
+                    @field(parsed, field.name) = parsed_missing_val;
+                    provided[idx] = true;
+                    resolved[idx] = true;
+                } else {
+                    return error.UserCancelled;
+                }
+            } else {
+                const stderr = ctx.err;
+                try stderr.print("Error: Missing required flag '--{s}'.\n", .{field.name});
+                return error.MissingRequiredFlag;
+            }
         }
 
         /// Parses one piece of text as `T`, through the chain every path shares:
