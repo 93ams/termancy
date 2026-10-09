@@ -72,6 +72,20 @@ pub const alias = @import("alias.zig");
 pub const i18n = @import("i18n.zig");
 pub const policy = @import("policy.zig");
 pub const repl = @import("repl.zig");
+/// The documentation generators, in their own file: pure functions of a command type, with no
+/// `Ctx` and no `StateT`, which is what let them leave the `App` closure (ROADMAP S-1/S-3/S-4).
+pub const docs = @import("docs.zig");
+// These four are used by both the documentation generators and this file's own routing and
+// help, so the definition lives with the generators (they are pure functions of a command
+// type, which is what let them leave the `App` closure) and this file reaches them here.
+const getSubcommands = docs.getSubcommands;
+const isHidden = docs.isHidden;
+const hasMetaField = docs.hasMetaField;
+const declaresPositionals = docs.declaresPositionals;
+const writeFlagSpelling = docs.writeFlagSpelling;
+const isDeprecatedFlag = docs.isDeprecatedFlag;
+const isSecretFlag = docs.isSecretFlag;
+const isRepeatableField = docs.isRepeatableField;
 
 pub const comptime_config = zcfg.comptime_config;
 pub const config_lineage = zcfg.config_lineage;
@@ -498,17 +512,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             return platform.signal.install();
         }
 
-        /// Whether a field carries a `.deprecated` note.
-        ///
-        /// Absent metadata means "not deprecated", so an undeclared flag never warns.
-        fn isDeprecatedFlag(comptime OrigFlagsT: type, comptime name: []const u8) bool {
-            if (!@hasDecl(OrigFlagsT, "meta")) return false;
-            const mb = OrigFlagsT.meta;
-            if (!@hasField(@TypeOf(mb), name)) return false;
-            const fm = @field(mb, name);
-            return @hasField(@TypeOf(fm), "deprecated");
-        }
-
         /// Whether a field is declared `.count = true` in its metadata.
         ///
         /// Absent metadata means "not a count flag", which is the safe default: a field
@@ -763,18 +766,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// The framework's hook for a failed command. See `on_error`.
         pub const OnErrorFn = *const fn (ctx: Ctx, err: anyerror) void;
 
-        /// The command-line spelling of a field: `dry_run` is typed `--dry-run`.
-        ///
-        /// GNU convention, and it costs nothing to accept both - the matcher treats `-`
-        /// and `_` as the same character, so an existing script written either way keeps
-        /// working. Rendering goes through this helper so help, errors, suggestions and
-        /// completions cannot disagree about the spelling.
-        fn writeFlagSpelling(writer: anytype, name: []const u8) !void {
-            for (name) |ch| {
-                try writer.writeByte(if (ch == '_') '-' else ch);
-            }
-        }
-
         /// Whether `key` names the field `field_name`, in either spelling.
         ///
         /// Length is compared first because that rejects almost everything for one
@@ -791,20 +782,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 if (normalized_a != normalized_b) return false;
             }
             return true;
-        }
-
-        /// Whether a field collects every occurrence of its flag instead of replacing
-        /// its value.
-        ///
-        /// The rule is the element type: a slice of `u8` is a *string* - the historical
-        /// and still the common case - and any other slice is a collection. So
-        /// `[]const []const u8` is a list of strings (`-H a -H b`) and `[]const u16` is
-        /// a list of ports.
-        fn isRepeatableField(comptime T: type) bool {
-            const info = @typeInfo(T);
-            if (info != .pointer) return false;
-            if (info.pointer.size != .slice) return false;
-            return info.pointer.child != u8;
         }
 
         /// The element type a repeatable field collects.
@@ -1319,22 +1296,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             return .{};
         }
 
-        /// Executes a given command tree with the provided arguments.
-        fn GetFlagsType(comptime CmdType: type) type {
-            if (@hasField(CmdType, "Flags")) {
-                return @field(CmdType, "Flags");
-            }
-            if (@hasField(CmdType, "run") and @TypeOf(@field(@as(CmdType, undefined), "run")) != @TypeOf(null)) {
-                comptime var run_info = @typeInfo(@TypeOf(@field(@as(CmdType, undefined), "run")));
-                if (run_info == .optional) run_info = @typeInfo(run_info.optional.child);
-                if (run_info == .pointer) run_info = @typeInfo(run_info.pointer.child);
-                if (run_info == .@"fn") {
-                    return run_info.@"fn".params[1].type.?;
-                }
-            }
-            return struct {};
-        }
-
         fn determinesIfFlagTakesValue(comptime OrigFlagsT: type, comptime FlagsType: type, arg: []const u8) bool {
             if (std.mem.startsWith(u8, arg, "--")) {
                 const name = arg[2..];
@@ -1513,44 +1474,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             return @typeInfo(RT) == .pointer;
         }
 
-        /// Whether this command declares subcommands.
-        ///
-        /// Probed as both a decl and a field because the two shapes are both live:
-        /// `CommandWithReturn` emits a decl, and a hand-written command may use either.
-        /// The existing `SubcommandsType`/`getSubcommands` helpers depend on these two.
-        ///
-        /// "Declares the slot" is not "has any": a leaf built by `LeafCommand` carries
-        /// an *empty* tuple, which is a declared slot with nothing in it. Everything
-        /// that lists or advertises subcommands must use `hasAnySubcommands` instead,
-        /// or a leaf prints `Usage: x [command]`.
-        fn hasSubcommands(comptime CmdType: type) bool {
-            return @hasDecl(CmdType, "subcommands") or @hasField(CmdType, "subcommands");
-        }
-
-        /// The number of subcommands actually present, which for a leaf is zero.
-        fn subcommandCount(comptime CmdType: type) usize {
-            if (comptime !hasSubcommands(CmdType)) return 0;
-            return std.meta.fields(SubcommandsType(CmdType)).len;
-        }
-
-        /// Whether this command actually has anything to route to.
-        fn hasAnySubcommands(comptime CmdType: type) bool {
-            return subcommandCount(CmdType) > 0;
-        }
-
-        fn getSubcommands(cmd: anytype) SubcommandsType(@TypeOf(cmd)) {
-            const CT = @TypeOf(cmd);
-            if (comptime @hasDecl(CT, "subcommands")) return CT.subcommands;
-            if (comptime @hasField(CT, "subcommands")) return cmd.subcommands;
-            return .{};
-        }
-
-        fn SubcommandsType(comptime CmdType: type) type {
-            if (comptime @hasDecl(CmdType, "subcommands")) return @TypeOf(CmdType.subcommands);
-            if (comptime @hasField(CmdType, "subcommands")) return @TypeOf(@as(CmdType, undefined).subcommands);
-            return @TypeOf(.{});
-        }
-
         /// Whether this process is running under a CI system.
         ///
         /// Delegates to the capability module, which is where the policy lives: CI is
@@ -1559,16 +1482,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// consistent.
         pub fn isCiEnvironment(env_map: *std.process.Environ.Map) bool {
             return render.capability.isCi(env_map);
-        }
-
-        /// Whether a subcommand is routable but must not be advertised.
-        ///
-        /// Checked on the type rather than the value because `inline for` over a tuple
-        /// yields values whose type is what carries the field; a hand-written command
-        /// without the field is simply not hidden.
-        fn isHidden(comptime SubT: type, sub: SubT) bool {
-            if (comptime !@hasField(SubT, "hidden")) return false;
-            return sub.hidden;
         }
 
         /// Whether an environment variable named `name` opens a feature gate.
@@ -1617,24 +1530,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             if (isHidden(CmdT, cmd)) return false;
             if (isDeprecatedCommand(CmdT, cmd)) return false;
             return commandIsAvailable(ctx, CmdT, cmd);
-        }
-
-        /// Whether the command's flags declare positional arguments.
-        ///
-        /// Two spellings are accepted (`positionals` and `Positional`) because the
-        /// framework reads either; the rule this feeds is that a command with nowhere to
-        /// put an argument must reject one rather than silently drop it.
-        ///
-        /// A `command`-registered command declares them in its metadata instead, and
-        /// they are parsed into the flags type the framework builds - so the marker on
-        /// the command type is what answers here.
-        fn declaresPositionals(comptime CmdType: type) bool {
-            if (comptime @hasDecl(CmdType, "PositionalArgsT")) {
-                return std.meta.fields(CmdType.PositionalArgsT).len > 0;
-            }
-            const FT = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else GetFlagsType(CmdType);
-            if (FT == void) return false;
-            return @hasField(FT, "positionals") or @hasField(FT, "Positional");
         }
 
         /// The flag nearest to a misspelled one, or null when nothing is close enough.
@@ -1709,7 +1604,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// suggest `export`. Aliases are considered too, since a user typing a misspelled
         /// alias wants the alias corrected rather than nothing.
         fn nearestSubcommand(comptime CmdType: type, ctx: anytype, arg: []const u8) ?[]const u8 {
-            if (comptime !hasSubcommands(CmdType)) return null;
+            if (comptime !docs.hasSubcommands(CmdType)) return null;
 
             var best: ?[]const u8 = null;
             var best_dist: usize = std.math.maxInt(usize);
@@ -1850,7 +1745,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 } else if (std.mem.eql(u8, shell, "fish")) {
                     try emitFishCompletions(ctx.out, prog);
                 } else if (std.mem.eql(u8, shell, "powershell") or std.mem.eql(u8, shell, "pwsh")) {
-                    try emitPowershellCompletions(ctx.out, prog);
+                    try docs.emitPowershellCompletions(ctx.out, prog);
                 } else {
                     try ctx.err.print("Error: Unknown shell '{s}'. Expected bash, zsh, fish or powershell.\n", .{shell});
                     return error.UnknownField;
@@ -1863,9 +1758,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 if (std.mem.eql(u8, fmt, "markdown") or std.mem.eql(u8, fmt, "md")) {
                     try writeMarkdownDocs(cmd, ctx.out, "");
                 } else if (std.mem.eql(u8, fmt, "man")) {
-                    try writeManPage(cmd, ctx.out);
+                    try docs.writeManPage(cmd, ctx.out);
                 } else if (std.mem.eql(u8, fmt, "html")) {
-                    try writeHtmlDocs(cmd, ctx.out);
+                    try docs.writeHtmlDocs(cmd, ctx.out);
                 } else {
                     try ctx.err.print("Error: Unknown format '{s}'. Expected markdown, man or html.\n", .{fmt});
                     return error.UnknownField;
@@ -1885,7 +1780,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 const arg = args[cursor];
 
                 if (std.mem.startsWith(u8, arg, "-")) {
-                    const _FlagsType = GetFlagsType(CmdType);
+                    const _FlagsType = docs.GetFlagsType(CmdType);
                     const _OrigFlagsT = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else _FlagsType;
                     const consumes_value = determinesIfFlagTakesValue(_OrigFlagsT, _FlagsType, arg);
                     if (consumes_value and std.mem.indexOf(u8, arg, "=") == null) {
@@ -1901,7 +1796,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 // uses. Measured: `RootCmd` has one subcommand and routing reported "not a
                 // known subcommand" for it, because the guard was false and the `inline for`
                 // below never ran.
-                if (comptime hasSubcommands(CmdType)) {
+                if (comptime docs.hasSubcommands(CmdType)) {
                     inline for (getSubcommands(cmd)) |subcmd| {
                         // A feature-gated subcommand is not routable while its gate is
                         // closed: it is not "hidden", it does not exist yet. A deprecated
@@ -1958,7 +1853,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                     }
 
                     try ctx.err.print("Error: Unknown command '{s}'.\n", .{arg});
-                    if (comptime hasSubcommands(CmdType)) {
+                    if (comptime docs.hasSubcommands(CmdType)) {
                         if (nearestSubcommand(CmdType, ctx, arg)) |suggestion| {
                             try ctx.err.print("Did you mean '{s}'?\n", .{suggestion});
                         }
@@ -2225,7 +2120,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             if (comptime !@hasDecl(OrigFlagsT, "meta")) return;
             const FlagsT = @TypeOf(flags);
             inline for (std.meta.fields(FlagsT)) |field| {
-                if (comptime !isFrameworkField(field.name) and !isPositionalField(field.name)) {
+                if (comptime !docs.isFrameworkField(field.name) and !isPositionalField(field.name)) {
                     if (comptime field.type == []const u8 or field.type == []u8) {
                         if (comptime isSecretFlag(OrigFlagsT, field.name)) {
                             log.registerSecret(@field(flags, field.name));
@@ -2245,15 +2140,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                     }
                 }
             }
-        }
-
-        /// Whether a flag's metadata declares it secret.
-        fn isSecretFlag(comptime OrigFlagsT: type, comptime name: []const u8) bool {
-            if (!@hasDecl(OrigFlagsT, "meta")) return false;
-            if (!@hasField(@TypeOf(OrigFlagsT.meta), name)) return false;
-            const entry = @field(OrigFlagsT.meta, name);
-            if (!@hasField(@TypeOf(entry), "secret")) return false;
-            return entry.secret;
         }
 
         /// Whether a positional argument's metadata declares it secret, in either
@@ -2578,7 +2464,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // the struct's own default - and it is enforced by `resolved`, which the
             // command line sets in `assignFlag` and each layer below only consults.
             inline for (std.meta.fields(FlagsType), 0..) |field, idx| {
-                if (comptime isFrameworkField(field.name)) {
+                if (comptime docs.isFrameworkField(field.name)) {
                     // framework-internal field
                 } else if (comptime isPositionalField(field.name)) {
                     // positionals carry no flag metadata
@@ -3023,11 +2909,6 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             };
         }
 
-        /// Whether a field carries any metadata of its own.
-        fn hasMetaField(comptime OrigFlagsT: type, comptime name: []const u8) bool {
-            return @hasDecl(OrigFlagsT, "meta") and @hasField(@TypeOf(OrigFlagsT.meta), name);
-        }
-
         /// Applies the environment and config-file layers to one field, in that order.
         ///
         /// A field needs **no** metadata to be settable from a file: the key is the
@@ -3458,448 +3339,12 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// format string needs `$$` and `{{`, and getting one wrong yields "unused argument
         /// in <the whole template>", which is a poor error for a poor approach. Fragments
         /// have no escaping to get wrong.
-        fn emitPowershellCompletions(writer: anytype, prog: []const u8) !void {
-            try writer.writeAll("Register-ArgumentCompleter -Native -CommandName ");
-            try writer.writeAll(prog);
-            try writer.writeAll(" -ScriptBlock {\n");
-            try writer.writeAll("  param($wordToComplete, $commandAst, $cursorPosition)\n  ");
-            try writer.writeAll(prog);
-            try writer.writeAll(" __complete $commandAst.ToString().Split(' ')[1..99] |\n");
-            try writer.writeAll("    ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }\n}\n");
-        }
-
-        /// Renders the command tree as a man page.
-        ///
-        /// `writeMarkdownDocs` already walks the same tree, so only the framing differs - the
-        /// section headers and the `.SH`/`.TP` macros a man reader expects.
-        /// Renders the command tree as a man page.
-        ///
-        /// The same tree walk `writeMarkdownDocs` does, in man macros. It carries the
-        /// same three sections a reader expects - COMMANDS, ARGUMENTS and OPTIONS - and
-        /// it recurses: a man page that stopped at the immediate children would hide the
-        /// whole point of a nested CLI, and one with no OPTIONS section would document
-        /// the synopsis and nothing about how to use it.
-        fn writeManPage(comptime cmd: anytype, writer: anytype) !void {
-            const CmdType = @TypeOf(cmd);
-            if (@hasField(CmdType, "description") and cmd.description.len > 0) {
-                try writer.print(".TH {s} 1\n.SH NAME\n{s} - {s}\n.SH SYNOPSIS\n.B {s}\n[command] [flags] [args]\n", .{
-                    cmd.name, cmd.name, cmd.description, cmd.name,
-                });
-            } else {
-                // A command with no description gets no ` - ` separator rather than a
-                // dangling one.
-                try writer.print(".TH {s} 1\n.SH NAME\n{s}\n.SH SYNOPSIS\n.B {s}\n[command] [flags] [args]\n", .{
-                    cmd.name, cmd.name, cmd.name,
-                });
-            }
-            try writeManSections(cmd, writer, .top);
-
-            if (comptime hasAnySubcommands(CmdType)) {
-                inline for (getSubcommands(cmd)) |sub| {
-                    if (comptime !isHidden(@TypeOf(sub), sub)) {
-                        try writer.print(".SS {s}\n", .{sub.name});
-                        try writeManSubtree(sub, writer);
-                    }
-                }
-            }
-        }
-
-        /// Writes a command's deprecation and feature notes, if it has any.
-        ///
-        /// The documentation generators have no `Ctx`, so they cannot evaluate a feature
-        /// gate the way routing and `--help` do. They describe the whole surface instead
-        /// and say which parts are conditional - which is what a generated reference is
-        /// for, and why a deprecated command is listed here while `--help` omits it.
-        fn writeCommandMarkers(comptime CmdT: type, cmd: CmdT, writer: anytype) !void {
-            if (comptime @hasField(CmdT, "deprecated")) {
-                if (cmd.deprecated.len > 0) try writer.print(" (deprecated: {s})", .{cmd.deprecated});
-            }
-            if (comptime @hasField(CmdT, "feature")) {
-                if (cmd.feature.len > 0) try writer.print(" (experimental: set {s})", .{cmd.feature});
-            }
-        }
-
-        /// The same, for a flag.
-        fn writeFlagMarkers(comptime OrigFlagsT: type, comptime name: []const u8, writer: anytype) !void {
-            if (comptime hasMetaField(OrigFlagsT, name) and
-                @hasField(@TypeOf(@field(OrigFlagsT.meta, name)), "feature"))
-            {
-                const gate = @field(OrigFlagsT.meta, name).feature;
-                if (gate.len > 0) try writer.print(" (experimental: set {s})", .{gate});
-            }
-        }
-
-        /// Escapes the five characters that would otherwise be markup.
-        ///
-        /// The output is a document and a command description is user-written text: an
-        /// unescaped `&` or `<` in a description turns the rest of the page into tag soup.
-        fn writeHtmlEscaped(writer: anytype, text: []const u8) !void {
-            for (text) |ch| {
-                switch (ch) {
-                    '&' => try writer.writeAll("&amp;"),
-                    '<' => try writer.writeAll("&lt;"),
-                    '>' => try writer.writeAll("&gt;"),
-                    '"' => try writer.writeAll("&quot;"),
-                    '\'' => try writer.writeAll("&#39;"),
-                    else => try writer.writeByte(ch),
-                }
-            }
-        }
-
-        /// Whether a command appears in the HTML reference.
-        ///
-        /// The generators have no `Ctx`, so they cannot evaluate a feature gate - they
-        /// document a gated command with the variable that opens it. Hiding is different: a
-        /// hidden command is private, and no generated document should name it.
-        fn isAdvertisableHtml(comptime CmdT: type, cmd: CmdT) bool {
-            return !isHidden(CmdT, cmd);
-        }
-
-        /// Renders the command tree as a standalone HTML document.
-        ///
-        /// One page for the whole tree rather than one per command: a single file can be
-        /// opened, searched and published without a server, which is what a CLI's
-        /// documentation usually needs. The styling is inline so the file is
-        /// self-contained.
-        pub fn writeHtmlDocs(comptime cmd: anytype, writer: anytype) !void {
-            try writer.writeAll("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>");
-            try writeHtmlEscaped(writer, cmd.name);
-            try writer.writeAll(
-                \\</title>
-                \\<style>
-                \\  body { font-family: system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-                \\  code { background: #f2f2f2; padding: 0.1rem 0.3rem; border-radius: 3px; }
-                \\  table { border-collapse: collapse; margin: 0.5rem 0 1.5rem; }
-                \\  th, td { border: 1px solid #ccc; padding: 0.25rem 0.6rem; text-align: left; }
-                \\  section { margin-bottom: 2.5rem; }
-                \\  p.desc { font-style: italic; }
-                \\</style>
-                \\</head>
-                \\<body>
-                \\
-            );
-            try writeHtmlCommand(cmd, writer, 1);
-            try writer.writeAll("</body>\n</html>\n");
-        }
-
-        /// One command's section, then its subcommands', recursively.
-        ///
-        /// Hidden commands are omitted; deprecated and feature-gated ones are documented
-        /// with their note, because a generated reference describes the whole surface
-        /// rather than only the part this process can reach.
-        fn writeHtmlCommand(comptime cmd: anytype, writer: anytype, level: usize) !void {
-            const CmdType = @TypeOf(cmd);
-            const heading: usize = @min(level, 6);
-
-            try writer.writeAll("<section id=\"");
-            try writeHtmlEscaped(writer, cmd.name);
-            try writer.writeAll("\">\n<h");
-            try writer.print("{d}>", .{heading});
-            try writeHtmlEscaped(writer, cmd.name);
-            try writer.print("</h{d}>\n", .{heading});
-
-            if (@hasField(CmdType, "description") and cmd.description.len > 0) {
-                try writer.writeAll("<p class=\"desc\">");
-                try writeHtmlEscaped(writer, cmd.description);
-                try writer.writeAll("</p>\n");
-            }
-            try writer.writeAll("<p><code>");
-            try writeHtmlEscaped(writer, cmd.name);
-            if (comptime hasAnySubcommands(CmdType)) try writer.writeAll(" [command]");
-            if (comptime declaresPositionals(CmdType)) try writer.writeAll(" [args]");
-            try writer.writeAll(" [flags]</code></p>\n");
-
-            const ArgsT = PositionalType(CmdType);
-            const runs_flags = GetFlagsType(CmdType);
-            const orig_flags = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else runs_flags;
-
-            if (comptime std.meta.fields(ArgsT).len > 0) {
-                try writer.writeAll("<h4>Arguments</h4>\n<table>\n<tr><th>Argument</th><th>Required</th><th>Description</th></tr>\n");
-                inline for (std.meta.fields(ArgsT)) |p_field| {
-                    try writer.writeAll("<tr><td><code>");
-                    try writeHtmlEscaped(writer, p_field.name);
-                    try writer.writeAll("</code></td><td>");
-                    const required = comptime p_field.default_value_ptr == null and
-                        @typeInfo(p_field.type) != .optional;
-                    try writer.writeAll(if (required) "yes" else "no");
-                    try writer.writeAll("</td><td>");
-                    if (comptime positionalHelp(ArgsT, orig_flags, p_field.name)) |text| {
-                        try writeHtmlEscaped(writer, text);
-                    }
-                    try writer.writeAll("</td></tr>\n");
-                }
-                try writer.writeAll("</table>\n");
-            }
-
-            if (runs_flags != void) {
-                var any_options = false;
-                inline for (std.meta.fields(runs_flags)) |field| {
-                    if (comptime !isFrameworkField(field.name) and !isPositionalField(field.name)) {
-                        any_options = true;
-                    }
-                }
-                if (any_options) {
-                    try writer.writeAll("<h4>Flags</h4>\n<table>\n<tr><th>Flag</th><th>Type</th><th>Default</th><th>Description</th></tr>\n");
-                    inline for (std.meta.fields(runs_flags)) |field| {
-                        if (comptime !isFrameworkField(field.name) and !isPositionalField(field.name)) {
-                            try writer.writeAll("<tr><td><code>--");
-                            try writeFlagSpelling(writer, field.name);
-                            if (comptime hasShortFlag(orig_flags, field.name)) {
-                                try writer.print(", -{c}", .{@field(orig_flags.meta, field.name).short});
-                            }
-                            try writer.writeAll("</code>");
-                            try writeFlagMarkers(orig_flags, field.name, writer);
-                            try writer.writeAll("</td><td><code>");
-                            try writeHtmlEscaped(writer, @typeName(field.type));
-                            try writer.writeAll("</code></td><td>");
-                            if (comptime isSecretFlag(orig_flags, field.name)) {
-                                // Same rule as `--help`: a secret's default is a secret.
-                                try writer.writeAll(log.redaction_mask);
-                            } else if (field.default_value_ptr) |def| {
-                                const default_value = @as(*align(1) const field.type, @ptrCast(def)).*;
-                                if (comptime isRepeatableField(field.type)) {
-                                    try writer.writeAll("-");
-                                } else if (comptime field.type == []const u8) {
-                                    try writeHtmlEscaped(writer, default_value);
-                                } else {
-                                    var buf: [64]u8 = undefined;
-                                    const rendered = std.fmt.bufPrint(&buf, "{any}", .{default_value}) catch "-";
-                                    try writeHtmlEscaped(writer, rendered);
-                                }
-                            } else {
-                                try writer.writeAll("required");
-                            }
-                            try writer.writeAll("</td><td>");
-                            if (comptime hasFieldHelp(orig_flags, field.name)) {
-                                try writeHtmlEscaped(writer, @field(orig_flags.meta, field.name).help);
-                            }
-                            try writer.writeAll("</td></tr>\n");
-                        }
-                    }
-                    try writer.writeAll("</table>\n");
-                }
-            }
-
-            if (comptime hasAnySubcommands(CmdType)) {
-                inline for (getSubcommands(cmd)) |sub| {
-                    if (isAdvertisableHtml(@TypeOf(sub), sub)) {
-                        try writer.writeAll("<p><a href=\"#");
-                        try writeHtmlEscaped(writer, sub.name);
-                        try writer.writeAll("\"><code>");
-                        try writeHtmlEscaped(writer, sub.name);
-                        try writer.writeAll("</code></a> - ");
-                        try writeHtmlEscaped(writer, sub.description);
-                        try writer.writeAll("</p>\n");
-                    }
-                }
-            }
-            try writer.writeAll("</section>\n");
-
-            if (comptime hasAnySubcommands(CmdType)) {
-                inline for (getSubcommands(cmd)) |sub| {
-                    if (isAdvertisableHtml(@TypeOf(sub), sub)) {
-                        try writeHtmlCommand(sub, writer, level + 1);
-                    }
-                }
-            }
-        }
-
-        /// A subcommand's entry: its description, its sections, then its own children.
-        fn writeManSubtree(comptime cmd: anytype, writer: anytype) !void {
-            const CmdType = @TypeOf(cmd);
-            if (@hasField(CmdType, "description") and cmd.description.len > 0) {
-                try writer.print("{s}\n", .{cmd.description});
-            }
-            try writeManSections(cmd, writer, .nested);
-
-            if (comptime hasAnySubcommands(CmdType)) {
-                inline for (getSubcommands(cmd)) |sub| {
-                    if (comptime !isHidden(@TypeOf(sub), sub)) {
-                        try writer.print(".SS {s}\n", .{sub.name});
-                        try writeManSubtree(sub, writer);
-                    }
-                }
-            }
-        }
-
-        /// Where a command sits in the page: `man` has exactly two useful levels, so a
-        /// subcommand's sections are labelled paragraphs rather than `.SH` headings -
-        /// a `.SH` inside a `.SS` would silently jump back to the top level.
-        const ManLevel = enum { top, nested };
-
-        fn writeManHeading(writer: anytype, comptime level: ManLevel, comptime title: []const u8) !void {
-            if (comptime level == .top) {
-                try writer.print(".SH {s}\n", .{title});
-            } else {
-                try writer.print(".PP\n{s}:\n", .{title});
-            }
-        }
-
-        /// One command's COMMANDS, ARGUMENTS and OPTIONS sections.
-        ///
-        /// Deprecated flags are omitted for the same reason `--help` omits them: they
-        /// work, and documenting them would present them as current.
-        fn writeManSections(comptime cmd: anytype, writer: anytype, comptime level: ManLevel) !void {
-            const CmdType = @TypeOf(cmd);
-
-            if (comptime hasAnySubcommands(CmdType)) {
-                try writeManHeading(writer, level, "COMMANDS");
-                inline for (getSubcommands(cmd)) |sub| {
-                    if (comptime !isHidden(@TypeOf(sub), sub)) {
-                        try writer.print(".TP\n.B {s}\n{s}", .{ sub.name, sub.description });
-                        try writeCommandMarkers(@TypeOf(sub), sub, writer);
-                        try writer.writeAll("\n");
-                        if (@hasField(@TypeOf(sub), "aliases")) {
-                            for (sub.aliases, 0..) |alias_name, alias_idx| {
-                                // Fragments, not a conditional format string: `print`
-                                // needs its format at comptime and `alias_idx` is runtime.
-                                try writer.writeAll(if (alias_idx == 0) "(alias: " else ", ");
-                                try writer.print("{s}", .{alias_name});
-                            }
-                            if (sub.aliases.len > 0) try writer.writeAll(")\n");
-                        }
-                    }
-                }
-            }
-
-            const ArgsT = PositionalType(CmdType);
-            const runs_flags = GetFlagsType(CmdType);
-            const orig_flags = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else runs_flags;
-
-            if (comptime std.meta.fields(ArgsT).len > 0) {
-                try writeManHeading(writer, level, "ARGUMENTS");
-                inline for (std.meta.fields(ArgsT)) |p_field| {
-                    try writer.print(".TP\n.B {s}\n", .{p_field.name});
-                    if (comptime positionalHelp(ArgsT, orig_flags, p_field.name)) |text| {
-                        try writer.print("{s}\n", .{text});
-                    }
-                    if (comptime p_field.default_value_ptr == null and @typeInfo(p_field.type) != .optional) {
-                        try writer.writeAll("(required)\n");
-                    }
-                }
-            }
-
-            if (runs_flags != void) {
-                var any_options = false;
-                inline for (std.meta.fields(runs_flags)) |field| {
-                    if (comptime !isFrameworkField(field.name) and
-                        !isPositionalField(field.name) and
-                        !isDeprecatedFlag(orig_flags, field.name))
-                    {
-                        any_options = true;
-                    }
-                }
-
-                if (any_options) {
-                    try writeManHeading(writer, level, "OPTIONS");
-                    inline for (std.meta.fields(runs_flags)) |field| {
-                        if (comptime !isFrameworkField(field.name) and
-                            !isPositionalField(field.name) and
-                            !isDeprecatedFlag(orig_flags, field.name))
-                        {
-                            try writer.writeAll(".TP\n.B --");
-                            try writeFlagSpelling(writer, field.name);
-                            if (comptime hasShortFlag(orig_flags, field.name)) {
-                                try writer.print(", -{c}", .{@field(orig_flags.meta, field.name).short});
-                            }
-                            try writer.writeAll("\n");
-                            if (comptime hasFieldHelp(orig_flags, field.name)) {
-                                try writer.print("{s}\n", .{@field(orig_flags.meta, field.name).help});
-                            }
-                            if (comptime isSecretFlag(orig_flags, field.name)) {
-                                try writer.print("(default: {s})\n", .{log.redaction_mask});
-                            } else if (field.default_value_ptr) |def| {
-                                const default_value = @as(*align(1) const field.type, @ptrCast(def)).*;
-                                if (comptime !isRepeatableField(field.type) and field.type == []const u8) {
-                                    try writer.print("(default: {s})\n", .{default_value});
-                                } else if (comptime !isRepeatableField(field.type)) {
-                                    try writer.print("(default: {any})\n", .{default_value});
-                                }
-                            } else if (comptime @typeInfo(field.type) != .optional and field.type != bool) {
-                                try writer.writeAll("(required)\n");
-                            }
-                            try writeFlagMarkers(orig_flags, field.name, writer);
-                            try writer.writeAll("\n");
-                        }
-                    }
-                }
-            }
-        }
-
-        /// Whether a field name is framework-internal rather than a user's flag.
-        fn isFrameworkField(comptime name: []const u8) bool {
-            return name.len >= 2 and name[0] == '_' and name[1] == '_';
-        }
-
-        /// Whether a flag needs a value on the command line.
-        fn fieldTakesValue(comptime T: type) bool {
-            if (T == bool) return false;
-            if (@typeInfo(T) == .optional and @typeInfo(T).optional.child == bool) return false;
-            return true;
-        }
-
-        /// Whether a field carries a documented short form.
-        fn hasShortFlag(comptime OrigFlagsT: type, comptime name: []const u8) bool {
-            if (!@hasDecl(OrigFlagsT, "meta")) return false;
-            if (!@hasField(@TypeOf(OrigFlagsT.meta), name)) return false;
-            return @hasField(@TypeOf(@field(OrigFlagsT.meta, name)), "short");
-        }
-
-        /// The type of a command's positional-argument struct, however it declared one.
-        fn PositionalType(comptime CmdType: type) type {
-            if (@hasDecl(CmdType, "PositionalArgsT")) return CmdType.PositionalArgsT;
-            const FT = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else GetFlagsType(CmdType);
-            if (@hasField(FT, "positionals")) return @TypeOf(@as(FT, undefined).positionals);
-            if (@hasField(FT, "Positional")) return @TypeOf(@as(FT, undefined).Positional);
-            return struct {};
-        }
-
-        /// The documented text for one positional argument, or null.
-        ///
-        /// The args struct's own `meta` is consulted first - that is where a
-        /// `command`-registered command documents its arguments, next to the fields they
-        /// describe. The flags type's positional slot is the fallback, because that is
-        /// where the older `positionals: struct { ... }` spelling put it.
-        fn positionalHelp(comptime ArgsT: type, comptime OrigFlagsT: type, comptime name: []const u8) ?[]const u8 {
-            if (@hasDecl(ArgsT, "meta")) {
-                const args_meta = ArgsT.meta;
-                if (@hasField(@TypeOf(args_meta), name)) {
-                    const entry = @field(args_meta, name);
-                    if (@hasField(@TypeOf(entry), "help")) return entry.help;
-                    if (@hasField(@TypeOf(entry), "description")) return entry.description;
-                }
-            }
-            if (!@hasDecl(OrigFlagsT, "meta")) return null;
-            const meta_block = OrigFlagsT.meta;
-            const slot_name = if (@hasField(@TypeOf(meta_block), "positionals"))
-                "positionals"
-            else if (@hasField(@TypeOf(meta_block), "Positional"))
-                "Positional"
-            else
-                return null;
-            const slot_meta = @field(meta_block, slot_name);
-            if (@hasField(@TypeOf(slot_meta), name)) {
-                const entry = @field(slot_meta, name);
-                if (@hasField(@TypeOf(entry), "help")) return entry.help;
-                if (@hasField(@TypeOf(entry), "description")) return entry.description;
-            }
-            // The older spelling documents the slot as a whole rather than each field
-            // (`meta.positionals.description`), which is what every `src/app/cmd/config` command
-            // does. It is only unambiguous when there is one positional argument, so
-            // that is the only case it is used for.
-            if (comptime std.meta.fields(ArgsT).len == 1) {
-                if (@hasField(@TypeOf(slot_meta), "help")) return slot_meta.help;
-                if (@hasField(@TypeOf(slot_meta), "description")) return slot_meta.description;
-            }
-            return null;
-        }
-
         /// The width of the "Commands:" left column, including the two-space indent so
         /// a row's own accounting and the column agree.
         fn commandColumnWidth(comptime cmd: anytype) usize {
             const CmdType = @TypeOf(cmd);
             comptime var width: usize = 0;
-            if (comptime hasSubcommands(CmdType)) {
+            if (comptime docs.hasSubcommands(CmdType)) {
                 inline for (getSubcommands(cmd)) |sub| {
                     if (comptime !isHidden(@TypeOf(sub), sub)) {
                         var w: usize = 2 + sub.name.len;
@@ -3918,13 +3363,13 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         fn flagColumnWidth(comptime OrigFlagsT: type, comptime FlagsType: type) usize {
             comptime var width: usize = 0;
             inline for (std.meta.fields(FlagsType)) |field| {
-                if (comptime !isFrameworkField(field.name) and
+                if (comptime !docs.isFrameworkField(field.name) and
                     !isPositionalField(field.name) and
                     !isDeprecatedFlag(OrigFlagsT, field.name))
                 {
                     var w: usize = 2 + field.name.len;
-                    if (comptime hasShortFlag(OrigFlagsT, field.name)) w += 4;
-                    if (comptime fieldTakesValue(field.type)) w += 8;
+                    if (comptime docs.hasShortFlag(OrigFlagsT, field.name)) w += 4;
+                    if (comptime docs.fieldTakesValue(field.type)) w += 8;
                     width = @max(width, w);
                 }
             }
@@ -3956,7 +3401,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// same feature/deprecation filtering the router uses.
         fn printCommandList(comptime cmd: anytype, ctx: anytype, writer: anytype) !void {
             const CmdType = @TypeOf(cmd);
-            if (comptime hasAnySubcommands(CmdType)) {
+            if (comptime docs.hasAnySubcommands(CmdType)) {
                 const column = comptime commandColumnWidth(cmd);
                 try writer.writeAll("\nCommands:\n");
                 inline for (getSubcommands(cmd)) |sub| {
@@ -3988,7 +3433,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// so the only way to learn that `<component>` existed was to run without it and
         /// be told it was missing.
         fn printArgumentList(comptime cmd: anytype, writer: anytype, orig_flags: type) !void {
-            const ArgsT = PositionalType(@TypeOf(cmd));
+            const ArgsT = docs.PositionalType(@TypeOf(cmd));
             const fields = std.meta.fields(ArgsT);
             if (comptime fields.len == 0) return;
 
@@ -4001,7 +3446,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
                 var row_buf: [512]u8 = undefined;
                 var row_len: usize = 0;
-                if (comptime positionalHelp(ArgsT, orig_flags, p_field.name)) |text| {
+                if (comptime docs.positionalHelp(ArgsT, orig_flags, p_field.name)) |text| {
                     if (text.len <= row_buf.len) {
                         @memcpy(row_buf[0..text.len], text);
                         row_len = text.len;
@@ -4027,7 +3472,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             const column = comptime flagColumnWidth(orig_flags, flags_type);
             var any_flags = false;
             inline for (std.meta.fields(flags_type)) |field| {
-                if (comptime !isFrameworkField(field.name) and
+                if (comptime !docs.isFrameworkField(field.name) and
                     !isPositionalField(field.name) and
                     !isDeprecatedFlag(orig_flags, field.name))
                 {
@@ -4038,7 +3483,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
             try writer.writeAll("\nFlags:\n");
             inline for (std.meta.fields(flags_type)) |field| {
-                if (comptime !isFrameworkField(field.name) and
+                if (comptime !docs.isFrameworkField(field.name) and
                     !isPositionalField(field.name) and
                     !isDeprecatedFlag(orig_flags, field.name))
                 {
@@ -4050,12 +3495,12 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                         try writeFlagSpelling(writer, field.name);
                         var used: usize = 2 + field.name.len;
 
-                        if (comptime hasShortFlag(orig_flags, field.name)) {
+                        if (comptime docs.hasShortFlag(orig_flags, field.name)) {
                             const short = @field(orig_flags.meta, field.name).short;
                             try writer.print(", -{c}", .{short});
                             used += 4;
                         }
-                        if (comptime fieldTakesValue(field.type)) {
+                        if (comptime docs.fieldTakesValue(field.type)) {
                             try writer.writeAll(" <value>");
                             used += 8;
                         }
@@ -4065,7 +3510,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                         var row_buf: [512]u8 = undefined;
                         var row_len: usize = 0;
                         const help_text: ?[]const u8 =
-                            if (comptime hasFieldHelp(orig_flags, field.name))
+                            if (comptime docs.hasFieldHelp(orig_flags, field.name))
                                 @field(orig_flags.meta, field.name).help
                             else
                                 null;
@@ -4104,20 +3549,13 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             }
         }
 
-        /// Whether a field's metadata carries `help`.
-        fn hasFieldHelp(comptime OrigFlagsT: type, comptime name: []const u8) bool {
-            if (!@hasDecl(OrigFlagsT, "meta")) return false;
-            if (!@hasField(@TypeOf(OrigFlagsT.meta), name)) return false;
-            return @hasField(@TypeOf(@field(OrigFlagsT.meta, name)), "help");
-        }
-
         /// The built-in help page: usage, description, commands, arguments, flags.
         fn printHelp(comptime cmd: anytype, ctx: anytype) !void {
             const out = ctx.out;
             const CmdType = @TypeOf(cmd);
 
             try out.print("Usage: {s}", .{cmd.name});
-            if (comptime hasAnySubcommands(CmdType)) try out.writeAll(" [command]");
+            if (comptime docs.hasAnySubcommands(CmdType)) try out.writeAll(" [command]");
             if (comptime declaresPositionals(CmdType)) try out.writeAll(" [args]");
             try out.writeAll("\n");
 
@@ -4127,7 +3565,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
             try printCommandList(cmd, ctx, out);
 
-            const RunFlagsType = GetFlagsType(CmdType);
+            const RunFlagsType = docs.GetFlagsType(CmdType);
             const orig_flags = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else RunFlagsType;
             try printArgumentList(cmd, out, orig_flags);
             if (RunFlagsType != void) try printFlagList(ctx, out, orig_flags, RunFlagsType);
@@ -4700,7 +4138,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
             // Simple autocompletion logic
             if (args.len == 0 or (args.len == 1 and args[0].len == 0)) {
-                if (comptime hasSubcommands(CmdType)) {
+                if (comptime docs.hasSubcommands(CmdType)) {
                     inline for (getSubcommands(cmd)) |sub| {
                         // A completion list is an advertisement, so it follows the same
                         // rule as help: no hidden, deprecated or gate-closed commands.
@@ -4717,7 +4155,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 return;
             }
 
-            if (comptime hasSubcommands(CmdType)) {
+            if (comptime docs.hasSubcommands(CmdType)) {
                 inline for (getSubcommands(cmd)) |sub| {
                     if (commandIsAvailable(ctx, @TypeOf(sub), sub)) {
                         var matches = std.mem.eql(u8, args[0], sub.name);
@@ -4731,7 +4169,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 }
             }
 
-            const FlagsType = GetFlagsType(CmdType);
+            const FlagsType = docs.GetFlagsType(CmdType);
             const OrigFlagsT = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else FlagsType;
             if (FlagsType != void) {
                 if (args.len > 0 and std.mem.startsWith(u8, args[args.len - 1], "-")) {
@@ -4798,24 +4236,24 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 try writer.print("{s}\n\n", .{cmd.description});
             }
 
-            const FlagsType = GetFlagsType(CmdType);
+            const FlagsType = docs.GetFlagsType(CmdType);
             const orig_flags = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else FlagsType;
             if (FlagsType != void) {
                 var any_flags = false;
                 inline for (std.meta.fields(FlagsType)) |field| {
-                    if (comptime !isFrameworkField(field.name) and !isPositionalField(field.name)) {
+                    if (comptime !docs.isFrameworkField(field.name) and !isPositionalField(field.name)) {
                         any_flags = true;
                     }
                 }
                 if (any_flags) {
                     try writer.writeAll("### Flags\n\n| Flag | Type | Default |\n|---|---|---|\n");
                     inline for (std.meta.fields(FlagsType)) |field| {
-                        if (comptime !isFrameworkField(field.name) and !isPositionalField(field.name)) {
+                        if (comptime !docs.isFrameworkField(field.name) and !isPositionalField(field.name)) {
                             try writer.writeAll("| --");
                             try writeFlagSpelling(writer, field.name);
                             // A gate-closed flag is documented here with the variable that
                             // opens it: the reference describes the whole surface.
-                            try writeFlagMarkers(orig_flags, field.name, writer);
+                            try docs.writeFlagMarkers(orig_flags, field.name, writer);
                             if (comptime isSecretFlag(orig_flags, field.name)) {
                                 try writer.print(" | {s} | {s} |\n", .{ @typeName(field.type), log.redaction_mask });
                             } else if (field.default_value_ptr) |ptr| {
@@ -4835,7 +4273,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
                 // Positional arguments, which this generator omitted entirely even
                 // though `printHelp`'s shape made it obvious they existed.
-                const ArgsT = PositionalType(CmdType);
+                const ArgsT = docs.PositionalType(CmdType);
                 if (comptime std.meta.fields(ArgsT).len > 0) {
                     try writer.writeAll("### Arguments\n\n| Argument | Type |\n|---|---|\n");
                     inline for (std.meta.fields(ArgsT)) |p_field| {
@@ -4845,7 +4283,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 }
             }
 
-            if (comptime hasAnySubcommands(CmdType)) {
+            if (comptime docs.hasAnySubcommands(CmdType)) {
                 const subs = getSubcommands(cmd);
                 try writer.writeAll("## Subcommands\n\n");
                 inline for (subs) |sub| {
@@ -4858,7 +4296,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                             }
                             if (sub.aliases.len > 0) try writer.writeAll(")");
                         }
-                        try writeCommandMarkers(@TypeOf(sub), sub, writer);
+                        try docs.writeCommandMarkers(@TypeOf(sub), sub, writer);
                         try writer.writeAll("\n");
                     }
                 }

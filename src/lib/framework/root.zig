@@ -114,6 +114,7 @@ test {
     // namespace references it, so each namespace this module owns is named explicitly.
     std.testing.refAllDecls(framework);
     std.testing.refAllDecls(@import("alias.zig"));
+    std.testing.refAllDecls(@import("docs.zig"));
     std.testing.refAllDecls(@import("i18n.zig"));
     std.testing.refAllDecls(@import("policy.zig"));
     std.testing.refAllDecls(@import("repl.zig"));
