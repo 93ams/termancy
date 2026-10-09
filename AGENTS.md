@@ -36,6 +36,29 @@ same rules; only the depth of the prefix changes.
 
 ## 1. Tooling & Environment
 
+### 1.0 Pin the Zig version before anything else
+
+**This repository builds only with Zig 0.16.0**, which `build.zig.zon` states as
+`.minimum_zig_version = "0.16.0"`. Run `zig version` first, every session.
+
+The failure mode is worth spelling out because the diagnostic is actively misleading. Zig
+**0.17.0 removed the `**` array-repetition operator**, so on 0.17.0 the compiler rejects every
+`[_]u8{0} ** 32` in the tree with:
+
+```text
+error: binary operator '*' has whitespace on one side, but not the other
+```
+
+That message names whitespace, not a missing operator, and it fires on ~10 files the change at
+hand has nothing to do with - including `src/lib/cfg/encrypted_config.zig`, `src/lib/util/trace.zig`
+and `src/test/cli_test.zig`. **If `zig fmt --check` fails on files you did not touch, suspect the
+toolchain before the code.** Confirm with `zig version`; 0.17.0 cannot even build its own
+`compiler_rt` here, which is the second tell.
+
+If `zvm` has drifted, `zvm use 0.16.0` restores it. A session lost real time to this: `zvm`'s
+default moved to 0.17.0 mid-session, `zig fmt` began failing tree-wide, and it read as a
+corrupted working tree until the version was checked.
+
 ### 1.1 PowerShell 7+ Mandate (UTF-8)
 We strictly mandate **PowerShell 7+ (`pwsh`)** for all development scripts. PowerShell 7 universally defaults to BOM-less UTF-8, which eliminates the double-decoded character corruption that historically plagued Windows PowerShell 5.1 environments. 
 *   **Do not** use legacy `powershell.exe`. 
