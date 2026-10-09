@@ -114,19 +114,84 @@ fn checkModules(io: std.Io, allocator: std.mem.Allocator, lib_dir: []const u8, o
     };
     defer modules.close(io);
 
-    var it = modules.iterate();
+    // Two shapes are accepted, because both are in use:
+    //   * a directory of modules (`src/lib`: `cfg/`, `render/`, ...), and
+    //   * a directory that *is* one module (`src/test`, whose root is `root.zig` there).
+    // Requiring subdirectories made `src/test` fail with "no module directories", which would
+    // have left the largest test file in the tree unguarded.
+    var has_subdir = false;
+    {
+        var probe = modules.iterate();
+        while (try probe.next(io)) |entry| {
+            if (entry.kind == .directory) {
+                has_subdir = true;
+                break;
+            }
+        }
+    }
+
     var checked: usize = 0;
     var modules_with_missing: usize = 0;
-    while (try it.next(io)) |entry| {
-        if (entry.kind != .directory) continue;
-        // Copied out of the iterator: `entry.name` is only valid until the next `next()`, and
-        // the second walk below invalidates it. Reporting a stale name printed `root.zigig`
-        // in the control experiment - the symptom of reusing that slice.
-        const module_name = try allocator.dupe(u8, entry.name);
-        const module_path = try std.fs.path.join(allocator, &.{ lib_dir, module_name });
-        var dir = modules.openDir(io, module_name, .{ .iterate = true }) catch continue;
-        defer dir.close(io);
+    if (!has_subdir) {
+        const outcome = try checkOneModule(io, allocator, modules, lib_dir, lib_dir, out);
+        checked += 1;
+        if (outcome.missing != 0) {
+            unnamed += outcome.missing;
+            modules_with_missing += 1;
+        }
+        if (outcome.no_collector) unnamed += 1;
+    } else {
+        var it = modules.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind != .directory) continue;
+            // Copied out of the iterator: `entry.name` is only valid until the next `next()`, and
+            // the second walk below invalidates it. Reporting a stale name printed `root.zigig`
+            // in the control experiment - the symptom of reusing that slice.
+            const module_name = try allocator.dupe(u8, entry.name);
+            const module_path = try std.fs.path.join(allocator, &.{ lib_dir, module_name });
+            var dir = modules.openDir(io, module_name, .{ .iterate = true }) catch continue;
+            defer dir.close(io);
 
+            const outcome = try checkOneModule(io, allocator, dir, module_path, module_path, out);
+            checked += 1;
+            if (outcome.missing != 0) {
+                unnamed += outcome.missing;
+                modules_with_missing += 1;
+            }
+            if (outcome.no_collector) unnamed += 1;
+        }
+    }
+    // Guard the guard: a wrong directory would otherwise pass by having nothing to check.
+    if (checked == 0) {
+        try out.print("import-lint: no module directories under {s}\n", .{lib_dir});
+        unnamed += 1;
+    } else if (modules_with_missing == 0) {
+        try out.print("import-lint: {d} module(s) under {s} named every file\n", .{ checked, lib_dir });
+    } else {
+        try out.print("import-lint: {d} of {d} module(s) under {s} are incomplete\n", .{
+            modules_with_missing, checked, lib_dir,
+        });
+    }
+}
+
+const ModuleOutcome = struct {
+    /// How many files the collector failed to name.
+    missing: usize,
+    /// Set when there was no collector to read at all.
+    no_collector: bool = false,
+};
+
+/// Checks one module directory: every `.zig` file in it must be named by its collector.
+fn checkOneModule(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    dir: std.Io.Dir,
+    module_path: []const u8,
+    display_path: []const u8,
+    out: *std.Io.Writer,
+) !ModuleOutcome {
+    _ = display_path;
+    {
         // `lib.zig` is the collector when present, otherwise `root.zig` is.
         var collector_name: []const u8 = "root.zig";
         if (dir.access(io, "lib.zig", .{})) |_| {
@@ -135,9 +200,7 @@ fn checkModules(io: std.Io, allocator: std.mem.Allocator, lib_dir: []const u8, o
 
         const collector_text = dir.readFileAlloc(io, collector_name, allocator, .limited(4 * 1024 * 1024)) catch |err| {
             try out.print("import-lint: {s} has no {s}: {t}\n", .{ module_path, collector_name, err });
-            unnamed += 1;
-            modules_with_missing += 1;
-            continue;
+            return .{ .missing = 0, .no_collector = true };
         };
 
         var files = dir.iterate();
@@ -155,10 +218,7 @@ fn checkModules(io: std.Io, allocator: std.mem.Allocator, lib_dir: []const u8, o
                 try missing.append(allocator, name);
             }
         }
-        checked += 1;
         if (missing.items.len != 0) {
-            unnamed += missing.items.len;
-            modules_with_missing += 1;
             try out.print("{s}/{s} does not name {d} of its {d} files:\n", .{
                 module_path, collector_name, missing.items.len, total,
             });
@@ -169,17 +229,7 @@ fn checkModules(io: std.Io, allocator: std.mem.Allocator, lib_dir: []const u8, o
                 try out.print("  ... and {d} more\n", .{missing.items.len - max_missing_reported});
             }
         }
-    }
-    // Guard the guard: a wrong directory would otherwise pass by having nothing to check.
-    if (checked == 0) {
-        try out.print("import-lint: no module directories under {s}\n", .{lib_dir});
-        unnamed += 1;
-    } else if (modules_with_missing == 0) {
-        try out.print("import-lint: {d} module(s) under {s} named every file\n", .{ checked, lib_dir });
-    } else {
-        try out.print("import-lint: {d} of {d} module(s) under {s} are incomplete\n", .{
-            modules_with_missing, checked, lib_dir,
-        });
+        return .{ .missing = missing.items.len };
     }
 }
 

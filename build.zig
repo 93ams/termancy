@@ -213,6 +213,12 @@ pub fn build(b: *std.Build) void {
     lint_run.addFileArg(b.path("build"));
     lint_run.addArg("--modules");
     lint_run.addFileArg(b.path("src/lib"));
+    // `src/test` too: it holds the largest single test file in the tree, and if a file there
+    // stopped being named by `root.zig` its tests would vanish with nothing to show for it -
+    // the 153-test integration suite included. The check is the same one, applied to a second
+    // module directory.
+    lint_run.addArg("--modules");
+    lint_run.addFileArg(b.path("src/test"));
     const lint_step = b.step("lint", "Check import paths and module test collection");
     lint_step.dependOn(&lint_run.step);
 
