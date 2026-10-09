@@ -83,3 +83,26 @@ The bulk rewrites were the risky part, and this session proved it twice more:
 Also: the build failed for a while with `FileSystemFailure` / `OutOfMemory` in unrelated std
 files. That was **disk pressure** — 3.96 GB free with a 2.7 GB `.zig-cache` — not a code fault.
 Dropping the cache and stale temp trees restored it.
+
+### Follow-up: two functions the compiler never looked at
+
+After the gates were green, a sweep for 0.16-only APIs found **`prompt.select` and
+`prompt.multiSelect` still using `Enum.fields` and the `.Enum` tag** — neither of which exists in
+0.17 — while the whole suite passed.
+
+The reason is the same one `AGENTS.md` §6.2 records for tests: **nothing in the tree called
+them.** They are generic over the enum type, so Zig analysed their bodies only when instantiated,
+and no call site existed. `zig build`, all 602 tests, the Linux compile gate and the lint were
+all silent about code that could not have compiled.
+
+Fixed, and the fix is proven by a test that **calls them** — the only thing that forces
+analysis. Writing it surfaced a second defect the sweep had missed: `if (type_info != .Enum)`,
+the 0.16 spelling of the tag, on a line the grep did not flag because it matched a different
+pattern.
+
+The lesson generalises beyond this migration: **a green suite is not evidence that all the code
+compiles.** Dead generics are invisible to it, exactly as uninstantiated generic *tests* are.
+Where a function is part of the public surface, something has to call it.
+
+The suite grew by one test (601 -> 602) and `interact` by one (19 -> 20), which is the visible
+sign that two previously-unreached functions are now exercised.

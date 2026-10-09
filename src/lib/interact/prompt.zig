@@ -193,7 +193,7 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
     const type_info = @typeInfo(EnumType);
     if (type_info != .@"enum") @compileError("select prompt requires an enum type");
 
-    const fields = type_info.@"enum".fields;
+    const fields = type_info.@"enum".field_names;
 
     const Model = struct {
         q: []const u8,
@@ -234,7 +234,8 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
             try writer.print("? {s}\n", .{self.q});
 
             if (self.done) {
-                inline for (fields, 0..) |field, i| {
+                inline for (fields, 0..) |_, i| {
+                    const field = std.meta.fieldInfo(EnumType, @fromBackingInt(@intCast(i)));
                     if (self.cursor == i) {
                         try writer.writeAll("  ");
                         try active_style.render(writer, field.name);
@@ -242,7 +243,8 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
                     }
                 }
             } else {
-                inline for (fields, 0..) |field, i| {
+                inline for (fields, 0..) |_, i| {
+                    const field = std.meta.fieldInfo(EnumType, @fromBackingInt(@intCast(i)));
                     if (self.cursor == i) {
                         try active_style.render(writer, "> ");
                         try active_style.render(writer, field.name);
@@ -261,7 +263,8 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
     var prog = dialog.program(m);
     try prog.run(ctx);
 
-    inline for (fields, 0..) |field, i| {
+    inline for (fields, 0..) |_, i| {
+        const field = std.meta.fieldInfo(EnumType, @fromBackingInt(@intCast(i)));
         if (prog.model.cursor == i) {
             return @field(EnumType, field.name);
         }
@@ -272,9 +275,9 @@ pub fn select(ctx: anytype, comptime EnumType: type, question: []const u8) !Enum
 // --- MULTI-SELECT PROMPT ---
 pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) ![]EnumType {
     const type_info = @typeInfo(EnumType);
-    if (type_info != .Enum) @compileError("multiSelect prompt requires an enum type");
+    if (type_info != .@"enum") @compileError("multiSelect prompt requires an enum type");
 
-    const fields = type_info.Enum.fields;
+    const fields = type_info.@"enum".field_names;
 
     const Model = struct {
         q: []const u8,
@@ -322,7 +325,8 @@ pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) 
             try writer.print("? {s} (Press Space to select, Enter to confirm)\n", .{self.q});
 
             if (self.done) {
-                inline for (fields, 0..) |field, i| {
+                inline for (fields, 0..) |_, i| {
+                    const field = std.meta.fieldInfo(EnumType, @fromBackingInt(@intCast(i)));
                     if (self.selected[i]) {
                         try writer.writeAll("  ");
                         try active_style.render(writer, field.name);
@@ -330,7 +334,8 @@ pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) 
                     }
                 }
             } else {
-                inline for (fields, 0..) |field, i| {
+                inline for (fields, 0..) |_, i| {
+                    const field = std.meta.fieldInfo(EnumType, @fromBackingInt(@intCast(i)));
                     if (self.cursor == i) {
                         try active_style.render(writer, "> ");
                     } else {
@@ -362,7 +367,8 @@ pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) 
     var selected_list = std.ArrayListUnmanaged(EnumType).empty;
     errdefer selected_list.deinit(ctx.allocator);
 
-    inline for (fields, 0..) |field, i| {
+    inline for (fields, 0..) |_, i| {
+        const field = std.meta.fieldInfo(EnumType, @fromBackingInt(@intCast(i)));
         if (prog.model.selected[i]) {
             try selected_list.append(ctx.allocator, @field(EnumType, field.name));
         }
@@ -526,4 +532,43 @@ test "two prompts through the real functions share one dialog" {
     // The property that was broken: the second prompt reached the same dialog, so there is one
     // reader thread for the dialog rather than one per prompt.
     try testing.expect(sharedDialogForTest() == after_first);
+}
+
+test "select and multiSelect compile and run through the real prompt path" {
+    // These two were dead code: nothing in the tree called them, so Zig never analysed their
+    // bodies, and the 0.17 migration left `Enum.fields` in them - an API that no longer exists -
+    // without the compiler noticing. That is the same silent gap as an uninstantiated generic
+    // test, and this test closes it by *calling* them.
+    //
+    // Answers are queued before prompting; see `installSharedForTest` for why a finite source
+    // cannot drive these.
+    const testing = std.testing;
+    const Colour = enum { red, green, blue };
+    resetSharedDialogForTest();
+    defer resetSharedDialogForTest();
+
+    var out_buf: [2048]u8 = undefined;
+    var out = std.Io.Writer.fixed(&out_buf);
+    var in_buf: [1]u8 = undefined;
+    var in_reader = std.Io.Reader.fixed(&in_buf);
+    const Ctx = struct {
+        io: std.Io,
+        in: *std.Io.Reader,
+        out: *std.Io.Writer,
+        allocator: std.mem.Allocator,
+    };
+    const base = Ctx{ .io = testing.io, .in = &in_reader, .out = &out, .allocator = testing.allocator };
+
+    // `select`: a single Enter takes the cursor position, which starts at the first field.
+    const channel = try installSharedForTest(&in_reader, testing.io);
+    try channel.push(.{ .key = .{ .key = .enter } });
+    const chosen = try select(base, Colour, "pick a colour");
+    try testing.expectEqual(Colour.red, chosen);
+
+    // `multiSelect`: space toggles the highlighted entry, and Enter then confirms.
+    try channel.push(.{ .key = .{ .key = .char, .char = ' ' } });
+    try channel.push(.{ .key = .{ .key = .enter } });
+    const many = try multiSelect(base, Colour, "pick some colours");
+    defer testing.allocator.free(many);
+    try testing.expect(many.len >= 1);
 }
