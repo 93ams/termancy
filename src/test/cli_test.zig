@@ -5002,3 +5002,31 @@ test "exit codes cover the framework's declared error set" {
     const declared = @typeInfo(cli.AppError).error_set.error_names.?;
     try testing.expectEqual(@as(usize, 20), declared.len);
 }
+
+test "the public writers that nothing else calls still instantiate" {
+    // A generic function's body is analysed only when instantiated, so a `pub fn` that nothing
+    // calls is checked by **no** gate - not `zig build`, not the suite, not the Linux compile
+    // step. `prompt.select` and `prompt.multiSelect` sat broken in exactly that state through
+    // the 0.17 migration: both still used `Enum.fields`, which 0.17 removed, and the build was
+    // silent about it.
+    //
+    // These five are the remaining public writers in that position. Instantiating them here is
+    // what makes the compiler look at them; the assertions are deliberately loose, because the
+    // property being protected is "it compiles and runs", not any particular byte of output.
+    var buf: [4096]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+
+    cli.panic.renderStructuredPanic(&w, "boom", null, .{});
+    try testing.expect(w.buffered().len > 0);
+
+    var vars = [_]cli.systemd_exporter.EnvVar{.{ .key = "A", .value = "b" }};
+    try cli.systemd_exporter.exportSystemdService(&w, "svc", "desc", "/bin/true", &vars);
+
+    try cli.layout.split(&w, "a\n", "b\n", .{});
+
+    const lg = cli.log.init("svc");
+    try lg.writeAt(&w, .info, "scope", "message", null);
+
+    const lineage = cli.config_lineage.init(testing.allocator);
+    try lineage.inspect(&w, "path", "1", "u8");
+}
