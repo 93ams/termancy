@@ -91,7 +91,7 @@ pub fn withFormat(self: Self, format: Format) Self {
 /// rendering a large diff into a log line that is then discarded is the usual way
 /// a debug-level statement becomes a performance problem.
 pub fn enabled(self: Self, level: Level) bool {
-    return @intFromEnum(level) >= @intFromEnum(self.min_level);
+    return @backingInt(level) >= @backingInt(self.min_level);
 }
 
 /// Writes one record with no timestamp.
@@ -172,7 +172,7 @@ pub const redaction_mask = "[REDACTED]";
 /// that carry secrets are parsed once, elsewhere. The framework registers them as it
 /// parses (`App.execute`), so an application that never touches this API still gets
 /// its `meta.<field>.secret` values scrubbed out of every log line.
-var registered_secrets: [32][]const u8 = [_][]const u8{""} ** 32;
+var registered_secrets: [32][]const u8 = @splat("");
 var registered_count: usize = 0;
 
 /// Registers a value to be scrubbed from every subsequent log message.

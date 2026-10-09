@@ -116,7 +116,9 @@ pub fn format(self: *const Self, writer: anytype, key: []const u8, params: anyty
                 const param_name = tmpl[i + 1 .. i + 1 + close_idx];
                 var replaced = false;
 
-                inline for (std.meta.fields(@TypeOf(params))) |field| {
+                const fnames0 = @typeInfo(@TypeOf(params)).@"struct".field_names;
+                inline for (fnames0, 0..) |_, fidx0| {
+                    const field = std.meta.fieldInfo(@TypeOf(params), @fromBackingInt(@intCast(fidx0)));
                     if (std.mem.eql(u8, field.name, param_name)) {
                         const val = @field(params, field.name);
                         switch (@typeInfo(field.type)) {

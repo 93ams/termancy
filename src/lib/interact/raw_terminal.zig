@@ -87,8 +87,8 @@ pub fn enable() !Self {
             raw.cflag.CSIZE = .CS8;
             raw.cflag.PARENB = false;
 
-            raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
-            raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+            raw.cc[@backingInt(std.posix.V.MIN)] = 1;
+            raw.cc[@backingInt(std.posix.V.TIME)] = 0;
 
             try std.posix.tcsetattr(0, .FLUSH, raw);
             rt.enabled = true;

@@ -144,7 +144,7 @@ fn addRun(ctx: App.Ctx, flags: App.Flags(AddFlags), args: AddArgs) !void {
         });
 
         if (fetch_res.status != .ok) {
-            try ctx.err.print("Failed to download {s} (HTTP {d})\n", .{ comp_name, @intFromEnum(fetch_res.status) });
+            try ctx.err.print("Failed to download {s} (HTTP {d})\n", .{ comp_name, @backingInt(fetch_res.status) });
             continue;
         }
 

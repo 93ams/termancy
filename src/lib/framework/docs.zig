@@ -21,7 +21,7 @@ pub fn GetFlagsType(comptime CmdType: type) type {
         if (run_info == .optional) run_info = @typeInfo(run_info.optional.child);
         if (run_info == .pointer) run_info = @typeInfo(run_info.pointer.child);
         if (run_info == .@"fn") {
-            return run_info.@"fn".params[1].type.?;
+            return run_info.@"fn".param_types[1].?;
         }
     }
     return struct {};
@@ -42,7 +42,7 @@ pub fn hasSubcommands(comptime CmdType: type) bool {
 /// The number of subcommands actually present, which for a leaf is zero.
 fn subcommandCount(comptime CmdType: type) usize {
     if (comptime !hasSubcommands(CmdType)) return 0;
-    return std.meta.fields(SubcommandsType(CmdType)).len;
+    return @typeInfo(SubcommandsType(CmdType)).@"struct".field_names.len;
 }
 /// Whether this command actually has anything to route to.
 pub fn hasAnySubcommands(comptime CmdType: type) bool {
@@ -208,13 +208,15 @@ pub fn writeHtmlCommand(comptime cmd: anytype, writer: anytype, level: usize) !v
     const runs_flags = GetFlagsType(CmdType);
     const orig_flags = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else runs_flags;
 
-    if (comptime std.meta.fields(ArgsT).len > 0) {
+    if (comptime @typeInfo(ArgsT).@"struct".field_names.len > 0) {
         try writer.writeAll("<h4>Arguments</h4>\n<table>\n<tr><th>Argument</th><th>Required</th><th>Description</th></tr>\n");
-        inline for (std.meta.fields(ArgsT)) |p_field| {
+        const fnames0 = @typeInfo(ArgsT).@"struct".field_names;
+        inline for (fnames0, 0..) |_, fidx0| {
+            const p_field = std.meta.fieldInfo(ArgsT, @fromBackingInt(@intCast(fidx0)));
             try writer.writeAll("<tr><td><code>");
             try writeHtmlEscaped(writer, p_field.name);
             try writer.writeAll("</code></td><td>");
-            const required = comptime p_field.default_value_ptr == null and
+            const required = comptime p_field.attrs.default_value_ptr == null and
                 @typeInfo(p_field.type) != .optional;
             try writer.writeAll(if (required) "yes" else "no");
             try writer.writeAll("</td><td>");
@@ -228,14 +230,18 @@ pub fn writeHtmlCommand(comptime cmd: anytype, writer: anytype, level: usize) !v
 
     if (runs_flags != void) {
         var any_options = false;
-        inline for (std.meta.fields(runs_flags)) |field| {
+        const fnames1 = @typeInfo(runs_flags).@"struct".field_names;
+        inline for (fnames1, 0..) |_, fidx1| {
+            const field = std.meta.fieldInfo(runs_flags, @fromBackingInt(@intCast(fidx1)));
             if (comptime !isFrameworkField(field.name) and !isPositionalField(field.name)) {
                 any_options = true;
             }
         }
         if (any_options) {
             try writer.writeAll("<h4>Flags</h4>\n<table>\n<tr><th>Flag</th><th>Type</th><th>Default</th><th>Description</th></tr>\n");
-            inline for (std.meta.fields(runs_flags)) |field| {
+            const fnames2 = @typeInfo(runs_flags).@"struct".field_names;
+            inline for (fnames2, 0..) |_, fidx2| {
+                const field = std.meta.fieldInfo(runs_flags, @fromBackingInt(@intCast(fidx2)));
                 if (comptime !isFrameworkField(field.name) and !isPositionalField(field.name)) {
                     try writer.writeAll("<tr><td><code>--");
                     try writeFlagSpelling(writer, field.name);
@@ -250,7 +256,7 @@ pub fn writeHtmlCommand(comptime cmd: anytype, writer: anytype, level: usize) !v
                     if (comptime isSecretFlag(orig_flags, field.name)) {
                         // Same rule as `--help`: a secret's default is a secret.
                         try writer.writeAll(platform.log.redaction_mask);
-                    } else if (field.default_value_ptr) |def| {
+                    } else if (field.attrs.default_value_ptr) |def| {
                         const default_value = @as(*align(1) const field.type, @ptrCast(def)).*;
                         if (comptime isRepeatableField(field.type)) {
                             try writer.writeAll("-");
@@ -361,14 +367,16 @@ pub fn writeManSections(comptime cmd: anytype, writer: anytype, comptime level: 
     const runs_flags = GetFlagsType(CmdType);
     const orig_flags = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else runs_flags;
 
-    if (comptime std.meta.fields(ArgsT).len > 0) {
+    if (comptime @typeInfo(ArgsT).@"struct".field_names.len > 0) {
         try writeManHeading(writer, level, "ARGUMENTS");
-        inline for (std.meta.fields(ArgsT)) |p_field| {
+        const fnames3 = @typeInfo(ArgsT).@"struct".field_names;
+        inline for (fnames3, 0..) |_, fidx3| {
+            const p_field = std.meta.fieldInfo(ArgsT, @fromBackingInt(@intCast(fidx3)));
             try writer.print(".TP\n.B {s}\n", .{p_field.name});
             if (comptime positionalHelp(ArgsT, orig_flags, p_field.name)) |text| {
                 try writer.print("{s}\n", .{text});
             }
-            if (comptime p_field.default_value_ptr == null and @typeInfo(p_field.type) != .optional) {
+            if (comptime p_field.attrs.default_value_ptr == null and @typeInfo(p_field.type) != .optional) {
                 try writer.writeAll("(required)\n");
             }
         }
@@ -376,7 +384,9 @@ pub fn writeManSections(comptime cmd: anytype, writer: anytype, comptime level: 
 
     if (runs_flags != void) {
         var any_options = false;
-        inline for (std.meta.fields(runs_flags)) |field| {
+        const fnames4 = @typeInfo(runs_flags).@"struct".field_names;
+        inline for (fnames4, 0..) |_, fidx4| {
+            const field = std.meta.fieldInfo(runs_flags, @fromBackingInt(@intCast(fidx4)));
             if (comptime !isFrameworkField(field.name) and
                 !isPositionalField(field.name) and
                 !isDeprecatedFlag(orig_flags, field.name))
@@ -387,7 +397,9 @@ pub fn writeManSections(comptime cmd: anytype, writer: anytype, comptime level: 
 
         if (any_options) {
             try writeManHeading(writer, level, "OPTIONS");
-            inline for (std.meta.fields(runs_flags)) |field| {
+            const fnames5 = @typeInfo(runs_flags).@"struct".field_names;
+            inline for (fnames5, 0..) |_, fidx5| {
+                const field = std.meta.fieldInfo(runs_flags, @fromBackingInt(@intCast(fidx5)));
                 if (comptime !isFrameworkField(field.name) and
                     !isPositionalField(field.name) and
                     !isDeprecatedFlag(orig_flags, field.name))
@@ -403,7 +415,7 @@ pub fn writeManSections(comptime cmd: anytype, writer: anytype, comptime level: 
                     }
                     if (comptime isSecretFlag(orig_flags, field.name)) {
                         try writer.print("(default: {s})\n", .{platform.log.redaction_mask});
-                    } else if (field.default_value_ptr) |def| {
+                    } else if (field.attrs.default_value_ptr) |def| {
                         const default_value = @as(*align(1) const field.type, @ptrCast(def)).*;
                         if (comptime !isRepeatableField(field.type) and field.type == []const u8) {
                             try writer.print("(default: {s})\n", .{default_value});
@@ -487,7 +499,7 @@ pub fn positionalHelp(comptime ArgsT: type, comptime OrigFlagsT: type, comptime 
     // (`meta.positionals.description`), which is what every `src/app/cmd/config` command
     // does. It is only unambiguous when there is one positional argument, so
     // that is the only case it is used for.
-    if (comptime std.meta.fields(ArgsT).len == 1) {
+    if (comptime @typeInfo(ArgsT).@"struct".field_names.len == 1) {
         if (@hasField(@TypeOf(slot_meta), "help")) return slot_meta.help;
         if (@hasField(@TypeOf(slot_meta), "description")) return slot_meta.description;
     }
@@ -532,7 +544,7 @@ pub fn isHidden(comptime SubT: type, sub: SubT) bool {
 /// the command type is what answers here.
 pub fn declaresPositionals(comptime CmdType: type) bool {
     if (comptime @hasDecl(CmdType, "PositionalArgsT")) {
-        return std.meta.fields(CmdType.PositionalArgsT).len > 0;
+        return @typeInfo(CmdType.PositionalArgsT).@"struct".field_names.len > 0;
     }
     const FT = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else GetFlagsType(CmdType);
     if (FT == void) return false;

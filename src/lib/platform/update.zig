@@ -789,7 +789,7 @@ test "a running version that is not older short-circuits before the network" {
         .current_version = try Version.parse("2.0.0"),
         .new_version = try Version.parse("2.0.0"),
         .url = "https://example.invalid/v2",
-        .expected_sha256 = "0" ** 64,
+        .expected_sha256 = &@as([64]u8, @splat('0')),
         .target_path = "unused",
         .fetcher = stub.interface(),
     });
@@ -806,7 +806,7 @@ test "an older advertised version does not roll the user back" {
         .current_version = try Version.parse("2.0.0"),
         .new_version = try Version.parse("1.9.9"),
         .url = "https://example.invalid/v1",
-        .expected_sha256 = "0" ** 64,
+        .expected_sha256 = &@as([64]u8, @splat('0')),
         .target_path = "unused",
         .fetcher = stub.interface(),
     });
@@ -836,7 +836,7 @@ test "a bad checksum refuses the update and leaves the target untouched" {
         .current_version = try Version.parse("1.0.0"),
         .new_version = try Version.parse("2.0.0"),
         .url = "https://example.invalid/v2",
-        .expected_sha256 = "0" ** 64,
+        .expected_sha256 = &@as([64]u8, @splat('0')),
         .target_path = path,
         .fetcher = stub.interface(),
     }));
@@ -899,7 +899,7 @@ test "the replacement is created with a mode that can be executed" {
         // POSIX, where the mode really carries an execute bit. Asserting the bit
         // rather than the enum value means an `executable_file` that stopped being
         // executable would be caught here.
-        try testing.expect(@intFromEnum(executablePermissions()) & 0o111 != 0);
+        try testing.expect(@backingInt(executablePermissions()) & 0o111 != 0);
     }
     // Windows has no execute bit - runnability is decided by the extension - which
     // the standard library reports as `has_executable_bit == false`.
@@ -912,7 +912,7 @@ test "a fetch failure propagates rather than being treated as up to date" {
         .current_version = try Version.parse("1.0.0"),
         .new_version = try Version.parse("2.0.0"),
         .url = "https://example.invalid/v2",
-        .expected_sha256 = "0" ** 64,
+        .expected_sha256 = &@as([64]u8, @splat('0')),
         .target_path = "unused",
         .fetcher = stub.interface(),
     }));
@@ -1224,7 +1224,7 @@ test "a checksum file with no usable line is malformed" {
 /// fixture. The constants below are the output of the pairing for `seed`, which the
 /// first test in this group re-derives rather than trusting.
 const TestKey = struct {
-    const seed = [_]u8{0x42} ** 32;
+    const seed: [32]u8 = @splat(0x42);
     const signed_message = "the payload that was signed";
     /// The signature over `signed_message`, base64, as a `.sig` file downloaded
     /// from a release would hold it.
@@ -1284,7 +1284,7 @@ test "a detached signature over the payload verifies, and one over other bytes d
 
     // A different key over the same message is a valid signature by someone else.
     const other_key = (std.crypto.sign.Ed25519.KeyPair
-        .generateDeterministic([_]u8{0x43} ** 32) catch
+        .generateDeterministic(@as([32]u8, @splat(0x43))) catch
         @panic("the fixed seed is not a valid key"))
         .public_key.toBytes();
     try testing.expectError(
@@ -1326,14 +1326,14 @@ test "a malformed key or signature is its own error, not a failed verification" 
     // verification rather than being called malformed.
     try testing.expectError(
         error.SignatureInvalid,
-        verifyEd25519(key, "x" ** signature_length, TestKey.signed_message),
+        verifyEd25519(key, &@as([signature_length]u8, @splat('x')), TestKey.signed_message),
     );
 
     // A public key that is not a canonical curve point is a malformed key, not a
     // mismatch: there is no key to have matched.
     try testing.expectError(
         error.MalformedSignature,
-        verifyEd25519([_]u8{0xff} ** public_key_length, &TestKey.rawSignature(), "message"),
+        verifyEd25519(@as([public_key_length]u8, @splat(0xff)), &TestKey.rawSignature(), "message"),
     );
 }
 
@@ -1386,7 +1386,7 @@ test "install verifies the signature before anything is written" {
         .current_version = try Version.parse("1.0.0"),
         .new_version = try Version.parse("2.0.0"),
         .url = "https://example.invalid/v2",
-        .expected_sha256 = "0" ** 64,
+        .expected_sha256 = &@as([64]u8, @splat('0')),
         .signature = &good_raw,
         .public_key = pair.public_key.toBytes(),
         .target_path = path,

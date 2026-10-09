@@ -35,15 +35,17 @@ pub const ComptimeLinter = struct {
 
         const Meta = @TypeOf(FlagsType.meta);
         const meta = FlagsType.meta;
-        const fields = std.meta.fields(FlagsType);
+        const fields = @typeInfo(FlagsType).@"struct".field_names;
 
         // Check for duplicate short flags
-        inline for (fields, 0..) |f1, i| {
+        inline for (fields, 0..) |_, i| {
+            const f1 = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(i)));
             if (@hasField(Meta, f1.name)) {
                 const m1 = @field(meta, f1.name);
                 if (@hasField(@TypeOf(m1), "short")) {
                     const s1 = m1.short;
-                    inline for (fields[i + 1 ..]) |f2| {
+                    inline for (i + 1..fields.len) |j2| {
+                        const f2 = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(j2)));
                         if (@hasField(Meta, f2.name)) {
                             const m2 = @field(meta, f2.name);
                             if (@hasField(@TypeOf(m2), "short")) {
@@ -65,7 +67,9 @@ pub const ComptimeLinter = struct {
     /// `.count = true` accumulates with `+= 1`, so it only means anything on a number.
     fn lintCountFlags(comptime FlagsType: type, comptime Meta: type) void {
         const meta = FlagsType.meta;
-        inline for (std.meta.fields(FlagsType)) |field| {
+        const fnames0 = @typeInfo(FlagsType).@"struct".field_names;
+        inline for (fnames0, 0..) |_, fidx0| {
+            const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx0)));
             if (@hasField(Meta, field.name)) {
                 const field_meta = @field(meta, field.name);
                 if (@hasField(@TypeOf(field_meta), "count")) {
@@ -84,7 +88,9 @@ pub const ComptimeLinter = struct {
 
     /// A name the framework already owns cannot also be a command's flag.
     fn lintReservedNames(comptime FlagsType: type, comptime Meta: ?type) void {
-        inline for (std.meta.fields(FlagsType)) |field| {
+        const fnames1 = @typeInfo(FlagsType).@"struct".field_names;
+        inline for (fnames1, 0..) |_, fidx1| {
+            const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx1)));
             inline for (reserved_long_names) |reserved| {
                 if (comptime std.mem.eql(u8, field.name, reserved)) {
                     @compileError("CLI Flag Collision: '" ++ field.name ++
@@ -130,7 +136,9 @@ pub const ComptimeLinter = struct {
 
     /// Whether the flags type has a field with this name, in either spelling.
     fn hasFlagNamed(comptime FlagsType: type, comptime name: []const u8) bool {
-        inline for (std.meta.fields(FlagsType)) |field| {
+        const fnames2 = @typeInfo(FlagsType).@"struct".field_names;
+        inline for (fnames2, 0..) |_, fidx2| {
+            const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx2)));
             if (comptime namesEqual(field.name, name)) return true;
         }
         return false;

@@ -48,7 +48,7 @@ pub fn dir(
     env_map: *const std.process.Environ.Map,
     os_tag: std.Target.Os.Tag,
 ) Error![]u8 {
-    assert(@intFromEnum(kind) <= @intFromEnum(Kind.bin));
+    assert(@backingInt(kind) <= @backingInt(Kind.bin));
     if (os_tag == .windows) return windowsDir(allocator, kind, env_map);
     return posixDir(allocator, kind, env_map);
 }

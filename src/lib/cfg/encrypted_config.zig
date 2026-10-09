@@ -232,8 +232,8 @@ pub fn wipePlaintext(buf: []u8) void {
 
 // -- Tests -----------------------------------------------------------------
 
-const test_salt = [_]u8{0x11} ** salt_length;
-const test_nonce = [_]u8{0x22} ** nonce_length;
+const test_salt: [salt_length]u8 = @splat(0x11);
+const test_nonce: [nonce_length]u8 = @splat(0x22);
 
 test "round trip succeeds and a wrong passphrase fails closed" {
     const plaintext = "port = 8080\napi_key = \"secret\"\n";
@@ -363,7 +363,7 @@ test "truncated payloads are rejected rather than read out of bounds" {
     try std.testing.expectError(error.InvalidEncryptedPayload, Self.decrypt(std.testing.allocator, &[_]u8{0x01}, "pw"));
     try std.testing.expectError(
         error.InvalidEncryptedPayload,
-        Self.decrypt(std.testing.allocator, &[_]u8{0x01} ++ [_]u8{0} ** 40, "pw"),
+        Self.decrypt(std.testing.allocator, &([_]u8{0x01} ++ @as([40]u8, @splat(0))), "pw"),
     );
 }
 

@@ -85,7 +85,9 @@ pub const Collector = struct {
         const T = @TypeOf(config);
         const a = self.arena.allocator();
 
-        inline for (std.meta.fields(T)) |field| {
+        const fnames0 = @typeInfo(T).@"struct".field_names;
+        inline for (fnames0, 0..) |_, fidx0| {
+            const field = std.meta.fieldInfo(T, @fromBackingInt(@intCast(fidx0)));
             const value = @field(config, field.name);
 
             if (comptime isScalar(field.type)) {
@@ -97,7 +99,9 @@ pub const Collector = struct {
                 try self.push(name, value, cfg.loader.isSecret(T, field.name), options);
             } else if (comptime isFlattenableStruct(field.type)) {
                 const Nested = field.type;
-                inline for (std.meta.fields(Nested)) |sub| {
+                const fnames1 = @typeInfo(Nested).@"struct".field_names;
+                inline for (fnames1, 0..) |_, fidx1| {
+                    const sub = std.meta.fieldInfo(Nested, @fromBackingInt(@intCast(fidx1)));
                     const joined = try std.fmt.allocPrint(a, "{s}_{s}", .{
                         comptime screamSnake(field.name),
                         comptime screamSnake(sub.name),
@@ -308,7 +312,8 @@ fn isScalar(comptime T: type) bool {
 fn isFlattenableStruct(comptime T: type) bool {
     if (@typeInfo(T) != .@"struct") return false;
     if (T == cfg.DurationMs or T == cfg.ByteSize) return false;
-    for (std.meta.fields(T)) |f| {
+    inline for (@typeInfo(T).@"struct".field_names, 0..) |_, i| {
+        const f = std.meta.fieldInfo(T, @fromBackingInt(@intCast(i)));
         if (!isScalar(f.type)) return false;
     }
     return true;

@@ -279,7 +279,7 @@ pub fn multiSelect(ctx: anytype, comptime EnumType: type, question: []const u8) 
     const Model = struct {
         q: []const u8,
         cursor: usize = 0,
-        selected: [fields.len]bool = [_]bool{false} ** fields.len,
+        selected: [fields.len]bool = @splat(false),
         done: bool = false,
 
         pub fn init(q: []const u8) @This() {

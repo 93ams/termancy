@@ -327,7 +327,7 @@ test "Custom Parser and Validator" {
 
 // --- Module 1: Global Middleware (Onion Architecture) ---
 
-var mw_trace: [4]u8 = [_]u8{0} ** 4;
+var mw_trace: [4]u8 = @splat(0);
 var mw_trace_count: usize = 0;
 
 fn traceMiddleware1(ctx: anytype, next: anytype) !void {
@@ -3247,7 +3247,7 @@ test "pre_run and post_run hooks run around the body, root first for pre" {
     // `pre_runs` was collected and never called anywhere in the framework: a hook that
     // looked supported and did nothing.
     const order = struct {
-        var trace: [8]u8 = [_]u8{0} ** 8;
+        var trace: [8]u8 = @splat(0);
         var len: usize = 0;
 
         fn pre(ctx: App.Ctx) App.Error!void {
@@ -4999,6 +4999,6 @@ test "exit codes cover the framework's declared error set" {
 
     // The declared set is the one the mapping above covers, member for member:
     // 19 named failures plus the `Count` marker.
-    const declared = @typeInfo(cli.AppError).error_set.?;
+    const declared = @typeInfo(cli.AppError).error_set.error_names.?;
     try testing.expectEqual(@as(usize, 20), declared.len);
 }

@@ -8,7 +8,9 @@ pub const ConfigDiffer = struct {
         var diff_count: usize = 0;
         try writer.writeAll("\n\x1b[1m=== Configuration Diff (Default vs Active) ===\x1b[0m\n");
 
-        inline for (std.meta.fields(T)) |field| {
+        const fnames0 = @typeInfo(T).@"struct".field_names;
+        inline for (fnames0, 0..) |_, fidx0| {
+            const field = std.meta.fieldInfo(T, @fromBackingInt(@intCast(fidx0)));
             const def_val = @field(default_cfg, field.name);
             const act_val = @field(active_cfg, field.name);
 

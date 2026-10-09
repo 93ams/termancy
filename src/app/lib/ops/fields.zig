@@ -4,7 +4,7 @@
 //!
 //! Two operations must answer "given a *runtime* dotted path like `network.port`,
 //! what is that field?" - dry-run validation and inspect. The obvious implementation
-//! walks `std.meta.fields(ConfigT)` comparing names, but that does not compile:
+//! walks `@typeInfo(ConfigT).@"struct".field_names` comparing names, but that does not compile:
 //!
 //! ```text
 //! error: unable to resolve comptime value
@@ -90,7 +90,8 @@ pub const Table = struct {
 pub fn build(comptime ConfigT: type) []const Entry {
     comptime {
         var list: []const Entry = &.{};
-        for (std.meta.fields(ConfigT)) |field| {
+        for (@typeInfo(ConfigT).@"struct".field_names, 0..) |_, zfn_i| {
+            const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(zfn_i)));
             if (isScalar(field.type)) {
                 list = list ++ &[_]Entry{.{
                     .path = field.name,
@@ -101,7 +102,8 @@ pub fn build(comptime ConfigT: type) []const Entry {
                     .render_fn = makeRenderTop(ConfigT, field.name),
                 }};
             } else if (isFlattenableStruct(field.type)) {
-                for (std.meta.fields(field.type)) |sub| {
+                for (@typeInfo(field.type).@"struct".field_names, 0..) |_, sub_i| {
+                    const sub = std.meta.fieldInfo(field.type, @fromBackingInt(@intCast(sub_i)));
                     if (!isScalar(sub.type)) continue;
                     list = list ++ &[_]Entry{.{
                         .path = field.name ++ "." ++ sub.name,
@@ -136,7 +138,9 @@ fn makeRenderTop(comptime ConfigT: type, comptime name: []const u8) *const fn (*
     return struct {
         fn f(config: *const anyopaque, buf: *[buf_len]u8) []const u8 {
             const typed: *const ConfigT = @ptrCast(@alignCast(config));
-            inline for (std.meta.fields(ConfigT)) |field| {
+            const fnames0 = @typeInfo(ConfigT).@"struct".field_names;
+            inline for (fnames0, 0..) |_, fidx0| {
+                const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx0)));
                 if (comptime std.mem.eql(u8, field.name, name)) {
                     return renderFieldValue(buf, @field(typed.*, field.name), cfg.loader.isSecret(ConfigT, field.name));
                 }
@@ -155,9 +159,13 @@ fn makeRenderNested(
     return struct {
         fn f(config: *const anyopaque, buf: *[buf_len]u8) []const u8 {
             const typed: *const ConfigT = @ptrCast(@alignCast(config));
-            inline for (std.meta.fields(ConfigT)) |field| {
+            const fnames1 = @typeInfo(ConfigT).@"struct".field_names;
+            inline for (fnames1, 0..) |_, fidx1| {
+                const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx1)));
                 if (comptime std.mem.eql(u8, field.name, outer)) {
-                    inline for (std.meta.fields(field.type)) |sub| {
+                    const fnames2 = @typeInfo(field.type).@"struct".field_names;
+                    inline for (fnames2, 0..) |_, fidx2| {
+                        const sub = std.meta.fieldInfo(field.type, @fromBackingInt(@intCast(fidx2)));
                         if (comptime std.mem.eql(u8, sub.name, leaf)) {
                             return renderFieldValue(buf, @field(@field(typed.*, field.name), sub.name), cfg.loader.isSecret(field.type, sub.name));
                         }
@@ -224,7 +232,8 @@ pub fn isScalar(comptime T: type) bool {
 pub fn isFlattenableStruct(comptime T: type) bool {
     if (@typeInfo(T) != .@"struct") return false;
     if (T == cfg.DurationMs or T == cfg.ByteSize) return false;
-    for (std.meta.fields(T)) |f| {
+    inline for (@typeInfo(T).@"struct".field_names, 0..) |_, i| {
+        const f = std.meta.fieldInfo(T, @fromBackingInt(@intCast(i)));
         if (!isScalar(f.type)) return false;
     }
     return true;

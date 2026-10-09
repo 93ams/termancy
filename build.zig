@@ -200,14 +200,19 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("build/import_lint.zig"),
             .target = b.graph.host,
-            .optimize = .Debug,
+            .optimize = .debug,
         }),
     });
     const lint_run = b.addRunArtifact(lint_exe);
     lint_run.setName("lint: import paths and module test collection");
-    lint_run.addArg(b.pathFromRoot("src"));
-    lint_run.addArg(b.pathFromRoot("build"));
-    lint_run.addArg(b.fmt("--modules={s}", .{b.pathFromRoot("src/lib")}));
+    // Lazy paths, not resolved strings: `b.pathFromRoot` is gone in 0.17, and `addFileArg`
+    // keeps the dependency visible to the build graph - the guide's rule for anything operating
+    // on a source tree. The scanner takes `--modules` as a separate token for the same reason: a
+    // path interpolated into a formatted string would have to be resolved eagerly.
+    lint_run.addFileArg(b.path("src"));
+    lint_run.addFileArg(b.path("build"));
+    lint_run.addArg("--modules");
+    lint_run.addFileArg(b.path("src/lib"));
     const lint_step = b.step("lint", "Check import paths and module test collection");
     lint_step.dependOn(&lint_run.step);
 

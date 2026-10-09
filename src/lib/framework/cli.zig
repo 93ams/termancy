@@ -227,7 +227,9 @@ pub fn extractLogLevel(args: []const []const u8) ?std.log.Level {
 pub fn formatFlags(writer: anytype, flags: anytype) !void {
     const T = @TypeOf(flags);
     try writer.writeAll("{\n");
-    inline for (std.meta.fields(T)) |field| {
+    const fnames0 = @typeInfo(T).@"struct".field_names;
+    inline for (fnames0, 0..) |_, fidx0| {
+        const field = std.meta.fieldInfo(T, @fromBackingInt(@intCast(fidx0)));
         if (comptime (field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) continue;
         const val = @field(flags, field.name);
 
@@ -543,7 +545,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             post_runs: []?HookFn,
             interactive_shell: ?*const fn (ctx: Ctx) anyerror!void = null,
             count: usize = 0,
-            subcmd_indices: [32]usize = [_]usize{0} ** 32,
+            subcmd_indices: [32]usize = @splat(0),
             subcmd_count: usize = 0,
 
             /// The exit status of an external subcommand that ran in place of this one,
@@ -831,7 +833,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             comptime ParsedT: type,
         ) type {
             const fn_info = @typeInfo(@TypeOf(run_fn)).@"fn";
-            const params = fn_info.params;
+            const params = fn_info.param_types;
             const RT = fn_info.return_type.?;
             const PayloadT = if (@typeInfo(RT) == .error_union) @typeInfo(RT).error_union.payload else RT;
             const UserFlagsT = MergeFlags(FlagsT, GlobalFlags);
@@ -840,8 +842,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 @compileError("a command's run function takes 1 to 3 parameters: (ctx), " ++
                     "(ctx, flags), (ctx, args), (ctx, flags, args) or (ctx, args, flags)");
             }
-            inline for (params) |param| {
-                if (comptime param.type == null) {
+            // `param_types` elements are `?type`: null means an `anytype` or generic parameter.
+            inline for (params) |param_type| {
+                if (comptime param_type == null) {
                     @compileError("a command's run function cannot take an `anytype` parameter: " ++
                         "the framework has to know what to pass");
                 }
@@ -855,17 +858,17 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             const shape: RunShape = comptime blk: {
                 if (params.len == 1) break :blk .ctx_only;
                 if (params.len == 2) {
-                    if (args_distinguishable and params[1].type.? == ArgsT) break :blk .ctx_args;
+                    if (args_distinguishable and params[1].? == ArgsT) break :blk .ctx_args;
                     break :blk .ctx_flags;
                 }
-                if (args_distinguishable and params[1].type.? == ArgsT) break :blk .ctx_args_flags;
+                if (args_distinguishable and params[1].? == ArgsT) break :blk .ctx_args_flags;
                 break :blk .ctx_flags_args;
             };
 
             const FlagsParamT = comptime switch (shape) {
                 .ctx_only, .ctx_args => struct {},
-                .ctx_flags, .ctx_flags_args => params[1].type.?,
-                .ctx_args_flags => params[2].type.?,
+                .ctx_flags, .ctx_flags_args => params[1].?,
+                .ctx_args_flags => params[2].?,
             };
 
             if (comptime shape != .ctx_only and shape != .ctx_args) {
@@ -884,7 +887,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 /// exactly the type they wrote.
                 fn toFlags(comptime T: type, parsed: ParsedT) T {
                     var out: T = undefined;
-                    inline for (std.meta.fields(T)) |field| {
+                    const fnames1 = @typeInfo(T).@"struct".field_names;
+                    inline for (fnames1, 0..) |_, fidx1| {
+                        const field = std.meta.fieldInfo(T, @fromBackingInt(@intCast(fidx1)));
                         @field(out, field.name) = @field(parsed, field.name);
                     }
                     return out;
@@ -1303,7 +1308,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 if (std.mem.indexOf(u8, name, "=")) |eq_idx| {
                     key = name[0..eq_idx];
                 }
-                inline for (std.meta.fields(FlagsType)) |field| {
+                const fnames2 = @typeInfo(FlagsType).@"struct".field_names;
+                inline for (fnames2, 0..) |_, fidx2| {
+                    const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx2)));
                     // The same dash/underscore equivalence `assignFlag` uses. Without
                     // it routing decides `--dry-run` takes no value, skips one token,
                     // and then reads the value as a subcommand or a positional.
@@ -1322,7 +1329,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 if (@hasDecl(OrigFlagsT, "meta")) {
                     const meta_block = OrigFlagsT.meta;
                     for (arg[1..], 0..) |char, char_idx| {
-                        inline for (std.meta.fields(FlagsType)) |field| {
+                        const fnames3 = @typeInfo(FlagsType).@"struct".field_names;
+                        inline for (fnames3, 0..) |_, fidx3| {
+                            const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx3)));
                             if (comptime !isPositionalField(field.name)) {
                                 if (comptime @hasField(@TypeOf(meta_block), field.name)) {
                                     const field_meta = @field(meta_block, field.name);
@@ -1550,7 +1559,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             var best_dist: usize = std.math.maxInt(usize);
             const threshold: usize = if (key.len <= 3) 1 else 3;
 
-            inline for (std.meta.fields(FlagsType)) |field| {
+            const fnames4 = @typeInfo(FlagsType).@"struct".field_names;
+            inline for (fnames4, 0..) |_, fidx4| {
+                const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx4)));
                 if (comptime !(field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) {
                     if (comptime !isPositionalField(field.name)) {
                         // A deprecated flag still works but is not advertised, so it is
@@ -1939,7 +1950,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                     @compileError("run must be a function pointer");
                 }
 
-                const FlagsType = run_info.@"fn".params[1].type.?;
+                const FlagsType = run_info.@"fn".param_types[1].?;
 
                 // One arena per leaf invocation.
                 //
@@ -2119,7 +2130,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         fn registerSecrets(comptime OrigFlagsT: type, flags: anytype) void {
             if (comptime !@hasDecl(OrigFlagsT, "meta")) return;
             const FlagsT = @TypeOf(flags);
-            inline for (std.meta.fields(FlagsT)) |field| {
+            const fnames5 = @typeInfo(FlagsT).@"struct".field_names;
+            inline for (fnames5, 0..) |_, fidx5| {
+                const field = std.meta.fieldInfo(FlagsT, @fromBackingInt(@intCast(fidx5)));
                 if (comptime !docs.isFrameworkField(field.name) and !isPositionalField(field.name)) {
                     if (comptime field.type == []const u8 or field.type == []u8) {
                         if (comptime isSecretFlag(OrigFlagsT, field.name)) {
@@ -2130,7 +2143,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                     // own metadata, which is where `src/app/cmd/config` documents its arguments.
                     if (comptime isPositionalField(field.name)) {
                         const SlotT = field.type;
-                        inline for (std.meta.fields(SlotT)) |p_field| {
+                        const fnames6 = @typeInfo(SlotT).@"struct".field_names;
+                        inline for (fnames6, 0..) |_, fidx6| {
+                            const p_field = std.meta.fieldInfo(SlotT, @fromBackingInt(@intCast(fidx6)));
                             if (comptime p_field.type == []const u8) {
                                 if (comptime isSecretPositional(OrigFlagsT, field.name, p_field.name)) {
                                     log.registerSecret(@field(@field(flags, field.name), p_field.name));
@@ -2226,7 +2241,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             chain.external_status = switch (term) {
                 .exited => |code| code,
                 // The convention a shell reports: 128 + the signal number.
-                .signal => |sig| 128 +% @as(u8, @truncate(@intFromEnum(sig))),
+                .signal => |sig| 128 +% @as(u8, @truncate(@backingInt(sig))),
                 .stopped, .unknown => 1,
             };
             return true;
@@ -2316,27 +2331,33 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             file_values: ?std.StringHashMapUnmanaged([]const u8),
             mutex_groups: []const []const []const u8,
         ) !FlagsType {
+            // Zig 0.17's `std.meta.fieldInfo` needs more comptime branches than the default
+            // quota allows when a merged flags type has many fields; raising it here covers
+            // every lookup this function performs.
+            @setEvalBranchQuota(20_000);
             var parsed_flags: FlagsType = undefined;
             // `provided` is "the user typed this flag". It is deliberately narrow:
             // `conflicts_with`/`requires` are defined over what the command line asked
             // for, so a value that arrived from the environment cannot conflict with
             // anything.
-            var provided = [_]bool{false} ** std.meta.fields(FlagsType).len;
+            var provided: [@typeInfo(FlagsType).@"struct".field_names.len]bool = @splat(false);
             // `resolved` is "this field already has a value from somewhere", which is
             // what the resolution order needs: CLI > environment > file > default.
-            var resolved = [_]bool{false} ** std.meta.fields(FlagsType).len;
+            var resolved: [@typeInfo(FlagsType).@"struct".field_names.len]bool = @splat(false);
 
             // Values collected for repeatable fields, keyed by field index. Raw text,
             // because each field's element type is only known inside the `inline for`
             // that fills it - so the strings are collected here and typed at the end.
-            var repeat_values: [std.meta.fields(FlagsType).len]std.ArrayListUnmanaged([]const u8) =
-                [_]std.ArrayListUnmanaged([]const u8){.empty} ** std.meta.fields(FlagsType).len;
+            var repeat_values: [@typeInfo(FlagsType).@"struct".field_names.len]std.ArrayListUnmanaged([]const u8) =
+                @as([@typeInfo(FlagsType).@"struct".field_names.len]std.ArrayListUnmanaged([]const u8), @splat(.empty));
             defer {
                 for (&repeat_values) |*list| list.deinit(alloc);
             }
 
             // 1. Initialize defaults and validation checks
-            inline for (std.meta.fields(FlagsType)) |field| {
+            const fnames7 = @typeInfo(FlagsType).@"struct".field_names;
+            inline for (fnames7, 0..) |_, fidx7| {
+                const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx7)));
                 if (comptime (field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) {
                     continue;
                 }
@@ -2344,7 +2365,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                     continue;
                 }
 
-                if (field.default_value_ptr) |def| {
+                if (field.attrs.default_value_ptr) |def| {
                     @field(parsed_flags, field.name) = @as(*align(1) const field.type, @ptrCast(def)).*;
                 } else {
                     if (@typeInfo(field.type) == .optional) {
@@ -2361,8 +2382,10 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 const pos_field_name = if (has_pos_lower) "positionals" else "Positional";
                 const PosType = @TypeOf(@field(parsed_flags, pos_field_name));
 
-                inline for (std.meta.fields(PosType)) |p_field| {
-                    if (p_field.default_value_ptr) |def| {
+                const fnames8 = @typeInfo(PosType).@"struct".field_names;
+                inline for (fnames8, 0..) |_, fidx8| {
+                    const p_field = std.meta.fieldInfo(PosType, @fromBackingInt(@intCast(fidx8)));
+                    if (p_field.attrs.default_value_ptr) |def| {
                         @field(@field(parsed_flags, pos_field_name), p_field.name) = @as(*align(1) const p_field.type, @ptrCast(def)).*;
                     } else {
                         if (@typeInfo(p_field.type) == .optional) {
@@ -2463,7 +2486,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // The order here is the documented one - CLI flag > environment > file >
             // the struct's own default - and it is enforced by `resolved`, which the
             // command line sets in `assignFlag` and each layer below only consults.
-            inline for (std.meta.fields(FlagsType), 0..) |field, idx| {
+            const fnames9 = @typeInfo(FlagsType).@"struct".field_names;
+            inline for (fnames9, 0..) |_, idx| {
+                const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(idx)));
                 if (comptime docs.isFrameworkField(field.name)) {
                     // framework-internal field
                 } else if (comptime isPositionalField(field.name)) {
@@ -2493,7 +2518,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             for (mutex_groups) |group| {
                 var first_given: ?[]const u8 = null;
                 for (group) |group_name| {
-                    inline for (std.meta.fields(FlagsType), 0..) |field, idx| {
+                    const fnames10 = @typeInfo(FlagsType).@"struct".field_names;
+                    inline for (fnames10, 0..) |_, idx| {
+                        const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(idx)));
                         if (comptime (field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) {
                             // framework-internal field
                         } else if (comptime isPositionalField(field.name)) {
@@ -2515,7 +2542,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // 3. Post-parsing Validation
             if (@hasDecl(OrigFlagsT, "meta")) {
                 const meta_block = OrigFlagsT.meta;
-                inline for (std.meta.fields(FlagsType)) |field| {
+                const fnames11 = @typeInfo(FlagsType).@"struct".field_names;
+                inline for (fnames11, 0..) |_, fidx11| {
+                    const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx11)));
                     if (@hasField(@TypeOf(meta_block), field.name)) {
                         const field_meta = @field(meta_block, field.name);
                         if (@hasField(@TypeOf(field_meta), "validate")) {
@@ -2535,7 +2564,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // `resolved`, not `provided`: a field the environment or the config file
             // supplied is not missing, and the prompt below is for a field nothing has
             // answered yet.
-            inline for (std.meta.fields(FlagsType), 0..) |field, idx| {
+            const fnames12 = @typeInfo(FlagsType).@"struct".field_names;
+            inline for (fnames12, 0..) |_, idx| {
+                const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(idx)));
                 if (comptime (field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) continue;
                 if (comptime isPositionalField(field.name)) continue;
 
@@ -2548,11 +2579,12 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             if (comptime has_pos_lower or has_pos_upper) {
                 const pos_field_name = if (has_pos_lower) "positionals" else "Positional";
                 const PosType = @TypeOf(@field(parsed_flags, pos_field_name));
-                const pos_fields = std.meta.fields(PosType);
+                const pos_fields = @typeInfo(PosType).@"struct".field_names;
 
-                inline for (pos_fields, 0..) |p_field, p_i| {
+                inline for (pos_fields, 0..) |_, p_i| {
+                    const p_field = std.meta.fieldInfo(PosType, @fromBackingInt(@intCast(p_i)));
                     if (pos_count.* <= p_i) {
-                        if (p_field.default_value_ptr == null and @typeInfo(p_field.type) != .optional) {
+                        if (p_field.attrs.default_value_ptr == null and @typeInfo(p_field.type) != .optional) {
                             if (ctx.is_tty) {
                                 try ctx.out.print("? {s} (positional): ", .{p_field.name});
                                 if (ctx.in.takeDelimiter('\n') catch null) |read_str| {
@@ -2569,7 +2601,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                                                 return err;
                                             };
                                         } else if (comptime getGlobalParserIndex(p_field.type)) |parser_idx| blk: {
-                                            const global_parser = @field(config.type_parsers, std.meta.fields(@TypeOf(config.type_parsers))[parser_idx].name);
+                                            const global_parser = @field(config.type_parsers, @typeInfo(@TypeOf(config.type_parsers)).@"struct".field_names[parser_idx]);
                                             break :blk global_parser(input_str) catch |err| {
                                                 try ctx.err.print("\nError: Invalid format for positional argument '{s}'.\n", .{p_field.name});
                                                 return err;
@@ -2619,7 +2651,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // early `continue`.
             if (comptime @hasDecl(OrigFlagsT, "meta")) {
                 const meta_block = OrigFlagsT.meta;
-                inline for (std.meta.fields(FlagsType), 0..) |field, idx| {
+                const fnames13 = @typeInfo(FlagsType).@"struct".field_names;
+                inline for (fnames13, 0..) |_, idx| {
+                    const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(idx)));
                     if (comptime field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_') {
                         // framework-internal field
                     } else if (comptime isPositionalField(field.name)) {
@@ -2636,7 +2670,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                         if (provided[idx]) {
                             if (comptime @hasField(@TypeOf(field_meta), "conflicts_with")) {
                                 inline for (field_meta.conflicts_with) |other_name| {
-                                    inline for (std.meta.fields(FlagsType), 0..) |other, other_idx| {
+                                    const fnames14 = @typeInfo(FlagsType).@"struct".field_names;
+                                    inline for (fnames14, 0..) |_, other_idx| {
+                                        const other = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(other_idx)));
                                         if (comptime std.mem.eql(u8, other.name, other_name)) {
                                             if (provided[other_idx]) {
                                                 try ctx.err.print("Error: Flag '--{s}' conflicts with '--{s}'.\n", .{ field.name, other.name });
@@ -2648,7 +2684,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                             }
                             if (comptime @hasField(@TypeOf(field_meta), "requires")) {
                                 inline for (field_meta.requires) |other_name| {
-                                    inline for (std.meta.fields(FlagsType), 0..) |other, other_idx| {
+                                    const fnames15 = @typeInfo(FlagsType).@"struct".field_names;
+                                    inline for (fnames15, 0..) |_, other_idx| {
+                                        const other = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(other_idx)));
                                         if (comptime std.mem.eql(u8, other.name, other_name)) {
                                             if (!provided[other_idx]) {
                                                 try ctx.err.print("Error: Flag '--{s}' requires '--{s}'.\n", .{ field.name, other.name });
@@ -2665,7 +2703,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // 4. Advanced Comptime Validation
             if (@hasDecl(OrigFlagsT, "validation")) {
                 const rules = OrigFlagsT.validation;
-                inline for (std.meta.fields(FlagsType)) |field| {
+                const fnames16 = @typeInfo(FlagsType).@"struct".field_names;
+                inline for (fnames16, 0..) |_, fidx16| {
+                    const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx16)));
                     if (@hasField(@TypeOf(rules), field.name)) {
                         const rule = @field(rules, field.name);
                         const val = @field(parsed_flags, field.name);
@@ -2720,16 +2760,20 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             if (comptime has_pos_lower or has_pos_upper) {
                 const pos_field_name = if (has_pos_lower) "positionals" else "Positional";
                 const PosType = @TypeOf(@field(parsed_flags, pos_field_name));
-                const pos_fields = std.meta.fields(PosType);
+                const pos_fields = @typeInfo(PosType).@"struct".field_names;
 
-                const is_variadic = pos_fields.len > 0 and pos_fields[pos_fields.len - 1].type == []const []const u8;
+                // Zig 0.17: `field_names` holds names, so the last field's type comes from the parallel
+                // `field_types` array.
+                const pos_types = @typeInfo(PosType).@"struct".field_types;
+                const is_variadic = pos_types.len > 0 and pos_types[pos_types.len - 1] == []const []const u8;
 
                 if (!is_variadic and pos_count.* > pos_fields.len) {
                     try ctx.err.print("Error: Too many positional arguments.\n", .{});
                     return error.TooManyPositionalArguments;
                 }
 
-                inline for (pos_fields, 0..) |p_field, p_i| {
+                inline for (pos_fields, 0..) |_, p_i| {
+                    const p_field = std.meta.fieldInfo(PosType, @fromBackingInt(@intCast(p_i)));
                     if (is_variadic and p_i == pos_fields.len - 1) {
                         if (pos_count.* >= p_i) {
                             // `alloc`, not `ctx.allocator`: this slice is the command's
@@ -2757,7 +2801,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                                         return err;
                                     };
                                 } else if (comptime getGlobalParserIndex(p_field.type)) |parser_idx| blk: {
-                                    const global_parser = @field(config.type_parsers, std.meta.fields(@TypeOf(config.type_parsers))[parser_idx].name);
+                                    const global_parser = @field(config.type_parsers, @typeInfo(@TypeOf(config.type_parsers)).@"struct".field_names[parser_idx]);
                                     break :blk global_parser(arg) catch |err| {
                                         try ctx.err.print("Error: Invalid format for positional argument '{s}'.\n", .{p_field.name});
                                         return err;
@@ -2779,7 +2823,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // Collected raw during the args loop, because a field's element type is
             // only known inside an `inline for` over the fields; parsed here so every
             // element goes through the same custom-parser chain a scalar flag uses.
-            inline for (std.meta.fields(FlagsType), 0..) |field, idx| {
+            const fnames17 = @typeInfo(FlagsType).@"struct".field_names;
+            inline for (fnames17, 0..) |_, idx| {
+                const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(idx)));
                 if (comptime isRepeatableField(field.type)) {
                     if (repeat_values[idx].items.len > 0) {
                         const ElementT = repeatableElement(field.type);
@@ -2791,7 +2837,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                             };
                         }
                         @field(parsed_flags, field.name) = collected;
-                    } else if (field.default_value_ptr == null) {
+                    } else if (field.attrs.default_value_ptr == null) {
                         // Never given, and no default: an empty list rather than an
                         // undefined value the command would read as garbage.
                         @field(parsed_flags, field.name) = &.{};
@@ -2801,6 +2847,15 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
             return parsed_flags;
         }
+        /// Horizontal rules for the boxed panic banner, as bytes.
+        ///
+        /// Zig 0.17 removed the repetition operator these were written with. It repeated
+        /// the three-byte UTF-8 sequence for U+2500, so the results are 60 and 120 bytes
+        /// rather than 20 and 40 - and they cannot be spelled with `@splat`, because
+        /// the codepoint does not fit a `u8`. The sequence is written out instead.
+        const rule_20: [60]u8 = .{ 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80 };
+        const rule_40: [120]u8 = .{ 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80, 0xE2, 0x94, 0x80 };
+
         /// Prompts for a required flag that nothing else has supplied, and writes the answer
         /// back into `parsed`.
         ///
@@ -2818,11 +2873,11 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             provided: []bool,
             resolved: []bool,
             idx: usize,
-            comptime field: std.builtin.Type.StructField,
+            field: anytype,
             ctx: anytype,
         ) !void {
             if (resolved[idx]) return;
-            if (field.default_value_ptr != null) return;
+            if (field.attrs.default_value_ptr != null) return;
             if (field.type == bool) return;
             if (@typeInfo(field.type) == .optional) return;
             if (ctx.is_tty) {
@@ -2841,7 +2896,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                                 return err;
                             };
                         } else if (comptime getGlobalParserIndex(field.type)) |parser_idx| blk: {
-                            const global_parser = @field(config.type_parsers, std.meta.fields(@TypeOf(config.type_parsers))[parser_idx].name);
+                            const global_parser = @field(config.type_parsers, @typeInfo(@TypeOf(config.type_parsers)).@"struct".field_names[parser_idx]);
                             break :blk global_parser(input_str) catch |err| {
                                 try ctx.err.print("\nError: Invalid format for flag '--{s}'.\n", .{field.name});
                                 return err;
@@ -2885,7 +2940,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 return custom_parser(text);
             }
             if (comptime getGlobalParserIndex(T)) |parser_idx| {
-                const global_parser = @field(config.type_parsers, std.meta.fields(@TypeOf(config.type_parsers))[parser_idx].name);
+                const global_parser = @field(config.type_parsers, @typeInfo(@TypeOf(config.type_parsers)).@"struct".field_names[parser_idx]);
                 return global_parser(text);
             }
             return parseValue(T, text);
@@ -2915,7 +2970,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         fn applyTextValue(
             comptime OrigFlagsT: type,
             comptime FlagsType: type,
-            comptime field: std.builtin.Type.StructField,
+            field: anytype,
             parsed_flags: *FlagsType,
             repeat_values: []std.ArrayListUnmanaged([]const u8),
             idx: usize,
@@ -2944,7 +2999,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         fn resolveFieldFromLayers(
             comptime OrigFlagsT: type,
             comptime FlagsType: type,
-            comptime field: std.builtin.Type.StructField,
+            field: anytype,
             idx: usize,
             parsed_flags: *FlagsType,
             repeat_values: []std.ArrayListUnmanaged([]const u8),
@@ -3095,9 +3150,10 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
             const parsers = config.type_parsers;
             const TupleType = @TypeOf(parsers);
-            const fields = std.meta.fields(TupleType);
+            const fields = @typeInfo(TupleType).@"struct".field_names;
 
-            inline for (fields, 0..) |f, i| {
+            inline for (fields, 0..) |_, i| {
+                const f = std.meta.fieldInfo(TupleType, @fromBackingInt(@intCast(i)));
                 const func = @field(parsers, f.name);
                 const fn_info = @typeInfo(@TypeOf(func)).@"fn";
                 const RetT = fn_info.return_type.?;
@@ -3138,7 +3194,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             var found = false;
             var took_value = false;
 
-            inline for (std.meta.fields(FlagsType), 0..) |field, idx| {
+            const fnames18 = @typeInfo(FlagsType).@"struct".field_names;
+            inline for (fnames18, 0..) |_, idx| {
+                const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(idx)));
                 if (comptime (field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) continue;
                 if (comptime isPositionalField(field.name)) continue;
 
@@ -3387,7 +3445,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// The width of the "Flags:" left column, including the two-space indent.
         fn flagColumnWidth(comptime OrigFlagsT: type, comptime FlagsType: type) usize {
             comptime var width: usize = 0;
-            inline for (std.meta.fields(FlagsType)) |field| {
+            const fnames19 = @typeInfo(FlagsType).@"struct".field_names;
+            inline for (fnames19, 0..) |_, fidx19| {
+                const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx19)));
                 if (comptime !docs.isFrameworkField(field.name) and
                     !isPositionalField(field.name) and
                     !isDeprecatedFlag(OrigFlagsT, field.name))
@@ -3404,7 +3464,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// The width of the "Arguments:" left column, including the two-space indent.
         fn argumentColumnWidth(comptime ArgsT: type) usize {
             comptime var width: usize = 0;
-            inline for (std.meta.fields(ArgsT)) |p_field| {
+            const fnames20 = @typeInfo(ArgsT).@"struct".field_names;
+            inline for (fnames20, 0..) |_, fidx20| {
+                const p_field = std.meta.fieldInfo(ArgsT, @fromBackingInt(@intCast(fidx20)));
                 width = @max(width, 2 + p_field.name.len);
             }
             return width;
@@ -3459,12 +3521,13 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// be told it was missing.
         fn printArgumentList(comptime cmd: anytype, writer: anytype, orig_flags: type) !void {
             const ArgsT = docs.PositionalType(@TypeOf(cmd));
-            const fields = std.meta.fields(ArgsT);
+            const fields = @typeInfo(ArgsT).@"struct".field_names;
             if (comptime fields.len == 0) return;
 
             const column = comptime argumentColumnWidth(ArgsT);
             try writer.writeAll("\nArguments:\n");
-            inline for (fields) |p_field| {
+            inline for (fields, 0..) |_, fields_i| {
+                const p_field = std.meta.fieldInfo(ArgsT, @fromBackingInt(@intCast(fields_i)));
                 try writer.writeAll("  ");
                 try writer.writeAll(p_field.name);
                 const used: usize = 2 + p_field.name.len;
@@ -3477,7 +3540,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                         row_len = text.len;
                     }
                 }
-                const required = comptime p_field.default_value_ptr == null and
+                const required = comptime p_field.attrs.default_value_ptr == null and
                     @typeInfo(p_field.type) != .optional;
                 if (required) {
                     row_len += (std.fmt.bufPrint(row_buf[row_len..], "{s}[required]", .{
@@ -3496,7 +3559,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         fn printFlagList(ctx: anytype, writer: anytype, orig_flags: type, flags_type: type) !void {
             const column = comptime flagColumnWidth(orig_flags, flags_type);
             var any_flags = false;
-            inline for (std.meta.fields(flags_type)) |field| {
+            const fnames21 = @typeInfo(flags_type).@"struct".field_names;
+            inline for (fnames21, 0..) |_, fidx21| {
+                const field = std.meta.fieldInfo(flags_type, @fromBackingInt(@intCast(fidx21)));
                 if (comptime !docs.isFrameworkField(field.name) and
                     !isPositionalField(field.name) and
                     !isDeprecatedFlag(orig_flags, field.name))
@@ -3507,7 +3572,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             if (!any_flags) return;
 
             try writer.writeAll("\nFlags:\n");
-            inline for (std.meta.fields(flags_type)) |field| {
+            const fnames22 = @typeInfo(flags_type).@"struct".field_names;
+            inline for (fnames22, 0..) |_, fidx22| {
+                const field = std.meta.fieldInfo(flags_type, @fromBackingInt(@intCast(fidx22)));
                 if (comptime !docs.isFrameworkField(field.name) and
                     !isPositionalField(field.name) and
                     !isDeprecatedFlag(orig_flags, field.name))
@@ -3549,7 +3616,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                             if (row_len == 0) "" else "  ",
                             @typeName(field.type),
                         }) catch row_buf[row_len..row_len]).len;
-                        if (comptime field.default_value_ptr == null and
+                        if (comptime field.attrs.default_value_ptr == null and
                             @typeInfo(field.type) != .optional and field.type != bool)
                         {
                             row_len += (std.fmt.bufPrint(row_buf[row_len..], " [required]", .{}) catch row_buf[row_len..row_len]).len;
@@ -3557,7 +3624,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                             // A secret's own default is a secret: printing it in `--help`
                             // would publish the value the metadata exists to protect.
                             row_len += (std.fmt.bufPrint(row_buf[row_len..], " [default: {s}]", .{log.redaction_mask}) catch row_buf[row_len..row_len]).len;
-                        } else if (field.default_value_ptr) |def| {
+                        } else if (field.attrs.default_value_ptr) |def| {
                             const default_value = @as(*align(1) const field.type, @ptrCast(def)).*;
                             const printed = if (comptime isRepeatableField(field.type))
                                 row_buf[row_len..row_len]
@@ -3612,11 +3679,13 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 .text => switch (@typeInfo(T)) {
                     .@"struct" => |info| {
                         _ = info;
-                        try ctx.out.print("\n╭─{s}─┬─{s}─╮\n", .{ "─" ** 20, "─" ** 40 });
+                        try ctx.out.print("\n╭─{s}─┬─{s}─╮\n", .{ &rule_20, &rule_40 });
                         try ctx.out.print("│ {s:20.20} │ {s:40.40} │\n", .{ "Field", "Value" });
-                        try ctx.out.print("├─{s}─┼─{s}─┤\n", .{ "─" ** 20, "─" ** 40 });
+                        try ctx.out.print("├─{s}─┼─{s}─┤\n", .{ &rule_20, &rule_40 });
 
-                        inline for (std.meta.fields(T)) |field| {
+                        const fnames23 = @typeInfo(T).@"struct".field_names;
+                        inline for (fnames23, 0..) |_, fidx23| {
+                            const field = std.meta.fieldInfo(T, @fromBackingInt(@intCast(fidx23)));
                             const field_val = @field(result, field.name);
                             if (@typeInfo(field.type) == .pointer and field.type != []const u8 and field.type != []u8) {
                                 try ctx.out.print("│ {s:20.20} │ {any} │\n", .{ field.name, field_val });
@@ -3626,7 +3695,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                                 try ctx.out.print("│ {s:20.20} │ {any} │\n", .{ field.name, field_val });
                             }
                         }
-                        try ctx.out.print("╰─{s}─┴─{s}─╯\n", .{ "─" ** 20, "─" ** 40 });
+                        try ctx.out.print("╰─{s}─┴─{s}─╯\n", .{ &rule_20, &rule_40 });
                     },
                     else => {
                         if (T == []const u8 or T == []u8) {
@@ -3651,7 +3720,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         /// array, a struct with fields, and an optional wrapping one of those are blocks.
         fn yamlIsBlock(comptime T: type) bool {
             return switch (@typeInfo(T)) {
-                .@"struct" => |info| !info.is_tuple and info.fields.len > 0,
+                .@"struct" => |info| !info.is_tuple and info.field_names.len > 0,
                 .pointer => |ptr| ptr.size == .slice and ptr.child != u8,
                 .array => |arr| arr.child != u8,
                 .optional => |opt| yamlIsBlock(opt.child),
@@ -3672,7 +3741,8 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             if (comptime yamlIsBlock(T)) {
                 switch (@typeInfo(T)) {
                     .@"struct" => |info| {
-                        inline for (info.fields) |field| {
+                        inline for (info.field_names, 0..) |_, yaml_i| {
+                            const field = std.meta.fieldInfo(T, @fromBackingInt(@intCast(yaml_i)));
                             try writeYamlPad(writer, indent);
                             try writer.print("{s}:", .{field.name});
                             const field_value = @field(value, field.name);
@@ -4150,7 +4220,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             // status is the conventional `128 + signal`, which is what a program killed by
             // that signal reports, so `if ! prog; then` behaves the same either way.
             if (interrupted) |shutdown_signal| {
-                std.process.exit(128 +% @intFromEnum(shutdown_signal));
+                std.process.exit(128 +% @backingInt(shutdown_signal));
             }
         }
 
@@ -4198,7 +4268,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             const OrigFlagsT = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else FlagsType;
             if (FlagsType != void) {
                 if (args.len > 0 and std.mem.startsWith(u8, args[args.len - 1], "-")) {
-                    inline for (std.meta.fields(FlagsType)) |field| {
+                    const fnames24 = @typeInfo(FlagsType).@"struct".field_names;
+                    inline for (fnames24, 0..) |_, fidx24| {
+                        const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx24)));
                         if (comptime !(field.name.len >= 2 and field.name[0] == '_' and field.name[1] == '_')) {
                             if (comptime !isPositionalField(field.name)) {
                                 if (fieldIsAvailable(ctx, OrigFlagsT, field.name)) {
@@ -4216,7 +4288,9 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
 
                     if (@hasDecl(OrigFlagsT, "completion")) {
                         const completions = OrigFlagsT.completion;
-                        inline for (std.meta.fields(FlagsType)) |field| {
+                        const fnames25 = @typeInfo(FlagsType).@"struct".field_names;
+                        inline for (fnames25, 0..) |_, fidx25| {
+                            const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx25)));
                             if (flagNamesEqual(field.name, clean_name)) {
                                 if (@hasField(@TypeOf(completions), field.name)) {
                                     const comp_fn = @field(completions, field.name);
@@ -4231,10 +4305,14 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                     }
 
                     // Also suggest enum variants automatically!
-                    inline for (std.meta.fields(FlagsType)) |field| {
+                    const fnames26 = @typeInfo(FlagsType).@"struct".field_names;
+                    inline for (fnames26, 0..) |_, fidx26| {
+                        const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx26)));
                         if (flagNamesEqual(field.name, clean_name)) {
                             if (@typeInfo(field.type) == .@"enum") {
-                                inline for (std.meta.fields(field.type)) |enum_field| {
+                                const fnames27 = @typeInfo(field.type).@"enum".field_names;
+                                inline for (fnames27, 0..) |_, fidx27| {
+                                    const enum_field = std.meta.fieldInfo(field.type, @fromBackingInt(@intCast(fidx27)));
                                     try ctx.out.print("{s}\n", .{enum_field.name});
                                 }
                             }
@@ -4265,14 +4343,18 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
             const orig_flags = if (@hasDecl(CmdType, "OrigFlagsT")) CmdType.OrigFlagsT else FlagsType;
             if (FlagsType != void) {
                 var any_flags = false;
-                inline for (std.meta.fields(FlagsType)) |field| {
+                const fnames28 = @typeInfo(FlagsType).@"struct".field_names;
+                inline for (fnames28, 0..) |_, fidx28| {
+                    const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx28)));
                     if (comptime !docs.isFrameworkField(field.name) and !isPositionalField(field.name)) {
                         any_flags = true;
                     }
                 }
                 if (any_flags) {
                     try writer.writeAll("### Flags\n\n| Flag | Type | Default |\n|---|---|---|\n");
-                    inline for (std.meta.fields(FlagsType)) |field| {
+                    const fnames29 = @typeInfo(FlagsType).@"struct".field_names;
+                    inline for (fnames29, 0..) |_, fidx29| {
+                        const field = std.meta.fieldInfo(FlagsType, @fromBackingInt(@intCast(fidx29)));
                         if (comptime !docs.isFrameworkField(field.name) and !isPositionalField(field.name)) {
                             try writer.writeAll("| --");
                             try writeFlagSpelling(writer, field.name);
@@ -4281,7 +4363,7 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                             try docs.writeFlagMarkers(orig_flags, field.name, writer);
                             if (comptime isSecretFlag(orig_flags, field.name)) {
                                 try writer.print(" | {s} | {s} |\n", .{ @typeName(field.type), log.redaction_mask });
-                            } else if (field.default_value_ptr) |ptr| {
+                            } else if (field.attrs.default_value_ptr) |ptr| {
                                 const typed_ptr: *const field.type = @ptrCast(@alignCast(ptr));
                                 if (comptime field.type == []const u8) {
                                     try writer.print(" | {s} | {s} |\n", .{ @typeName(field.type), typed_ptr.* });
@@ -4299,9 +4381,11 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
                 // Positional arguments, which this generator omitted entirely even
                 // though `printHelp`'s shape made it obvious they existed.
                 const ArgsT = docs.PositionalType(CmdType);
-                if (comptime std.meta.fields(ArgsT).len > 0) {
+                if (comptime @typeInfo(ArgsT).@"struct".field_names.len > 0) {
                     try writer.writeAll("### Arguments\n\n| Argument | Type |\n|---|---|\n");
-                    inline for (std.meta.fields(ArgsT)) |p_field| {
+                    const fnames30 = @typeInfo(ArgsT).@"struct".field_names;
+                    inline for (fnames30, 0..) |_, fidx30| {
+                        const p_field = std.meta.fieldInfo(ArgsT, @fromBackingInt(@intCast(fidx30)));
                         try writer.print("| {s} | {s} |\n", .{ p_field.name, @typeName(p_field.type) });
                     }
                     try writer.writeAll("\n");
@@ -4338,23 +4422,25 @@ pub fn App(comptime StateT: type, comptime config: anytype) type {
         }
 
         pub fn MergeFlags(comptime A: type, comptime B: type) type {
-            const fields_a = std.meta.fields(A);
-            const fields_b = std.meta.fields(B);
-            const total_len = fields_a.len + fields_b.len;
+            const info_a = @typeInfo(A).@"struct";
+            const info_b = @typeInfo(B).@"struct";
+            const total_len = info_a.field_names.len + info_b.field_names.len;
 
-            var names: [total_len][]const u8 = undefined;
+            var names: [total_len][:0]const u8 = undefined;
             var types: [total_len]type = undefined;
-            var attrs: [total_len]std.builtin.Type.StructField.Attributes = undefined;
+            var attrs: [total_len]std.builtin.Type.Struct.FieldAttributes = undefined;
 
-            inline for (fields_a, 0..) |field, i| {
+            inline for (info_a.field_names, 0..) |_, i| {
+                const field = std.meta.fieldInfo(A, @fromBackingInt(@intCast(i)));
                 names[i] = field.name;
                 types[i] = field.type;
-                attrs[i] = .{ .@"comptime" = field.is_comptime, .@"align" = field.alignment, .default_value_ptr = field.default_value_ptr };
+                attrs[i] = field.attrs;
             }
-            inline for (fields_b, 0..) |field, i| {
-                names[fields_a.len + i] = field.name;
-                types[fields_a.len + i] = field.type;
-                attrs[fields_a.len + i] = .{ .@"comptime" = field.is_comptime, .@"align" = field.alignment, .default_value_ptr = field.default_value_ptr };
+            inline for (info_b.field_names, 0..) |_, i| {
+                const field = std.meta.fieldInfo(B, @fromBackingInt(@intCast(i)));
+                names[info_a.field_names.len + i] = field.name;
+                types[info_a.field_names.len + i] = field.type;
+                attrs[info_a.field_names.len + i] = field.attrs;
             }
 
             const final_names = names;

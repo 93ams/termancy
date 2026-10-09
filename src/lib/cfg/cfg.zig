@@ -25,7 +25,9 @@ pub fn Manager(comptime ConfigT: type) type {
         pub fn loadEnv(self: *Self, prefix: []const u8, env_map: anytype) !void {
             const allocator = self.arena.allocator();
 
-            inline for (std.meta.fields(ConfigT)) |field| {
+            const fnames0 = @typeInfo(ConfigT).@"struct".field_names;
+            inline for (fnames0, 0..) |_, fnames0_i| {
+                const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fnames0_i)));
                 const upper_name = comptime blk: {
                     var buf: [field.name.len]u8 = undefined;
                     for (field.name, 0..) |c, i| buf[i] = std.ascii.toUpper(c);
@@ -51,7 +53,9 @@ pub fn Manager(comptime ConfigT: type) type {
 
             if (parsed.value != .object) return error.ExpectedObject;
 
-            inline for (std.meta.fields(ConfigT)) |field| {
+            const fnames1 = @typeInfo(ConfigT).@"struct".field_names;
+            inline for (fnames1, 0..) |_, fidx1| {
+                const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx1)));
                 if (parsed.value.object.get(field.name)) |json_val| {
                     if (self.parseJsonValue(field.type, json_val)) |parsed_val| {
                         @field(self.config, field.name) = parsed_val;
@@ -99,7 +103,9 @@ pub fn Manager(comptime ConfigT: type) type {
 
         pub fn merge(self: *Self, overrides: anytype) !void {
             const OverrideT = @TypeOf(overrides);
-            inline for (std.meta.fields(ConfigT)) |field| {
+            const fnames2 = @typeInfo(ConfigT).@"struct".field_names;
+            inline for (fnames2, 0..) |_, fidx2| {
+                const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx2)));
                 if (@hasField(OverrideT, field.name)) {
                     const override_val = @field(overrides, field.name);
 

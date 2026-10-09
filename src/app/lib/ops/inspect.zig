@@ -46,7 +46,9 @@ pub fn buildEnvLineage(
     // way out rather than leaked.
     errdefer led.deinit();
 
-    inline for (std.meta.fields(ConfigT)) |field| {
+    const fnames0 = @typeInfo(ConfigT).@"struct".field_names;
+    inline for (fnames0, 0..) |_, fidx0| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx0)));
         if (comptime fields.isScalar(field.type)) {
             if (comptime declaredEnv(ConfigT, field.name)) |env_name| {
                 if (env_map.get(env_name)) |_| {

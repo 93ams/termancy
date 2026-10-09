@@ -26,7 +26,9 @@ pub fn load(allocator: std.mem.Allocator, comptime ConfigT: type, env_map: *std.
     var strings_duped: usize = 0;
     errdefer {
         var i: usize = 0;
-        inline for (std.meta.fields(ConfigT)) |field| {
+        const fnames0 = @typeInfo(ConfigT).@"struct".field_names;
+        inline for (fnames0, 0..) |_, fnames0_i| {
+            const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fnames0_i)));
             if (comptime isStringLike(field.type)) {
                 if (i < strings_duped) {
                     if (comptime @typeInfo(field.type) == .optional) {
@@ -44,11 +46,13 @@ pub fn load(allocator: std.mem.Allocator, comptime ConfigT: type, env_map: *std.
     // will supply that field, because allocating it only to overwrite it in pass 2
     // leaks the default. Measured: a required `[]const u8` with both a literal default
     // and an `.env` mapping leaked one allocation per load at the dupe below.
-    inline for (std.meta.fields(ConfigT)) |field| {
+    const fnames1 = @typeInfo(ConfigT).@"struct".field_names;
+    inline for (fnames1, 0..) |_, fidx1| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx1)));
         const env_overrides = comptime fieldHasEnv(ConfigT, field.name);
         const overridden = env_overrides and env_map.get(comptime envName(ConfigT, field.name)) != null;
 
-        if (field.default_value_ptr) |def| {
+        if (field.attrs.default_value_ptr) |def| {
             const default: *align(1) const field.type = @ptrCast(def);
             if (comptime isStringLike(field.type)) {
                 if (overridden) {
@@ -85,7 +89,9 @@ pub fn load(allocator: std.mem.Allocator, comptime ConfigT: type, env_map: *std.
     }
 
     // Pass 2: environment overrides.
-    inline for (std.meta.fields(ConfigT)) |field| {
+    const fnames2 = @typeInfo(ConfigT).@"struct".field_names;
+    inline for (fnames2, 0..) |_, fidx2| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx2)));
         if (comptime fieldHasEnv(ConfigT, field.name)) {
             const env_key = comptime envName(ConfigT, field.name);
             if (env_map.get(env_key)) |val| {
@@ -151,7 +157,9 @@ fn isOptionalString(comptime T: type) bool {
 /// per environment-sourced string field, because its call site did
 /// `defer allocator.destroy(resolved)` only.
 pub fn deinit(allocator: std.mem.Allocator, comptime ConfigT: type, config: *ConfigT) void {
-    inline for (std.meta.fields(ConfigT)) |field| {
+    const fnames3 = @typeInfo(ConfigT).@"struct".field_names;
+    inline for (fnames3, 0..) |_, fidx3| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx3)));
         if (comptime isStringLike(field.type)) {
             if (comptime @typeInfo(field.type) == .optional) {
                 if (@field(config.*, field.name)) |s| allocator.free(s);
@@ -183,7 +191,9 @@ pub fn mergeJson(config: anytype, json_content: []const u8, allocator: std.mem.A
 
     if (parsed.value != .object) return;
 
-    inline for (std.meta.fields(ConfigT)) |field| {
+    const fnames4 = @typeInfo(ConfigT).@"struct".field_names;
+    inline for (fnames4, 0..) |_, fidx4| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(fidx4)));
         if (parsed.value.object.get(field.name)) |val| {
             if (field.type == []const u8 and val == .string) {
                 @field(config.*, field.name) = try allocator.dupe(u8, val.string);
@@ -203,8 +213,9 @@ pub fn generateSchema(writer: anytype, comptime ConfigT: type) !void {
     try writer.writeAll("  \"type\": \"object\",\n");
     try writer.writeAll("  \"properties\": {\n");
 
-    const fields = std.meta.fields(ConfigT);
-    inline for (fields, 0..) |field, i| {
+    const fields = @typeInfo(ConfigT).@"struct".field_names;
+    inline for (fields, 0..) |_, i| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(i)));
         try writer.print("    \"{s}\": {{\n", .{field.name});
 
         const ti = @typeInfo(field.type);

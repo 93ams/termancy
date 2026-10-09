@@ -4,7 +4,7 @@
     // Generated for this package; changing it has security and trust
     // implications. Regenerate only when forking.
     .fingerprint = 0xd86d11765e7ad5eb,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     // `snek` is deliberately dependency-free. The two things it needs from
     // outside its own tree - a small `util` subset and nothing else - are
     // vendored under `lib/util/`, because the monorepo it was extracted from

@@ -13,7 +13,7 @@ pub const FootprintAnalyzer = struct {
             .name = @typeName(T),
             .size = @sizeOf(T),
             .alignment = @alignOf(T),
-            .field_count = if (@typeInfo(T) == .@"struct") std.meta.fields(T).len else 0,
+            .field_count = if (@typeInfo(T) == .@"struct") @typeInfo(T).@"struct".field_names.len else 0,
         };
     }
 };

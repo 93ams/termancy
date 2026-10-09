@@ -695,8 +695,8 @@ test "a name that is not one component is rejected on the way in" {
     try validateName("sessions/2026/token");
 
     try testing.expectError(error.InvalidName, validateName(""));
-    try testing.expectError(error.NameTooLong, validateName("x" ** (max_name_bytes + 1)));
-    try testing.expectError(error.NameTooLong, validateName("/" ** (max_name_bytes + 1)));
+    try testing.expectError(error.NameTooLong, validateName(&@as([max_name_bytes + 1]u8, @splat('x'))));
+    try testing.expectError(error.NameTooLong, validateName(&@as([max_name_bytes + 1]u8, @splat('/'))));
     try testing.expectError(error.NameSeparator, validateName("a\\b"));
     try testing.expectError(error.NameSeparator, validateName("nul\x00byte"));
     try testing.expectError(error.NameSeparator, validateName("a//b"));

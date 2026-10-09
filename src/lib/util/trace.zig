@@ -126,7 +126,7 @@ pub fn getMonotonicMs() u64 {
 }
 
 test "TraceContext serializes to a W3C traceparent" {
-    const ctx = TraceContext.init([_]u8{0x01} ** 16, [_]u8{0x02} ** 8, true);
+    const ctx = TraceContext.init(@as([16]u8, @splat(0x01)), @as([8]u8, @splat(0x02)), true);
     var buf: [64]u8 = undefined;
     const written = try ctx.toW3C(&buf);
 
@@ -138,7 +138,7 @@ test "TraceContext serializes to a W3C traceparent" {
 }
 
 test "TraceContext respects the sampled flag" {
-    const ctx = TraceContext.init([_]u8{0xAB} ** 16, [_]u8{0xCD} ** 8, false);
+    const ctx = TraceContext.init(@as([16]u8, @splat(0xAB)), @as([8]u8, @splat(0xCD)), false);
     var buf: [header_length]u8 = undefined;
     const written = ctx.headerInto(&buf);
 
@@ -147,7 +147,7 @@ test "TraceContext respects the sampled flag" {
 }
 
 test "TraceContext rejects a short buffer" {
-    const ctx = TraceContext.init([_]u8{0} ** 16, [_]u8{0} ** 8, true);
+    const ctx = TraceContext.init(@as([16]u8, @splat(0)), @as([8]u8, @splat(0)), true);
     var buf: [header_length - 1]u8 = undefined;
     try std.testing.expectError(error.BufferTooSmall, ctx.toW3C(&buf));
 }

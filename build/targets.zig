@@ -40,11 +40,11 @@ pub fn resolveTarget(b: *std.Build, optimize: std.builtin.OptimizeMode) std.Buil
     const target = b.standardTargetOptions(.{});
     var query = target.query;
 
-    if (optimize != .Debug) {
+    if (optimize != .debug) {
         if (query.cpu_arch) |arch| {
             switch (arch) {
-                .x86_64 => query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.avx512f)),
-                .aarch64 => query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.neon)),
+                .x86_64 => query.cpu_features_add.addFeature(@backingInt(std.Target.x86.Feature.avx512f)),
+                .aarch64 => query.cpu_features_add.addFeature(@backingInt(std.Target.aarch64.Feature.neon)),
                 else => {},
             }
         }

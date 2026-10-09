@@ -29,7 +29,7 @@ pub fn endSync(writer: anytype) !void {
 // 1.2 Native OS Taskbar / Dock Progress Reporting (OSC 9;4)
 pub fn writeTaskbarProgress(writer: anytype, state: TaskbarState, progress_pct: u8) !void {
     const pct = @min(progress_pct, 100);
-    try writer.print("\x1b]9;4;{d};{d}\x1b\\", .{ @intFromEnum(state), pct });
+    try writer.print("\x1b]9;4;{d};{d}\x1b\\", .{ @backingInt(state), pct });
 }
 
 // 1.3 Adaptive Dynamic Palette Querying (OSC 11)

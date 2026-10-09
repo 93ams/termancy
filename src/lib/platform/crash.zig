@@ -342,8 +342,8 @@ test "an empty issues url omits the line rather than printing a blank one" {
 test "an over-long panic message is truncated, not allowed to reflow the banner" {
     var buf: [2048]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    const long_message = "x" ** 300;
-    try renderBanner(&w, long_message, test_config, false);
+    const long_message: [300]u8 = @splat('x');
+    try renderBanner(&w, &long_message, test_config, false);
 
     // Every line is exactly the ruled width: border character, 57 columns, border.
     // This is the assertion that catches a field width drifting away from

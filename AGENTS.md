@@ -38,26 +38,45 @@ same rules; only the depth of the prefix changes.
 
 ### 1.0 Pin the Zig version before anything else
 
-**This repository builds only with Zig 0.16.0**, which `build.zig.zon` states as
-`.minimum_zig_version = "0.16.0"`. Run `zig version` first, every session.
+**This repository builds with Zig 0.17.0**, which `build.zig.zon` states as
+`.minimum_zig_version = "0.17.0"`. Run `zig version` first, every session.
 
-The failure mode is worth spelling out because the diagnostic is actively misleading. Zig
-**0.17.0 removed the `**` array-repetition operator**, so on 0.17.0 the compiler rejects every
-`[_]u8{0} ** 32` in the tree with:
+It was migrated from 0.16.0, and the trap that migration exposed is worth keeping: **if the
+toolchain drifts, a version error reads as a broken working tree.** On 0.16.0 the compiler
+rejects 0.17-era code, and on 0.17.0 it rejected every `[_]u8{0} ** 32` in the tree with
 
 ```text
 error: binary operator '*' has whitespace on one side, but not the other
 ```
 
-That message names whitespace, not a missing operator, and it fires on ~10 files the change at
-hand has nothing to do with - including `src/lib/cfg/encrypted_config.zig`, `src/lib/util/trace.zig`
-and `src/test/cli_test.zig`. **If `zig fmt --check` fails on files you did not touch, suspect the
-toolchain before the code.** Confirm with `zig version`; 0.17.0 cannot even build its own
-`compiler_rt` here, which is the second tell.
+which names whitespace rather than the removed operator, and fires on ~10 files the change at
+hand has nothing to do with. **If `zig fmt --check` fails on files you did not touch, suspect
+the toolchain before the code.** Confirm with `zig version`; `zvm use 0.17.0` switches (and
+`zvm use 0.16.0` goes back, though nothing here builds on 0.16 any more).
 
-If `zvm` has drifted, `zvm use 0.16.0` restores it. A session lost real time to this: `zvm`'s
-default moved to 0.17.0 mid-session, `zig fmt` began failing tree-wide, and it read as a
-corrupted working tree until the version was checked.
+### 1.0a What 0.17 changed, for anyone reading old code
+
+The migration touched seven things. `MIGRATION.md` has the full account; the short list is what
+a diff from before the migration will show:
+
+| 0.16 | 0.17 |
+|---|---|
+| `[x]T{v} ** n` | `@splat(v)` with a destination type |
+| `std.meta.fields(T)` | `@typeInfo(T).@"struct".field_names` (parallel arrays) |
+| `field.name` / `.type` | `std.meta.fieldInfo(T, @enumFromInt(i))` |
+| `field.default_value_ptr` | `field.attrs.default_value_ptr` |
+| `fn_info.params[i].type` | `fn_info.param_types[i]` |
+| `std.builtin.Type.StructField` | removed; take the descriptor as `anytype` |
+| `b.pathFromRoot`, `.Debug` | `b.path` + `addFileArg`, `.debug` |
+
+Two traps worth stating because they are silent or misleading:
+
+* **`"<U+2500>" ** 20` repeated the *string*, not a byte** - three UTF-8 bytes each time, so 60
+  bytes. `@splat` cannot express it (a codepoint does not fit a `u8`), so those two constants in
+  `cli.zig` are written as byte arrays.
+* **`Struct.fields` needed an index, not a name.** `field_names[i]` is a runtime slice element,
+  so `std.meta.fieldInfo(T, field_names[i])` cannot resolve at comptime; the index inside an
+  `inline for` can.
 
 ### 1.1 PowerShell 7+ Mandate (UTF-8)
 We strictly mandate **PowerShell 7+ (`pwsh`)** for all development scripts. PowerShell 7 universally defaults to BOM-less UTF-8, which eliminates the double-decoded character corruption that historically plagued Windows PowerShell 5.1 environments. 
@@ -281,11 +300,11 @@ are the actual product surface and are each usable and testable on their own.
 *   **Relative Paths:** `b.path()` is relative to the *build root* (the directory holding the `build.zig.zon`), not the file calling it.
 
 ### 6.2 Testing
-*   **Test collection is shallow, and this is the version's whole story.** Zig 0.16 has
+*   **Test collection is shallow, and this is the version's whole story.** Zig 0.17 has
     **only** `std.testing.refAllDecls`, which references the *direct* declarations of one
-    type and stops there. `refAllDeclsRecursive` existed in earlier versions and does not
-    exist in 0.16 — there is no deprecated shim, so code that calls it does not compile.
-    Verified against `lib/std/testing.zig` at 1213.
+    type and stops there. `refAllDeclsRecursive` existed in earlier 0.1x versions and does
+    not exist here — there is no deprecated shim, so code that calls it does not compile.
+    Verified against `lib/std/testing.zig`.
 
     The consequence is the rule this repository follows: **each module root names its own
     sub-modules explicitly**, and an omission loses tests *silently* rather than failing the

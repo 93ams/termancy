@@ -81,7 +81,7 @@ pub const PidFile = struct {
             // signal. `std.posix.kill` takes the platform's `SIG` enum, and 0 is
             // not a named member of it, so it is constructed from the integer -
             // legal because the enum is non-exhaustive.
-            std.posix.kill(@intCast(pid), @enumFromInt(0)) catch |err| switch (err) {
+            std.posix.kill(@intCast(pid), @fromBackingInt(@intCast(0))) catch |err| switch (err) {
                 // ESRCH: no such process.
                 error.ProcessNotFound => return false,
                 // EPERM: the pid exists but belongs to another user. That is

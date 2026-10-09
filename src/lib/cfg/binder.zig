@@ -141,14 +141,14 @@ pub const Layer = struct {
 
 /// A resolved configuration, its provenance, and everything it owns.
 pub fn Binding(comptime ConfigT: type) type {
-    const field_count = std.meta.fields(ConfigT).len;
+    const field_count = @typeInfo(ConfigT).@"struct".field_names.len;
 
     return struct {
         const Self = @This();
 
         value: ConfigT,
         /// Where each top-level field's value came from, parallel to
-        /// `std.meta.fields(ConfigT)`.
+        /// `@typeInfo(ConfigT).@"struct".field_names`.
         sources: [field_count]Source,
         /// Every allocation this binding owns. Freeing the list frees the value.
         owned: std.ArrayListUnmanaged([]u8),
@@ -174,7 +174,9 @@ pub fn Binding(comptime ConfigT: type) type {
 
         /// Where `field_name`'s value came from.
         pub fn sourceOf(self: Self, comptime field_name: []const u8) Source {
-            inline for (std.meta.fields(ConfigT), 0..) |field, i| {
+            const fnames0 = @typeInfo(ConfigT).@"struct".field_names;
+            inline for (fnames0, 0..) |_, i| {
+                const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(i)));
                 if (comptime std.mem.eql(u8, field.name, field_name)) return self.sources[i];
             }
             @compileError("no field named '" ++ field_name ++ "' in " ++ @typeName(ConfigT));
@@ -203,7 +205,9 @@ pub fn bind(
         result.owned.deinit(allocator);
     }
 
-    inline for (std.meta.fields(ConfigT), 0..) |field, index| {
+    const fnames1 = @typeInfo(ConfigT).@"struct".field_names;
+    inline for (fnames1, 0..) |_, index| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(index)));
         // A nested struct is resolved leaf by leaf, with a dotted key prefix, so a
         // `tls` group does not have to be one opaque string.
         if (comptime isNestedStruct(field.type)) {
@@ -231,7 +235,7 @@ pub fn bind(
             field.type,
             "",
             field.name,
-            field.default_value_ptr,
+            field.attrs.default_value_ptr,
             allocator,
             layers,
             &result.owned,
@@ -270,7 +274,9 @@ fn bindNested(
     var out: T = undefined;
     var highest: Source = .default;
 
-    inline for (std.meta.fields(T)) |field| {
+    const fnames2 = @typeInfo(T).@"struct".field_names;
+    inline for (fnames2, 0..) |_, fidx2| {
+        const field = std.meta.fieldInfo(T, @fromBackingInt(@intCast(fidx2)));
         if (comptime isNestedStruct(field.type)) {
             const nested = try bindNested(
                 field.type,
@@ -280,7 +286,7 @@ fn bindNested(
                 owned,
             );
             @field(out, field.name) = nested.value;
-            if (@intFromEnum(nested.highest) > @intFromEnum(highest)) highest = nested.highest;
+            if (@backingInt(nested.highest) > @backingInt(highest)) highest = nested.highest;
             continue;
         }
 
@@ -289,13 +295,13 @@ fn bindNested(
             field.type,
             prefix,
             field.name,
-            field.default_value_ptr,
+            field.attrs.default_value_ptr,
             allocator,
             layers,
             owned,
         );
         @field(out, field.name) = leaf.value;
-        if (@intFromEnum(leaf.source) > @intFromEnum(highest)) highest = leaf.source;
+        if (@backingInt(leaf.source) > @backingInt(highest)) highest = leaf.source;
     }
 
     return .{ .value = out, .highest = highest };
@@ -439,11 +445,12 @@ pub const FlagSpec = struct {
 /// particular parser: the names, the help text, the environment mapping and which
 /// flags are required all come from the struct, so a flag cannot exist without a
 /// field and a field cannot exist without a flag.
-pub fn flagSpecs(comptime ConfigT: type) [std.meta.fields(ConfigT).len]FlagSpec {
-    const fields = std.meta.fields(ConfigT);
+pub fn flagSpecs(comptime ConfigT: type) [@typeInfo(ConfigT).@"struct".field_names.len]FlagSpec {
+    const fields = @typeInfo(ConfigT).@"struct".field_names;
     var specs: [fields.len]FlagSpec = undefined;
 
-    inline for (fields, 0..) |field, i| {
+    inline for (fields, 0..) |_, i| {
+        const field = std.meta.fieldInfo(ConfigT, @fromBackingInt(@intCast(i)));
         specs[i] = .{
             .field_name = field.name,
             .long = "--" ++ field.name,
@@ -451,7 +458,7 @@ pub fn flagSpecs(comptime ConfigT: type) [std.meta.fields(ConfigT).len]FlagSpec 
             .help = comptime metaField(ConfigT, field.name, "help") orelse "",
             .env = comptime metaField(ConfigT, field.name, "env"),
             .type_name = @typeName(field.type),
-            .required = comptime field.default_value_ptr == null and
+            .required = comptime field.attrs.default_value_ptr == null and
                 @typeInfo(field.type) != .optional,
         };
     }
@@ -753,7 +760,7 @@ test "a partial failure frees what it had already allocated" {
 test "flagSpecs derives the flag table from the same struct" {
     const specs = comptime flagSpecs(ServerConfig);
 
-    try testing.expectEqual(std.meta.fields(ServerConfig).len, specs.len);
+    try testing.expectEqual(@typeInfo(ServerConfig).@"struct".field_names.len, specs.len);
 
     // Field order is declaration order, so a help page lists flags in the order the
     // struct declares them rather than in whatever order a map iterates.

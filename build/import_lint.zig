@@ -44,11 +44,23 @@ pub fn main(init: std.process.Init) !void {
     const out = &stdout_writer.interface;
 
     var scanned_any = false;
-    for (args[1..]) |arg| {
-        // `--modules=<lib dir>` switches this program to the second check: every `.zig`
-        // file under a module directory must be named by that module's own collector.
-        if (std.mem.startsWith(u8, arg, "--modules=")) {
-            try checkModules(init.io, allocator, arg["--modules=".len..], out);
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        // `--modules <lib dir>` switches to the second check: every `.zig` file under a module
+        // directory must be named by that module's own collector.
+        //
+        // The directory is a separate token rather than `--modules=<dir>` because the build
+        // passes it with `addFileArg`, which appends one argument and has no way to interpolate
+        // it into a formatted string.
+        if (std.mem.eql(u8, arg, "--modules")) {
+            i += 1;
+            if (i >= args.len) {
+                try out.print("import-lint: --modules needs a directory\n", .{});
+                try out.flush();
+                return error.NoInput;
+            }
+            try checkModules(init.io, allocator, args[i], out);
             continue;
         }
         var dir = std.Io.Dir.cwd().openDir(init.io, arg, .{ .iterate = true }) catch |err| {

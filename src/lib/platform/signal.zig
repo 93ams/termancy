@@ -79,8 +79,8 @@ var pending = std.atomic.Value(u8).init(0);
 /// Safe to call from a signal handler: one atomic load and one atomic store, with
 /// no allocation, no lock, and no syscall.
 pub fn record(signal: Signal) void {
-    assert(@intFromEnum(signal) != 0);
-    if (pending.load(.acquire) == 0) pending.store(@intFromEnum(signal), .release);
+    assert(@backingInt(signal) != 0);
+    if (pending.load(.acquire) == 0) pending.store(@backingInt(signal), .release);
 }
 
 /// The signal that requested shutdown, or `null` if none has.
@@ -90,7 +90,7 @@ pub fn record(signal: Signal) void {
 pub fn received() ?Signal {
     const value = pending.load(.acquire);
     if (value == 0) return null;
-    return @enumFromInt(value);
+    return @fromBackingInt(@intCast(value));
 }
 
 /// Clears the recorded signal. For a program that survives a shutdown request and
@@ -283,9 +283,9 @@ test "every Signal value round-trips through the atomic without colliding with n
 
     // The zero-is-none encoding is the thing worth pinning: if any Signal were
     // numbered 0, `received` could never report it.
-    inline for (@typeInfo(Signal).@"enum".fields) |field| {
-        const signal: Signal = @enumFromInt(field.value);
-        try testing.expect(@intFromEnum(signal) != 0);
+    inline for (@typeInfo(Signal).@"enum".field_names) |enum_name| {
+        const signal: Signal = @field(Signal, enum_name);
+        try testing.expect(@backingInt(signal) != 0);
 
         reset();
         record(signal);
