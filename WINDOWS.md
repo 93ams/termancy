@@ -59,8 +59,15 @@ What the first native run found, and what changed:
   keeps CRLF), paths outside ASCII, paths of 468 characters, editors that are `.cmd` shims.
 - **Not implemented before, now done:** ssh-agent over `\\.\pipe\openssh-ssh-agent` (the
   default on Windows when `SSH_AUTH_SOCK` is unset); `term.live` shows the cursor again on
-  Ctrl-C, Ctrl-Break, and console close (console case `spin`); WebAuthn assertions through
-  Windows Hello, `platform.windows_hello`, the way to a FIDO key on Windows.
+  Ctrl-C, Ctrl-Break, and console close (console case `spin`); WebAuthn registration and
+  assertions through Windows Hello, `platform.windows_hello`, the way to a FIDO key on
+  Windows (`windows_hello.register` returns a `webauthn.Registration`, whose `credential`
+  is what a relying party keeps).
+- **Distribution:** `snek platform release manifest -f winget` writes a winget manifest
+  (single-file form, a zip with a portable `snek.exe`), and the release publishes it with
+  the Homebrew and Scoop ones. The release Authenticode-signs `snek.exe` with
+  `osslsigncode` when the secrets `WINDOWS_CERTIFICATE` and `WINDOWS_CERTIFICATE_PASSWORD`
+  are set.
 - **Tests that skipped Windows now run there:** `process.which` (Windows rules), `capture`
   (output, status, cwd, environment, limits, timeout kill), `stream`, `editText`, plugins
   on `PATH` (`cli`, `examples/kv`), help through the pager, `tui spin`'s `runChild`, raw
@@ -87,7 +94,10 @@ What the first native run found, and what changed:
 | What | State |
 |---|---|
 | The first CI run | `ci.yml` runs `zig build test` and `zig build console` on `windows-latest`; it has never run. Locally everything above passes |
-| Windows Hello for real | `windows_hello.assert` is tested for layout, options, and errors, and finds the API; no assertion has been made (it opens the system dialog). No command uses it yet |
+| A Windows Hello round trip | `windows_hello.assert` has opened the real dialog (API version 9) and returned `error.NotAllowed` when cancelled. `register` is tested for layout and options; registering, signing, and verifying with a real passkey waits on a person at the dialog. No command uses either yet |
+| Authenticode signing | the release step has not run: it needs a code-signing certificate in the secrets. Without one `snek.exe` ships unsigned, and SmartScreen warns on first run |
+| A winget submission | the manifest is generated; winget-pkgs takes the multi-file form (`wingetcreate update`), a pull request to that repository |
+| Compile errors that flake | once in a few runs of `zig build test`, a `compile-errors` case fails because the compiler cannot read a file of its own library (`unable to load "test.zig": Unexpected`, a different file each time) while several compile at once. Zig's, not snek's; rerunning passes |
 | ssh-agent against OpenSSH's agent | tested against a fake agent on a named pipe. The real one needs its service running (here it is disabled), and `ssh-agent.exe -d` will not run unelevated ("cannot create agent root reg key") |
 | `sandbox` with links | the test skips without the privilege or Developer Mode, which this machine lacks |
 | `platform.web.Server` test trace | once, a `CONNECTION_RESET` stack trace in Debug; the test passes. Not reproduced in eight runs, nor by probes of read, write, accept, and shutdown after a reset (below) |
@@ -95,47 +105,7 @@ What the first native run found, and what changed:
 | A cached example that crashes with no output | once, `zig build examples` ran `first-app.exe` and `tasks.exe` from the cache, and they crashed silently (status 5, or an access violation) on every run, while byte-identical copies, even in the same folder, ran fine. Windows was mapping a stale image of those files; copying the same bytes over each fixed it. Not snek's code. If it comes back, replace the file, or delete that `o/` folder |
 | ARM64 Windows | compiled by `check`; `ci.yml` runs the tests and `console` on `windows-11-arm`, which has never run either |
 
-## Upstream reports (drafted, not filed)
+## Upstream reports
 
-**`Io.Batch.awaitConcurrent` breaks the batch when it returns `ConcurrencyUnavailable` on
-Windows.** `batchDrainSubmittedWindows` turns the submission into a pending operation
-before it finds that the handle is synchronous; the `errdefer` puts `submitted.head` back,
-but the storage is no longer a submission. Run at a console:
-
-```zig
-const std = @import("std");
-
-pub fn main(init: std.process.Init) !void {
-    const io = init.io;
-    var buffer: [16]u8 = undefined;
-    var data = [1][]u8{&buffer};
-    var storage: [1]std.Io.Operation.Storage = undefined;
-    var batch: std.Io.Batch = .init(&storage);
-    defer batch.cancel(io);
-    batch.addAt(0, .{ .file_read_streaming = .{ .file = .stdin(), .data = &data } });
-    const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(100), .clock = .awake } };
-    batch.awaitConcurrent(io, timeout) catch |err| switch (err) {
-        error.ConcurrencyUnavailable => try batch.awaitAsync(io),
-        else => |e| return e,
-    };
-}
-```
-
-Debug: `panic: access of union field 'submission' while field 'unused' is active` in
-`batchDrainSubmittedWindows` (`Threaded.zig:3089`), called from `batchAwaitAsync`.
-
-**`Io.net` reports `error.Unexpected` on Windows for connections that ended**, with a
-stack trace in Debug. Both reproduce every time:
-
-- A read cut off by the socket's own `shutdown`: `PIPE_DISCONNECTED` (`0xc00000b0`);
-  `netReadWindows` maps only `CONNECTION_RESET` and `REMOTE_DISCONNECT`.
-- A write after the peer reset the connection: `LOCAL_DISCONNECT` (`0xc000013b`) from
-  `netWriteWindows`. To reproduce, a client writes bytes the server never reads and
-  closes, which makes Windows reset; the server then writes and flushes.
-
-`netAcceptWindows` and `netShutdownWindows` send every status but `INSUFFICIENT_RESOURCES`
-to `unexpectedStatus`, which may be where the `CONNECTION_RESET` seen once in the
-`platform.web.Server` tests came from; a probe of each after a reset did not trigger it.
-
-**`Dir.setTimestamps` panics on Windows** ("TODO implement dirSetTimestamps windows"),
-while `File.setTimestamps` works.
+The Zig problems met on the way, written up as issues with reproductions, are in
+[ZIG-ISSUES.md](ZIG-ISSUES.md). None is filed yet.
