@@ -88,18 +88,28 @@ What the first native run found, and what changed:
 - **The release `.zip`**: built as `release.yml` does (`ReleaseSafe`, `x86_64-windows`),
   zipped, and extracted by `update.extractExecutable` to the same bytes. (Zipped here with
   Windows' `tar -a`; CI uses Info-ZIP.)
+- **A Windows Hello passkey, end to end**: `windows_hello.register` made a platform
+  credential (ES256) for a test RP, `assert` signed with it, and `webauthn.verify` checked
+  the signature against the registered key (count 0, then 1); the passkey was deleted after.
+  This found that the dialog never appeared from a terminal on a pseudo console (Windows
+  Terminal, an IDE's): it was owned by the console window, which such a console never
+  shows. It now belongs to the foreground window unless the console window is visible.
+- **ssh-agent against OpenSSH's agent** (service running): `snek platform ssh run` logged in
+  to `snek tui serve` with a key held only by the agent (its file deleted, and only it
+  authorized; the server saw its fingerprint), and was refused once the key was removed
+  from the agent.
+- **`sandbox` with links**, in Developer Mode: the test runs instead of skipping, and a link
+  out of the roots is refused (`SymlinkEscape`).
 
 ## Left
 
 | What | State |
 |---|---|
 | The first CI run | `ci.yml` runs `zig build test` and `zig build console` on `windows-latest`; it has never run. Locally everything above passes |
-| A Windows Hello round trip | `windows_hello.assert` has opened the real dialog (API version 9) and returned `error.NotAllowed` when cancelled. `register` is tested for layout and options; registering, signing, and verifying with a real passkey waits on a person at the dialog. No command uses either yet |
+| Windows Hello in a command | `register` and `assert` work end to end (above); no command uses them yet |
 | Authenticode signing | the release step has not run: it needs a code-signing certificate in the secrets. Without one `snek.exe` ships unsigned, and SmartScreen warns on first run |
 | A winget submission | the manifest is generated; winget-pkgs takes the multi-file form (`wingetcreate update`), a pull request to that repository |
 | Compile errors that flake | once in a few runs of `zig build test`, a `compile-errors` case fails because the compiler cannot read a file of its own library (`unable to load "test.zig": Unexpected`, a different file each time) while several compile at once. Zig's, not snek's; rerunning passes |
-| ssh-agent against OpenSSH's agent | tested against a fake agent on a named pipe. The real one needs its service running (here it is disabled), and `ssh-agent.exe -d` will not run unelevated ("cannot create agent root reg key") |
-| `sandbox` with links | the test skips without the privilege or Developer Mode, which this machine lacks |
 | `platform.web.Server` test trace | once, a `CONNECTION_RESET` stack trace in Debug; the test passes. Not reproduced in eight runs, nor by probes of read, write, accept, and shutdown after a reset (below) |
 | Ctrl+Z suspend | nothing to do: Windows consoles have no job control |
 | A cached example that crashes with no output | once, `zig build examples` ran `first-app.exe` and `tasks.exe` from the cache, and they crashed silently (status 5, or an access violation) on every run, while byte-identical copies, even in the same folder, ran fine. Windows was mapping a stale image of those files; copying the same bytes over each fixed it. Not snek's code. If it comes back, replace the file, or delete that `o/` folder |
