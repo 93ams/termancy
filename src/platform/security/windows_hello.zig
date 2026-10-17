@@ -41,7 +41,8 @@ pub const Error = error{
 
 /// How `assert` asks.
 pub const AssertOptions = struct {
-    /// The window the dialog belongs to; null for the console's, or the foreground one.
+    /// The window the dialog belongs to; null for the console's when it is on screen, or
+    /// the foreground one.
     window: ?*anyopaque = null,
     /// Which authenticators may answer.
     attachment: Attachment = .any,
@@ -93,7 +94,7 @@ pub fn assert(
         .json = client_json.ptr,
     };
     const request = requestOf(options, credentials, how.attachment);
-    const window = how.window orelse api.console_window() orelse api.foreground_window();
+    const window = how.window orelse ownerOf(api);
     var result: ?*const AssertionV1 = null;
     const status = api.get_assertion(window, rp_id_w, &client_data, &request, &result);
     if (status < 0 or result == null) return errorOf(status);
@@ -153,7 +154,7 @@ pub fn register(
         .json = client_json.ptr,
     };
     const request = creationOf(options, excluded, how.attachment);
-    const window = how.window orelse api.console_window() orelse api.foreground_window();
+    const window = how.window orelse ownerOf(api);
     var result: ?*const AttestationV1 = null;
     const status = api.make_credential(
         window,
@@ -173,6 +174,16 @@ pub fn register(
         .authenticator_data = try arena.dupe(u8, got.authenticator_data[0..got.authenticator_data_len]),
         .attestation_object = try arena.dupe(u8, got.attestation_object[0..got.attestation_object_len]),
     };
+}
+
+/// The window the dialog belongs to: the console's while it is on screen, else the
+/// foreground one. A pseudo console (Windows Terminal, an IDE's terminal) has a console
+/// window that is never shown, and a dialog owned by it may not appear.
+fn ownerOf(api: Api) ?*anyopaque {
+    if (api.console_window()) |console| {
+        if (api.window_visible(console) != 0) return console;
+    }
+    return api.foreground_window();
 }
 
 fn wide(arena: Allocator, text: []const u8, invalid: Error) Error![*:0]const u16 {
@@ -376,6 +387,7 @@ const Api = if (!is_windows) struct {} else struct {
     free_attestation: *const fn (attestation: *const AttestationV1) callconv(.winapi) void,
     console_window: *const fn () callconv(.winapi) ?*anyopaque,
     foreground_window: *const fn () callconv(.winapi) ?*anyopaque,
+    window_visible: *const fn (window: *anyopaque) callconv(.winapi) i32,
 };
 
 /// The functions, looked up on each use: a load of a loaded library only counts a
@@ -396,6 +408,7 @@ fn load() ?Api {
         .free_attestation = @ptrCast(@alignCast(kernel32.GetProcAddress(dll, "WebAuthNFreeCredentialAttestation") orelse return null)),
         .console_window = @ptrCast(@alignCast(kernel32.GetProcAddress(k32, "GetConsoleWindow") orelse return null)),
         .foreground_window = @ptrCast(@alignCast(kernel32.GetProcAddress(user32, "GetForegroundWindow") orelse return null)),
+        .window_visible = @ptrCast(@alignCast(kernel32.GetProcAddress(user32, "IsWindowVisible") orelse return null)),
     };
 }
 
