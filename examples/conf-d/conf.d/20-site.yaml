@@ -1,0 +1,5 @@
+# The site overrides the level and adds a host.
+log:
+  level: debug
+server:
+  host: example.com

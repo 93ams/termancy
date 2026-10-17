@@ -1,0 +1,3 @@
+# Defaults for flags, read through `App.defaults`: [<command>] then the flag's name.
+[clear]
+older-than = 7

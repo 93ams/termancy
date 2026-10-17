@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>terminal</title>
+<link rel="stylesheet" crossorigin="anonymous"
+  href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css"
+  integrity="sha384-8Xk9wy/gzEDUKrXtrmCFa2bBuK3BpjpDuL/p0SeKQX19Khl/M+lHOgD/CyYf7efP">
+<script crossorigin="anonymous"
+  src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"
+  integrity="sha384-M169f14mRZOXm3hD/v2Ti0ThIT/RnAQagXA9nlE15yHAtrW19gdePJh/HaTzUOe/"></script>
+<script crossorigin="anonymous"
+  src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"
+  integrity="sha384-iF+jqbuti4XlB64clWgFWYEscb+UnSRv3VgVikGYZu+otNFnSHr7y7NcKfBnGizn"></script>
+<style>
+html, body { height: 100%; margin: 0; background: #1e1e2e; }
+#terminal { position: absolute; inset: 6px; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script>
+"use strict";
+const term = new Terminal({
+  cursorBlink: true,
+  fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+  theme: { background: "#1e1e2e", foreground: "#cdd6f4", cursor: "#f5e0dc" },
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById("terminal"));
+fit.fit();
+
+// The socket is "ws" next to this page; the cookie the page's link left carries the token.
+const url = new URL("ws", location.href);
+url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+const socket = new WebSocket(url);
+socket.binaryType = "arraybuffer";
+let exited = false;
+
+const send = (bytes) => {
+  // Under the server's frame limit, however much is pasted.
+  for (let i = 0; i < bytes.length; i += 16384) {
+    if (socket.readyState === WebSocket.OPEN) socket.send(bytes.subarray(i, i + 16384));
+  }
+};
+const sendSize = () => {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+};
+
+socket.onopen = () => { sendSize(); term.focus(); };
+// The server hangs up on a silent page: it cannot see the browser's pongs.
+const heartbeat = setInterval(() => {
+  if (socket.readyState === WebSocket.OPEN) socket.send('{"type":"heartbeat"}');
+}, 20000);
+socket.onmessage = (event) => {
+  if (typeof event.data !== "string") return term.write(new Uint8Array(event.data));
+  const message = JSON.parse(event.data);
+  if (message.type === "exit") {
+    exited = true;
+    term.write(`\r\n\x1b[2m[exited with status ${message.status}]\x1b[0m\r\n`);
+  }
+};
+socket.onclose = () => {
+  clearInterval(heartbeat);
+  if (!exited) term.write("\r\n\x1b[2m[connection closed]\x1b[0m\r\n");
+  term.write("\x1b[2mReload the page to connect again.\x1b[0m\r\n");
+};
+const encoder = new TextEncoder();
+term.onData((data) => send(encoder.encode(data)));
+term.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0))));
+term.onResize(sendSize);
+window.addEventListener("resize", () => fit.fit());
+</script>
+</body>
+</html>

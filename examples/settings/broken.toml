@@ -1,0 +1,7 @@
+# `settings check -f broken.toml` reports every problem here at once.
+[server]
+port = 70000
+request_timeout = "soon"
+
+[log]
+level = "loud"

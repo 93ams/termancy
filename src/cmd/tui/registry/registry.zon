@@ -1,0 +1,129 @@
+.{
+    .components = .{
+        .confirm = .{
+            .summary = "A yes/no question with two buttons",
+            .files = .{"confirm.zig"},
+            .requires = .{},
+        },
+        .input = .{
+            .summary = "A single-line text input: placeholder, password mode, validation",
+            .files = .{"input.zig"},
+            .requires = .{},
+        },
+        .shell = .{
+            .summary = "A line editor for REPLs: history and tab completion",
+            .files = .{"shell.zig"},
+            .requires = .{"input"},
+        },
+        .textarea = .{
+            .summary = "A multi-line text editor that scrolls",
+            .files = .{"textarea.zig"},
+            .requires = .{},
+        },
+        .list = .{
+            .summary = "A scrollable list with a cursor, the base of select and filter",
+            .files = .{"list.zig"},
+            .requires = .{},
+        },
+        .select = .{
+            .summary = "Choose one item from a list",
+            .files = .{"select.zig"},
+            .requires = .{"list"},
+        },
+        .multiselect = .{
+            .summary = "Choose several items from a list, up to a limit",
+            .files = .{"multiselect.zig"},
+            .requires = .{"list"},
+        },
+        .filter = .{
+            .summary = "Fuzzy-filter a list as you type, with match highlighting",
+            .files = .{"filter.zig"},
+            .requires = .{ "input", "list" },
+        },
+        .spinner = .{
+            .summary = "An animated spinner with a title",
+            .files = .{"spinner.zig"},
+            .requires = .{},
+        },
+        .progress = .{
+            .summary = "A progress bar with a percentage and time left",
+            .files = .{"progress.zig"},
+            .requires = .{},
+        },
+        .table = .{
+            .summary = "Aligned columns with a border and a row to choose",
+            .files = .{"table.zig"},
+            .requires = .{},
+        },
+        .pager = .{
+            .summary = "A full-screen viewport over long text, with search",
+            .files = .{"pager.zig"},
+            .requires = .{"input"},
+        },
+        .form = .{
+            .summary = "A form of fields (text, choices, lists, yes/no, files) on pages, themed",
+            .files = .{"form.zig"},
+            .requires = .{ "input", "textarea", "filepicker" },
+        },
+        .tabs = .{
+            .summary = "A row of tabs with the active tab's content",
+            .files = .{"tabs.zig"},
+            .requires = .{},
+        },
+        .viewport = .{
+            .summary = "A scrollable area of fixed height to embed: logs, help, previews",
+            .files = .{"viewport.zig"},
+            .requires = .{},
+        },
+        .paginator = .{
+            .summary = "Which page of many: dots or numbers, and keys to turn the page",
+            .files = .{"paginator.zig"},
+            .requires = .{},
+        },
+        .stopwatch = .{
+            .summary = "Time counting up, started, stopped, and reset",
+            .files = .{"stopwatch.zig"},
+            .requires = .{},
+        },
+        .timer = .{
+            .summary = "A countdown to a timeout",
+            .files = .{"timer.zig"},
+            .requires = .{"stopwatch"},
+        },
+        .help = .{
+            .summary = "A keymap's help: one line, or every key in columns",
+            .files = .{"help.zig"},
+            .requires = .{},
+        },
+        .tree = .{
+            .summary = "A tree that expands and collapses, with a cursor",
+            .files = .{"tree.zig"},
+            .requires = .{},
+        },
+        .prompts = .{
+            .summary = "Questions asked with confirm, select, and input, for cli.Flow",
+            .files = .{"prompts.zig"},
+            .requires = .{ "confirm", "select", "input", "list", "form" },
+        },
+        .multiprogress = .{
+            .summary = "Several labelled progress bars, one per task",
+            .files = .{"multiprogress.zig"},
+            .requires = .{"progress"},
+        },
+        .chart = .{
+            .summary = "A sparkline and horizontal bars, in block characters",
+            .files = .{"chart.zig"},
+            .requires = .{},
+        },
+        .markdown = .{
+            .summary = "A Markdown document to read: glamour's styles, highlighting, scrolling",
+            .files = .{"markdown.zig"},
+            .requires = .{"viewport"},
+        },
+        .filepicker = .{
+            .summary = "Browse directories and choose a file",
+            .files = .{"filepicker.zig"},
+            .requires = .{"list"},
+        },
+    },
+}

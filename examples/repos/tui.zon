@@ -1,0 +1,30 @@
+.{
+    .dir = "ui",
+    .components = .{
+        .filter = .{
+            .files = .{
+                .@"filter.zig" = "91ebea2dfc81d118bce4ed4b9223c1c15f36c88cf33505155e5d10bceaf4f267",
+            },
+        },
+        .input = .{
+            .files = .{
+                .@"input.zig" = "b82d0905b40ae5f67cf3445a7671388b37842fc345a72e3a57fa67ef4d822bb3",
+            },
+        },
+        .list = .{
+            .files = .{
+                .@"list.zig" = "52f1a99fb7188ee4e2ddb8c1ea375abfbaa34975f54b16a1f6c504eb8055d810",
+            },
+        },
+        .table = .{
+            .files = .{
+                .@"table.zig" = "e5897dc57a6eb1855fae5d65c107b53559cb3b8526c746e963d3aa4f58dece73",
+            },
+        },
+        .viewport = .{
+            .files = .{
+                .@"viewport.zig" = "01b72944ace136cb63497273073b693594c5c462eaf95198fd831126495eabb2",
+            },
+        },
+    },
+}

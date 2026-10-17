@@ -1,0 +1,7 @@
+# A response file: `httpc @request.args` reads its arguments from here, split as a shell
+# would (without expansions), so long or reused command lines can live in a file.
+send post https://api.example.com/users
+name=ada role=admin    # body fields
+page==2                # a query parameter
+-H 'X-Trace: 1' --accept json,html
+--timeout 5s --retries 1

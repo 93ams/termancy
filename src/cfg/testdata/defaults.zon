@@ -1,0 +1,12 @@
+// Compile-time defaults for the `setDefaults` test in Config.zig, which also reads this file
+// at run time with the ZON codec and checks that both agree.
+.{
+    .server = .{
+        .host = "0.0.0.0",
+        .port = 9000,
+    },
+    .level = .debug,
+    .tags = .{ "web", "api" },
+    .ratio = 0.75,
+    .token = "from-zon",
+}

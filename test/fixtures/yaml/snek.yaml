@@ -1,0 +1,4 @@
+# Discovered as ./snek.yaml.
+name: from-yaml
+server:
+  port: 7001

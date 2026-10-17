@@ -20,3 +20,6 @@ zig-pkg/
 *.swp
 Thumbs.db
 desktop.ini
+
+# The earlier implementation, kept locally for reference; what was worth having is ported.
+backup/

@@ -1,0 +1,7 @@
+# Shipped defaults.
+[log]
+level = "info"
+format = "text"
+
+[server]
+port = 8080

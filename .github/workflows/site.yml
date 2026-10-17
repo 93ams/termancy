@@ -1,0 +1,42 @@
+# Publishes `zig build site-gifs` (the guide, the libraries, the component gallery with a GIF
+# of each component, the command reference, and the API reference) to GitHub Pages on every
+# push to master. The site holds everything the docs workflow publishes, which it replaces.
+name: site
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      # `snek cli record` draws the GIFs in a monospace font of the machine's.
+      - run: sudo apt-get install -y fonts-dejavu-core
+      - run: zig build site-gifs --summary failures
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: zig-out/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

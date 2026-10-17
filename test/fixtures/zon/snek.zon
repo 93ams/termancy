@@ -1,0 +1,5 @@
+.{
+    // discovered as snek.zon
+    .name = "zon-demo",
+    .server = .{ .port = 7070 },
+}

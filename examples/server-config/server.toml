@@ -1,0 +1,8 @@
+# The file layer: above the defaults, below the environment and flags.
+host = "0.0.0.0"
+port = 8443
+timeout = "1m30s"
+
+[tls]
+cert = "/etc/app/cert.pem"
+key = "/etc/app/key.pem"

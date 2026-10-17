@@ -1,0 +1,5 @@
+{
+  // Editors keep settings like this.
+  "name": "from-jsonc",
+  "server": { "port": 7005, }, /* trailing comma */
+}

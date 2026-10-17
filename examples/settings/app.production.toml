@@ -1,0 +1,7 @@
+# Loaded over app.toml by `settings show --env production`.
+[server]
+port = 443
+
+[database]
+url = "postgres://db.prod/shop"
+pool = 20

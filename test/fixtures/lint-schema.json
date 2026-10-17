@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "db": {
+      "type": "object",
+      "properties": {
+        "old_port": {"type": "integer", "deprecated": true, "deprecationMessage": "use port"}
+      }
+    }
+  }
+}

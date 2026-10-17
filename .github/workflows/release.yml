@@ -1,0 +1,84 @@
+# Publishes a release when a version tag is pushed: snek built for every target, archived
+# as `snek update` expects (snek-<os>-<cpu>.tar.gz, .zip for Windows), with SHA256SUMS, an
+# Ed25519 signature beside each archive, and Homebrew and Scoop manifests.
+#
+# The signing key is the repository secret SNEK_SIGNING_KEY, made once with
+# `snek platform release keygen`. snek's update requires signatures made with it (the public
+# half is in src/cmd/platform/update.zig), so the release fails without the secret.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Test
+        run: zig build test check --summary failures
+
+      - name: The tag matches the version snek reports
+        run: |
+          zig build
+          reported="v$(zig-out/bin/snek --version | awk '{print $2}')"
+          if [ "$reported" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME, but snek reports $reported" >&2
+            exit 1
+          fi
+
+      - name: Build and archive
+        run: |
+          date=$(git log -1 --format=%cs)
+          mkdir dist
+          for target in x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos \
+                        x86_64-windows aarch64-windows; do
+            zig build -Dtarget=$target -Doptimize=ReleaseSafe \
+              -Dcommit=$GITHUB_SHA -Ddate=$date --prefix "out/$target"
+            cpu=${target%%-*}
+            os=$(echo "$target" | cut -d- -f2)
+            if [ "$os" = windows ]; then
+              (cd "out/$target/bin" && zip -q "$GITHUB_WORKSPACE/dist/snek-$os-$cpu.zip" snek.exe)
+            else
+              tar -C "out/$target/bin" -czf "dist/snek-$os-$cpu.tar.gz" snek
+            fi
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: Sign
+        env:
+          SNEK_SIGNING_KEY: ${{ secrets.SNEK_SIGNING_KEY }}
+        run: |
+          if [ -z "$SNEK_SIGNING_KEY" ]; then
+            echo "::error::SNEK_SIGNING_KEY is not set; snek update rejects unsigned releases"
+            exit 1
+          fi
+          cd dist
+          ../zig-out/bin/snek platform release sign *.tar.gz *.zip
+          key=$(sed -n 's/^const public_key = "\(.*\)";$/\1/p' ../src/cmd/platform/update.zig)
+          ../zig-out/bin/snek platform release verify --public-key "$key" *.tar.gz *.zip
+
+      - name: Manifests
+        run: |
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          cd dist
+          for format in homebrew scoop; do
+            ext=$([ $format = homebrew ] && echo rb || echo json)
+            ../zig-out/bin/snek platform release manifest -f $format \
+              --version "$GITHUB_REF_NAME" --url "$url" > "snek.$ext"
+          done
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=$(case "$GITHUB_REF_NAME" in *-*) echo --prerelease ;; esac)
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes $prerelease

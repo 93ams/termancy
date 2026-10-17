@@ -1,0 +1,5 @@
+# A file from version 1, before the server had its own table: `settings migrate`
+# upgrades it.
+host = "0.0.0.0"
+port = 8080
+debug = true
