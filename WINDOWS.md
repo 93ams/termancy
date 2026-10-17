@@ -37,6 +37,11 @@ What the first native run found, and what changed:
 - **`term.Pty` reads never ended on Windows**: the pseudo console keeps its output open
   after the program exits. A thread now closes it when the program ends, so `snek cli
   explain`, `record`, and `tui serve` see the end as on POSIX.
+- **A web session whose browser never answered the close kept its task and its slot.**
+  `platform.web.Server` stopped the socket's reader with `shutdown`, which on Windows does
+  not wake a pending read (ZIG-ISSUES.md, issue 4). The reader is a task of its own now,
+  canceled when the session ends, the browser goes silent, or the reader stops. Test "a
+  session ends though its browser never answers the close".
 - **`PAGER` with a Windows path** lost its backslashes (split by POSIX shell rules); it is
   split by `CommandLineToArgvW`'s rules on Windows now.
 - **`snek cli record` with `Set Shell cmd`** ran the user's AutoRun commands (clink); `cmd`
