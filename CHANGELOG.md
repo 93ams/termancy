@@ -105,6 +105,14 @@ git history.
 
 ### Added
 
+- **`platform`:** `windows_hello.register`, WebAuthn registration through Windows Hello,
+  next to `assert`; `webauthn.CreationOptions`, `Registration` (with `credential()`, what a
+  relying party keeps), and `attestedCredential`, which reads the credential out of a
+  registration's authenticator data. `distribution.manifests.writeWinget` writes a winget
+  manifest, from a `Package` whose new `publisher` names the identifier's first part.
+- **snek:** `platform release manifest -f winget` (with `--publisher`); the release
+  publishes `snek.yaml` beside the Homebrew and Scoop manifests, and Authenticode-signs
+  `snek.exe` when given a certificate.
 - **`cli`:** `.confirm = true` with `ctx.confirm(fmt, args)`, a question made at run time
   under the same `--yes` and no-terminal rules; per-command `.exit_statuses`, in that
   command's man page and its section of the single page and Markdown.

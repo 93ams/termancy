@@ -178,7 +178,7 @@ fn runVerify(ctx: *cli.Context, flags: VerifyFlags) !void {
     if (failed) return ctx.fail("verification failed", .{});
 }
 
-const Format = enum { homebrew, scoop, pkgbuild };
+const Format = enum { homebrew, scoop, winget, pkgbuild };
 
 const ManifestFlags = struct {
     format: Format = .homebrew,
@@ -189,6 +189,7 @@ const ManifestFlags = struct {
     description: []const u8 = "Build command-line tools in Zig",
     homepage: []const u8 = "https://github.com/93ams/snek",
     license: []const u8 = "MIT",
+    publisher: []const u8 = "93ams",
     pub const meta = .{
         .format = .{ .short = 'f', .help = "The package manager" },
         .sums = .{ .help = "The checksum file listing the assets", .value_name = "file" },
@@ -198,6 +199,7 @@ const ManifestFlags = struct {
         .description = .{ .help = "One line for listings" },
         .homepage = .{ .help = "The project's home page" },
         .license = .{ .help = "SPDX license identifier" },
+        .publisher = .{ .help = "winget's publisher, the first part of the package identifier" },
     };
 };
 
@@ -205,7 +207,7 @@ const manifest = cli.command(.{
     .name = "manifest",
     .summary = "Write a package manifest from a checksum file",
     .description =
-    \\Print a Homebrew formula, Scoop manifest, or Arch Linux PKGBUILD for the assets
+    \\Print a Homebrew formula, Scoop or winget manifest, or Arch PKGBUILD for the assets
     \\listed in --sums. An asset's OS and CPU come from its name (snek-linux-x86_64.tar.gz,
     \\snek-windows-aarch64.zip); its download is --url joined with the name. An archive is
     \\taken to hold the executable at its top level, named --name (with .exe on Windows).
@@ -230,11 +232,13 @@ fn runManifest(ctx: *cli.Context, flags: ManifestFlags) !void {
         .description = flags.description,
         .homepage = flags.homepage,
         .license = flags.license,
+        .publisher = flags.publisher,
         .assets = assets,
     };
     const result = switch (flags.format) {
         .homebrew => manifests.writeHomebrew(ctx.out, package),
         .scoop => manifests.writeScoop(ctx.out, package),
+        .winget => manifests.writeWinget(ctx.out, package),
         .pkgbuild => manifests.writePkgbuild(ctx.out, package),
     };
     result catch |err| switch (err) {

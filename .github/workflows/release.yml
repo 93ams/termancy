@@ -1,10 +1,14 @@
 # Publishes a release when a version tag is pushed: snek built for every target, archived
 # as `snek update` expects (snek-<os>-<cpu>.tar.gz, .zip for Windows), with SHA256SUMS, an
-# Ed25519 signature beside each archive, and Homebrew and Scoop manifests.
+# Ed25519 signature beside each archive, and Homebrew, Scoop, and winget manifests.
 #
 # The signing key is the repository secret SNEK_SIGNING_KEY, made once with
 # `snek platform release keygen`. snek's update requires signatures made with it (the public
 # half is in src/cmd/platform/update.zig), so the release fails without the secret.
+#
+# The Windows executables are also Authenticode-signed, so SmartScreen and Smart App Control
+# know the publisher, when the secrets WINDOWS_CERTIFICATE (a PKCS#12 file, base64) and
+# WINDOWS_CERTIFICATE_PASSWORD are set; without them the release goes out unsigned there.
 name: release
 
 on:
@@ -35,7 +39,20 @@ jobs:
             exit 1
           fi
 
+      - name: Code-signing certificate
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        run: |
+          if [ -z "$WINDOWS_CERTIFICATE" ]; then
+            echo "::warning::WINDOWS_CERTIFICATE is not set; snek.exe is not Authenticode-signed"
+            exit 0
+          fi
+          sudo apt-get install -y osslsigncode
+          echo "$WINDOWS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/windows.p12"
+
       - name: Build and archive
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
           date=$(git log -1 --format=%cs)
           mkdir dist
@@ -46,6 +63,15 @@ jobs:
             cpu=${target%%-*}
             os=$(echo "$target" | cut -d- -f2)
             if [ "$os" = windows ]; then
+              if [ -f "$RUNNER_TEMP/windows.p12" ]; then
+                exe="out/$target/bin/snek.exe"
+                osslsigncode sign -pkcs12 "$RUNNER_TEMP/windows.p12" \
+                  -pass "$WINDOWS_CERTIFICATE_PASSWORD" -h sha256 \
+                  -n snek -i "https://github.com/$GITHUB_REPOSITORY" \
+                  -ts http://timestamp.digicert.com -in "$exe" -out "$exe.signed"
+                mv "$exe.signed" "$exe"
+                osslsigncode verify -in "$exe" > /dev/null
+              fi
               (cd "out/$target/bin" && zip -q "$GITHUB_WORKSPACE/dist/snek-$os-$cpu.zip" snek.exe)
             else
               tar -C "out/$target/bin" -czf "dist/snek-$os-$cpu.tar.gz" snek
@@ -70,8 +96,8 @@ jobs:
         run: |
           url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           cd dist
-          for format in homebrew scoop; do
-            ext=$([ $format = homebrew ] && echo rb || echo json)
+          for format in homebrew scoop winget; do
+            case $format in homebrew) ext=rb ;; scoop) ext=json ;; winget) ext=yaml ;; esac
             ../zig-out/bin/snek platform release manifest -f $format \
               --version "$GITHUB_REF_NAME" --url "$url" > "snek.$ext"
           done
