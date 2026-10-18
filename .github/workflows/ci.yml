@@ -1,0 +1,81 @@
+# Runs the full gate on the three systems termancy supports, Windows on both x86_64 and
+# ARM64. `zig build test` is the format check, unit, end-to-end, and compile-error tests;
+# `zig build check` cross-compiles for every target, so a change that breaks one is caught
+# on any runner.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: zig build test --summary all
+      # The pseudo-terminal e2e cases need util-linux script(1) and zsh/fish for the
+      # completion scripts; install them where the runner lacks them.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y zsh fish && zig build e2e --summary all
+      # cli's console code (width, hidden prompts, Ctrl-C) under a pseudo console.
+      - if: runner.os == 'Windows'
+        run: zig build console --summary all
+
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: zig build check --summary all
+      # Size and startup budgets of the smallest cli, cfg, and tui applications; the
+      # budgets in bench/budget.zig are measured on Linux.
+      - run: zig build budget --summary failures
+
+  # Line coverage of the unit tests, as a browsable kcov report and a one-line summary.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: sudo apt-get install -y kcov
+      - run: zig build coverage --summary failures
+      - name: Summary
+        run: |
+          python3 - >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json
+          d = json.load(open("zig-out/coverage/kcov-merged/coverage.json"))
+          print(f"Unit-test line coverage: **{d['percent_covered']}%** "
+                f"({d['covered_lines']} of {d['total_lines']} lines)")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: zig-out/coverage
+
+  # A bounded run of the coverage-guided fuzzer over the parsers of untrusted input (cfg,
+  # term, sys, and the tape parser), 30K runs per target (about ten minutes). A crash
+  # fails the job; add its input to the regressions in the `fuzz.zig` holding the target.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: zig build fuzz --fuzz=30K --summary failures

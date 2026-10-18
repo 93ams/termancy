@@ -1,0 +1,4 @@
+# brew's configuration: read by `brew make` and `brew pick` from brew.toml, or -c <file>.
+beans = "Ethiopia Yirgacheffe"
+grams_per_cup = 18
+menu = ["espresso", "latte", "filter", "cold brew"]

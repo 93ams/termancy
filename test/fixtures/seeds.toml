@@ -1,0 +1,101 @@
+# Starting contents for the files the editing tests change. `termancy cfg get <key>` prints
+# one into a fresh file in the test's own output directory, so these never change.
+
+commented = """
+# A comment that set keeps.
+name = "demo" # and this one
+
+[server]
+port = 1"""
+
+yaml_commented = """
+# A comment that set keeps.
+port: 1"""
+
+yaml_block = """
+# A comment that fmt keeps, beside a block scalar.
+text: |
+  line"""
+
+yaml_flow = """
+# A comment that fmt drops: a flow collection over lines is not reformatted in place.
+list: [a,
+  b]"""
+
+zon_commented = """
+// A comment that set keeps.
+.{ .port = 1 }"""
+
+jsonc_commented = """
+// A comment that set keeps.
+{"port": 1}"""
+
+jsonc_array = """
+// A comment that set drops: an array element is not changed in place.
+{"ports": [1]}"""
+
+fmt_json = """
+{"b": [1, 2], "a": {"x": "y"}}"""
+
+fmt_commented = """
+# A comment that fmt keeps.
+a=1   # and this one"""
+
+plain = """
+a = 1"""
+
+typed = """
+a = 1"""
+
+yaml = """
+server:
+  port: 1"""
+
+json = """
+{"name": "x"}"""
+
+env = """
+NAME=x"""
+
+secret = """
+[db]
+password = "hunter2\""""
+
+profiled = """
+[server]
+host = "localhost"
+
+[profiles.prod.server]
+host = "example.com"
+"""
+
+sort_commented = """
+# Settings.
+zeta = 1 # last
+# About alpha.
+alpha = 2
+
+[server]
+port = 1
+# The host.
+host = "h"
+"""
+
+unset_commented = """
+name = "demo"
+
+# The server.
+[server]
+# Where it listens.
+port = 1
+host = "h"
+"""
+
+unsorted = """
+b = 1
+a = 2
+
+[z]
+y = 1
+x = 2
+"""

@@ -1,0 +1,6 @@
+name = "app"
+
+[db]
+password = "hunter2"
+token = "${secret:env:DB_TOKEN}"
+old_port = 5

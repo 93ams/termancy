@@ -1,0 +1,14 @@
+# repos's configuration: `repos setup` writes one like it, in the user's configuration
+# directory (~/.config/repos/config.toml on Linux), and keeps your comments when it runs
+# again. REPOS_ROOTS, REPOS_DEPTH, REPOS_FETCH_CONCURRENCY, ... override it.
+
+# Where to look for repositories; ~ is your home directory.
+roots = ["~/src"]
+# Directory names never searched; * matches anything.
+ignore = ["node_modules", "vendor", "target", ".*"]
+# How deep below a root a repository may be.
+depth = 3
+
+[fetch]
+concurrency = 4
+timeout = "2m"

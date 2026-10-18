@@ -1,0 +1,18 @@
+# The shop's settings. `settings check` validates this file, and `settings set` edits it
+# without losing these comments.
+schema_version = 3
+
+[server]
+host = "0.0.0.0"
+port = 8080 # where the shop listens
+
+[database]
+url = "postgres://db.internal/shop"
+pool = 5
+
+[log]
+level = "info"
+
+# `settings show --profile debug` merges this table over the rest.
+[profiles.debug.log]
+level = "debug"

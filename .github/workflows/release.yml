@@ -1,0 +1,110 @@
+# Publishes a release when a version tag is pushed: termancy built for every target, archived
+# as `termancy update` expects (termancy-<os>-<cpu>.tar.gz, .zip for Windows), with SHA256SUMS, an
+# Ed25519 signature beside each archive, and Homebrew, Scoop, and winget manifests.
+#
+# The signing key is the repository secret TERMANCY_SIGNING_KEY, made once with
+# `termancy release keygen`. termancy's update requires signatures made with it (the public
+# half is in src/cmd/update.zig), so the release fails without the secret.
+#
+# The Windows executables are also Authenticode-signed, so SmartScreen and Smart App Control
+# know the publisher, when the secrets WINDOWS_CERTIFICATE (a PKCS#12 file, base64) and
+# WINDOWS_CERTIFICATE_PASSWORD are set; without them the release goes out unsigned there.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Test
+        run: zig build test check --summary failures
+
+      - name: The tag matches the version termancy reports
+        run: |
+          zig build
+          reported="v$(zig-out/bin/termancy --version | awk '{print $2}')"
+          if [ "$reported" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME, but termancy reports $reported" >&2
+            exit 1
+          fi
+
+      - name: Code-signing certificate
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        run: |
+          if [ -z "$WINDOWS_CERTIFICATE" ]; then
+            echo "::warning::WINDOWS_CERTIFICATE is not set; termancy.exe is not Authenticode-signed"
+            exit 0
+          fi
+          sudo apt-get install -y osslsigncode
+          echo "$WINDOWS_CERTIFICATE" | base64 -d > "$RUNNER_TEMP/windows.p12"
+
+      - name: Build and archive
+        env:
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          date=$(git log -1 --format=%cs)
+          mkdir dist
+          for target in x86_64-linux-musl aarch64-linux-musl x86_64-macos aarch64-macos \
+                        x86_64-windows aarch64-windows; do
+            zig build -Dtarget=$target -Doptimize=ReleaseSafe \
+              -Dcommit=$GITHUB_SHA -Ddate=$date --prefix "out/$target"
+            cpu=${target%%-*}
+            os=$(echo "$target" | cut -d- -f2)
+            if [ "$os" = windows ]; then
+              if [ -f "$RUNNER_TEMP/windows.p12" ]; then
+                exe="out/$target/bin/termancy.exe"
+                osslsigncode sign -pkcs12 "$RUNNER_TEMP/windows.p12" \
+                  -pass "$WINDOWS_CERTIFICATE_PASSWORD" -h sha256 \
+                  -n termancy -i "https://github.com/$GITHUB_REPOSITORY" \
+                  -ts http://timestamp.digicert.com -in "$exe" -out "$exe.signed"
+                mv "$exe.signed" "$exe"
+                osslsigncode verify -in "$exe" > /dev/null
+              fi
+              (cd "out/$target/bin" && zip -q "$GITHUB_WORKSPACE/dist/termancy-$os-$cpu.zip" termancy.exe)
+            else
+              tar -C "out/$target/bin" -czf "dist/termancy-$os-$cpu.tar.gz" termancy
+            fi
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: Sign
+        env:
+          TERMANCY_SIGNING_KEY: ${{ secrets.TERMANCY_SIGNING_KEY }}
+        run: |
+          if [ -z "$TERMANCY_SIGNING_KEY" ]; then
+            echo "::error::TERMANCY_SIGNING_KEY is not set; termancy update rejects unsigned releases"
+            exit 1
+          fi
+          cd dist
+          ../zig-out/bin/termancy release sign *.tar.gz *.zip
+          key=$(sed -n 's/^const public_key = "\(.*\)";$/\1/p' ../src/cmd/update.zig)
+          ../zig-out/bin/termancy release verify --public-key "$key" *.tar.gz *.zip
+
+      - name: Manifests
+        run: |
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          cd dist
+          for format in homebrew scoop winget; do
+            case $format in homebrew) ext=rb ;; scoop) ext=json ;; winget) ext=yaml ;; esac
+            ../zig-out/bin/termancy release manifest -f $format \
+              --version "$GITHUB_REF_NAME" --url "$url" > "termancy.$ext"
+          done
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=$(case "$GITHUB_REF_NAME" in *-*) echo --prerelease ;; esac)
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes $prerelease

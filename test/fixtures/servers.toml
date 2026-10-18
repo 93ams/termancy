@@ -1,0 +1,11 @@
+title = "two servers"
+ratio = 0.75
+enabled = true
+
+[[servers]]
+host = "alpha"
+port = 8001
+
+[[servers]]
+host = "beta"
+port = 8002

@@ -1,0 +1,16 @@
+# Line endings: pin everything to LF.
+#
+# `zig fmt --check` is a required gate and it depends on LF. Without this file,
+# Git's default `core.autocrlf=true` on Windows rewrites line endings in the
+# working copy on checkout, so the gate fails on files nobody edited - a
+# confusing way to learn about a checkout setting.
+#
+# `eol=lf` for text files keeps the working tree byte-identical across platforms;
+# binary assets are excluded explicitly.
+* text=auto eol=lf
+
+*.pem binary
+*.der binary
+*.png binary
+*.jpg binary
+*.svg text eol=lf

@@ -1,0 +1,25 @@
+# Zig build artefacts. These are regenerable and were deliberately not carried
+# over from the monorepo, where the four migrated packages had accumulated
+# ~115 MB of cache between them.
+.zig-cache/
+.zig-global-cache/
+zig-cache/
+zig-out/
+zig-pkg/
+
+# Build and test output captured from a shell.
+*.log
+
+# Crash reports from development builds that were pointed at the working directory.
+# They are artefacts of a failure, not sources, and a secret could plausibly be in one.
+.cache/
+
+# Editor and OS noise.
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+
+# The earlier implementation, kept locally for reference; what was worth having is ported.
+backup/

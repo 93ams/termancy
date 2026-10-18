@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": ["name"],
+  "properties": {
+    "name": {"type": "string", "minLength": 2},
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {"type": "string"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "tags": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,462 @@
+# Changelog
+
+Notable changes, newest first. The format follows [Keep a Changelog](https://keepachangelog.com),
+and versions follow [Semantic Versioning](https://semver.org) as
+[docs/stability.md](docs/stability.md) describes. Work before the first entry is in the
+git history.
+
+## Unreleased
+
+### Breaking
+
+- **snek is now termancy, and the `platform` library is `sys`:** the program, the package
+  (`.termancy` in `build.zig.zon`, with a new fingerprint), the repository URL, release
+  archives (`termancy-<os>-<cpu>`), configuration files and directories (`termancy.toml`,
+  `~/.config/termancy`), environment variables (`TERMANCY_*`), and plugins (`termancy-<name>`).
+  `@import("platform")` is `@import("sys")`. Files encrypted by `cfg.encrypted` start with
+  `termancy-encrypted`, which the encryption authenticates, so files sealed as
+  `snek-encrypted` must be decrypted with snek and sealed again. Entries below keep the old
+  names.
+- **snek's commands are grouped by what they act on, not by library:** `platform` is gone;
+  its `dirs`, `info`, `update`, `release`, and `ssh` move to the top level, and `platform
+  webauthn` becomes `passkey`. `cli freeze`, `cli record`, `cli explain`, `tui md`, `tui
+  image`, and `tui serve` move to the top level too. The gum-style widgets and `demo` move
+  from `tui` to `ui` (`snek ui choose`); `tui` keeps `init`, `add`, `list`, and `diff`.
+- **snek uses the library's built-ins:** `platform update` without a terminal (or under CI)
+  and without `--yes` exits 1 naming `--yes` (was 2), and a declined update says "not
+  confirmed; nothing was done". `platform update`, `tui add` (several components), `cli
+  record`, and `cli freeze` report progress as `✓ <step>` lines on stderr (redrawn in place
+  at a terminal; nothing with `-q`). `cli record` loses its own `-q` for the built-in one;
+  `tui serve` shows connections only with `-v`; `platform ssh run`'s "added <host>" line is
+  a warning.
+- `cli.spec`, `parse`, `values`, `text`, `shell`, and `output` move to `cli.internal`, and
+  `cfg.scalar` and `format` to `cfg.internal`; what was stable in them stays at the root
+  (`cli.command`, `cli.flagsOf`, `cli.Defaults`, `cfg.Format`, `cfg.Duration`, `cfg.ByteSize`,
+  `cfg.DateTime`, `cfg.infer`). `cli.json.schemaType`, `cli.plugins.isName`, and
+  `App.max_response_file` are no longer public.
+- Flag meta `.config = "a.b"` is `.key`, and `cli.Flag.config` is `Flag.key`.
+- `cli.docs.writeWith` and `writeManTreeWith` fold into `write(writer, root, format, options)`
+  and `writeManTree(io, dir, root, options)`; pass `.{}` for the defaults.
+- `cfg.Config.bindFlags` leaves out flags whose key the configuration does not know (once it
+  knows its keys, from `setDefaults`, `decode`, or `registerKeys`), so `--config` and
+  `--verbose` no longer become settings; a flag with `.key` always binds. `setDefaults`
+  registers the struct's keys.
+- `cfg.edit` writes a new nested key into TOML as a `[table]` section, not a dotted key.
+- `Config.loadFile`, `loadDir`, and `loadVariants` set `Diagnostic.file` on syntax errors:
+  print `"{f}"`, not `"{s}:{f}", .{ path, diag }`.
+- `tui.Program(M).init` takes `*M`: the model stays the caller's, is updated in place, and is
+  never copied or freed, so components may borrow slices of it; `program.model` is `*M`.
+  `tui.testing.Driver(M).init(gpa, model, opts)` returns the driver
+  (`var d: Driver(M) = try .init(...)`), which owns its model and frees it in `deinit`
+  (`pub fn deinit(*M)`); drop any `d.model().deinit()`, now a double free.
+- `platform.web.Server.Config.handler` is a `web.Server.Handler`; `serveConnection` and
+  `tui`'s `resize_poll` are no longer public.
+- `tui.Options.suspend_on_ctrl_z` defaults to `false`: Ctrl+Z reaches the model as a key, so
+  `input` and `textarea` undo works out of the box. To suspend, set
+  `.suspend_on_ctrl_z = true` or return `Cmd.suspend_process` from `update`. `snek tui input`,
+  `write`, `filter`, and `pager` undo on Ctrl+Z; `choose`, `confirm`, `file`, and `table`
+  still suspend.
+- A fifth module, `term`, holds what used to be `tui`'s terminal layer (`ansi`,
+  `capability`, `width`, `input`, `Terminal`, `Style`, `layout`); `tui` re-exports all of
+  it, so `tui.Style` and the rest still work, but a build that wires modules by hand must
+  give `cli` and `tui` the `term` import.
+- `cli.Environment.color` is a color level (`term.capability.Color`) instead of a bool,
+  and `Environment` has `err_color`; help is colored only when standard output is a
+  terminal (it used to be whenever a size was known).
+- `tui.Program` draws by cell, so the bytes it writes are different (and fewer); tests
+  that compared exact output need new expectations. `tui.testing.Screen` is
+  `term.vt.Screen`.
+- `term.width` splits grapheme clusters by UAX #29 (Unicode 17): CR LF is two clusters, as
+  terminals draw it, and a lone regional indicator is one column wide.
+- `Style` expands tabs to four spaces (`tab_width`; null keeps them).
+- The `form` component was rewritten as huh's: `Field.kind` is one of `input`, `text`,
+  `choice`, `select`, `multi_select`, `confirm`, `file`, `note`; the `markdown`
+  component scrolls and needs `viewport`.
+
+- `cli.complete.Builtins` is now `cli.complete.Options`. Completion scripts call
+  `__complete2`, which adds directives (files, directories, no space); `__complete` still
+  answers for scripts generated earlier.
+- `snek platform update` installs from archives: releases publish
+  `snek-<os>-<cpu>.tar.gz` (`.zip` on Windows) instead of bare executables.
+- `snek platform update` requires an Ed25519 signature (`<archive>.sig`) made with the
+  release key, and `release.yml` fails without the `SNEK_SIGNING_KEY` secret.
+- Error sets gained members: `platform.update.ApplyError` (`ArchiveInvalid`,
+  `ExecutableMissing`), `platform.webauthn.VerifyError` (`SignatureInvalid`,
+  `SignCountRegressed`), and `platform.ctap.CommandError` (`PinInvalid`, `PinBlocked`,
+  `PinNotSet`; the PIN statuses used to all be `PinRequired`).
+- `platform.ctap.assert` takes an `AssertOptions` (`keepalive`, `pin`) in place of the
+  keepalive, and `ctap.Channel` keeps the `io` it was opened with.
+- The `__complete2` protocol has a `:prefix` directive; scripts from before it do not
+  know it.
+- `cfg.dotenv.write` returns `error.Unrepresentable` for a key whose variable name would
+  read back as another path (a section key ending in `_`). It used to write a name that
+  read back wrong or not at all.
+- `tui.Msg` (and `Message(T)`) has a `report` variant and `tui.input.Event` a `report`
+  variant, `tui.Cmd.Item` has `handoff` and `suspend_process`, and
+  `tui.ansi.Color.Layer` has `underline`: exhaustive switches over them need a case.
+- `tui.Program` handles Ctrl-Z itself on POSIX systems (`Options.suspend_on_ctrl_z`); it
+  used to reach the model as a key.
+- `cfg.Diagnostic` has a `file` field, and its `format` writes
+  `file:line:column: key: message` with whatever of those is known.
+- `Config.decode` fills in the file and position of its diagnostics (see Added).
+- `tui.Cmd.Item` has `work`; `tui.testing.Screen.Cell` has a `pen`.
+- `cli.parse.Source` has `config`; `cli.Command` and `cli.Flag` have new fields (all with
+  defaults); `cli.Messages` has new sentences, so a translation written against the old
+  table leaves them English.
+- The `form` component's `Field` has a `kind` (`.input` or `.choice`) in place of
+  `input`; `Field.deinit` frees it.
+- `snek cfg` reads a top-level `current_profile` key as the profile to apply when none is
+  given (`snek cfg profile use` writes it).
+- Removing a key with `cfg.edit` (and `snek cfg unset`) also removes the comment lines
+  directly above it and the blank line it would leave behind.
+- dotenv rejects variable names that start with a digit.
+- `CI=0` and `CI=false` no longer count as CI (for color as well as for interactivity).
+- Deprecated commands are no longer listed in help, offered by completion, suggested, or
+  reached by prefix; typed in full they still run, with their warning.
+- `cfg.encrypted.Decrypted.plaintext` is `[]u8` (it is wiped), and diagnostics no longer
+  quote lines of encrypted files.
+
+### Added
+
+- **`cfg`:** `DecodeOptions.warn_unknown` reports keys no field claims as warnings, at the
+  file and line that set them, with "did you mean" for a close field; strict-mode and schema
+  `additionalProperties: false` errors suggest the key too, and `snek cfg validate --schema`
+  warns about an undeclared key close to a declared one.
+- **`tui.testing.Driver`:** a model's `deinit(*M, std.mem.Allocator)` gets the driver's
+  allocator.
+- **DX:** `cli.command` compile errors name the command and suggest the closest name for
+  unknown spec fields, `meta` names (listing the struct's fields), `.args` fields, and
+  constraint flags: `cli.command("greet"): unknown spec field 'sumary'; did you mean
+  'summary'?`. `snek cli add` generates its test with `cli.testing.run`, a few lines instead
+  of twenty, and `snek cli init` also writes an example `hello` command with its test.
+- **`platform`:** `windows_hello.register`, WebAuthn registration through Windows Hello,
+  next to `assert`; `webauthn.CreationOptions`, `Registration` (with `credential()`, what a
+  relying party keeps), and `attestedCredential`, which reads the credential out of a
+  registration's authenticator data, with `CreationOptions.parseJson` and
+  `Registration.writeJson` for their JSON forms. `distribution.manifests.writeWinget` writes
+  a winget manifest, from a `Package` whose new `publisher` names the identifier's first
+  part.
+- **snek:** `platform webauthn get` and `create`, a WebAuthn client for scripts: the options
+  a relying party sends, as JSON, in; the response's JSON out. Through Windows Hello on
+  Windows; `get` through a USB security key on Linux. `platform release manifest -f winget`
+  (with `--publisher`); the release publishes `snek.yaml` beside the Homebrew and Scoop
+  manifests, and Authenticode-signs `snek.exe` when given a certificate.
+- **`cli`:** `.confirm = true` with `ctx.confirm(fmt, args)`, a question made at run time
+  under the same `--yes` and no-terminal rules; per-command `.exit_statuses`, in that
+  command's man page and its section of the single page and Markdown.
+- **snek:** `platform dirs`, `platform info`, and `tui list` take `-o yaml|jsonl` and report
+  errors as JSON under `-o json`; `-v`/`--log-level` on `platform update` (URLs, archive,
+  signature check), `cli record` (font, frames, sizes), `tui serve` (connections and exit
+  statuses), and `cfg` (files found and loaded, the profile); spinners while `freeze`
+  draws, `zig fetch` runs, and `tui md` fetches; `cfg validate`, `fmt`, `diff`, and
+  `tui confirm` list their statuses in EXIT STATUS.
+- **Fuzzing and budgets:** `zig build fuzz` covers SSH key blobs, `authorized_keys`, OpenSSH
+  private keys, signatures, the SSH transport, CBOR, the escape-sequence parser and VT
+  screen, the input decoder, Markdown, PNG, GIF, and JPEG, TrueType, highlighting, regexes,
+  and tapes, as well as `cfg`. `zig build budget` checks the smallest `cli`, `cfg`, and `tui`
+  apps against size budgets (347, 434, and 230 KB now; 416, 512, and 272 KiB allowed) and
+  `--help` against 50 ms (1.5 ms now). `zig build check` also compiles the tests for aarch64
+  Linux.
+- **`cli` and `cfg` after dogfooding `examples/repos`:** under `App.run` standard error
+  shows each line as it is written; `Config.loadAppFile` (the `--config` path, a variable's
+  file, or `config.toml` in the configuration directory, a missing file not an error); flag
+  meta `.key` and `.internal`; flow `Ask.label_fn`, list questions for `[]const T`, and an
+  "invalid answer" line before asking again (`Messages.flow_rejected`, translated);
+  `text_columns` for `ctx.render`'s tables; `cfg.glob`, `cfg.edit.applyAll`,
+  `cfg.Duration.toIo`/`fromIo`; `cli.testing.Options.cwd`. Every public declaration in `cli`
+  and `cfg` has a doc comment, and `docs/stability.md` lists what is stable.
+- **`tui.run(gpa, io, &model, .{})`** runs a model on the terminal and returns the exit
+  status (0, or `tui.interrupted_status`, 130); without a terminal it prints the first frame
+  as trimmed text. `tui.runSession` runs one over an SSH or browser session at its size.
+  `testing.Driver.screenTextTrimmed`, `testing.writeTrimmed`.
+- **`platform.web`:** `Server.handlerFor(Context, fn (*Context, *Session) !void)` makes a
+  handler without casts, `Server.link` formats the link to print, `Config.title` names the
+  browser tab.
+- **`term.live.Live.update(io, context, change)`** runs a change under the lock and redraws,
+  for progress reported from several tasks.
+- Registry `table`: `Table.handleKey(key) bool` moves the highlight and never quits, for
+  embedding it.
+- **Charm's libraries and tools, in Zig** (the README maps each one):
+  - **`term`:** color profile detection for more terminals and a downsampling writer;
+    UAX #29 grapheme clusters from Unicode 17 tables; styled wrapping and cutting that
+    carry styles and links across lines; Oklab color math and gradients; `Style` borders
+    with titles, per-side colors, and gradients, `max_width`, `max_height`, `transform`,
+    hyperlinks; `Canvas` layers, `Table`, `List`, `Tree`; a VT500 `Parser`, `Pen`, and a
+    terminal emulator (`vt.Screen`) with scrollback, modes, queries, and OSC; `explain`;
+    `Pty` (Linux, macOS, BSDs, ConPTY); `Buffer` and `Renderer`; `highlight` (30
+    languages) and `markdown` (CommonMark, GFM, style sheets); `TrueType`, `fonts`,
+    `raster`, and `image` (PNG, animated GIF, resizing, quantizing); `graphics` (kitty,
+    iTerm2, sixel, half-block images); `golden` files; `Regex`.
+  - **`cli`:** `cli.Theme` (fang): styled help, errors, warnings, and hints; help measured
+    in display columns, with wrapped summaries and a capped flag column.
+  - **`tui`:** a cell-diff renderer, `max_fps`, cursor, title, filter, and clipboard
+    hooks, `Cmd.every`, `bell`, `altScreen`, `mouse`; `tui.motion` springs (harmonica);
+    `Program.runSession` for programs served over SSH; golden files and `advanceUntil`
+    in `testing.Driver`; the `paginator`, `stopwatch`, `timer`, and `help` components;
+    suggestions in `input`, line numbers in `textarea`, gradients and animation in
+    `progress`, horizontal scrolling in `viewport`, and a huh-style `form` with themes.
+  - **`platform`:** `ssh` (keys, fingerprints, `authorized_keys`, Ed25519, ECDSA, and RSA
+    signatures, OpenSSH key files with passphrases, `ssh-keygen -Y` signatures, and a
+    server with ML-KEM hybrid key exchange, ChaCha20-Poly1305 and AES-GCM, and strict key
+    exchange, tested against OpenSSH 10); `mnemonic` (BIP 39); `log` in logfmt, styled,
+    with fields, prefixes, and callers; `process.editAt` (an editor at a line).
+  - **`snek`:** `cli record` (vhs tapes to GIF, PNG, frames, text, SVG, MP4, WebM; `new`,
+    `validate`, `themes`, and `capture`, which writes a tape from what you type),
+    `cli freeze`, `cli explain`, `tui md` (glow), `tui image`, `tui serve` (wish),
+    `tui join` and `tui log`, `tui format --type markdown|code|emoji|template`, and
+    `platform ssh keygen|fingerprint|melt|restore|sign|verify`.
+
+- Six more examples: `deploy` (flows), `httpc` (the flag grammar), `kv` (an interactive
+  shell, plugins, docs), `settings` (`cfg` tooling), `monitor` (a `tui` dashboard), and
+  `doctor` (`platform`); the README lists all ten and what each shows.
+
+- **`cli`:** typed positionals; flag aliases, `.min`/`.max`/`.one_of`, and `validate`;
+  suggestions for mistyped values; response files, prefix matching, non-interspersed and
+  pass-through arguments; run-time completers and shell directives; help that wraps to the
+  terminal, in color, with topics and replaceable sections; file completion after
+  `--flag=`; HTML docs and one man page per
+  command; `cli.testing`; cancellation on Ctrl-C with `cleanup` hooks; prompts for missing
+  flags, secret ones hidden; plugins (`app-<name>` on `PATH`); `cli.version`;
+  `cli.Messages` for translation; `cli.repl`.
+- **`cfg`:** in-place edits (every format) and `edit.reformat` that keeps comments (TOML, YAML, ZON,
+  dotenv); `DateTime`; JSON with comments; streaming JSON, and YAML read a top-level entry at a
+  time; INI; multi-line YAML scalars, indentation indicators, and opt-in anchors and aliases; `meta`
+  constraints, `validate`, and every error at once; JSON Schema validation and inference; renames
+  and migrations; `${key}` references; append merging; includes; `loadDir`; the `Source` interface;
+  `reload`, which follows includes as they are now; secret references and providers; encrypted files
+  (`cfg.encrypted`); case-insensitive keys; `cfg.diff`; incremental `set`, with references too.
+- **`snek`:** `cfg diff`, `cfg env`, `cfg edit`, `cfg schema infer|check`, `cfg merge`,
+  `cfg init`, `cfg encrypt|decrypt`, `-o systemd` and `-o ini`; completion of keys,
+  profiles, and files; `cli repl`; `cli docs --format html` and `--dir`; `tui init
+  --dependency`, `tui add --prune`, the `shell` component, and mouse support in the
+  components; `platform release keygen|sign|verify|manifest`; `cli init` projects with a
+  `Settings` struct and `zig build schema`, for `cfg init --schema`.
+- **`tui`:**
+  - the kitty keyboard protocol, on request;
+  - frames rewrite only the lines that changed;
+  - `Cmd.handoff` lends the terminal to the model (for an editor or a pager) and takes it
+    back;
+  - Ctrl-Z suspends (`Cmd.suspend_process`), and `fg` resumes and redraws;
+  - `Options.queries` asks the terminal for its foreground and background colors, mode
+    support (DECRQM), and kitty keyboard flags, answered as `.report` messages, and
+    `ansi.Color.Rgb.isDark` tells a dark background from a light one;
+  - `tui.Keymap`, key bindings that match keys and write the help line;
+  - `Cmd.work`, background work whose result arrives as a message, and `Model.above`,
+    lines printed above an inline program;
+  - `layout.split` (lengths, percentages, fills, minimums, maximums), `tui.focus`
+    (`Ring`, `Grid`), `ansi.notify`, and `ansi.setProgress`;
+  - `testing.Screen` keeps colors and attributes, and `writeSvg` draws it;
+  - curly, dotted, dashed, and double underlines, and underline colors, in `Style`;
+  - the `viewport`, `tree`, `filepicker`, `multiprogress`, `chart`, `markdown`, and
+    `prompts` components (`snek tui demo flow` shows the last asking a flow's questions);
+  - `Terminal` keeps input typed ahead: keys a program read but did not use reach the next
+    program on the same terminal, and switching modes no longer discards unread input.
+- **`cfg` (since):** `Config.loadVariants` (`app.local.toml`, `.env.local` over the base),
+  `Config.view` (a section with relative keys), `addResolver` (`${name:arg}`),
+  `findFile(.{ .upward = true })`; decode problems point at the file and line that set the key
+  (`Config.locateDiagnostic`, `Diagnostic.writeSnippet`, and `cfg.locate` for any format);
+  `meta.deprecated`; `Config.changed`, to poll files for changes.
+- **`cli` (since):**
+  - `App.pager` shows help taller than the terminal through `$PAGER`;
+  - translation (`cli.i18n`): locale detection, gettext-style tables for help and the
+    app's strings, CLDR plural rules, `ctx.tr`, `ctx.plural`, and the library's sentences in
+    German, Spanish, French, and Portuguese;
+  - `.confirm` (with `--yes`), `.dry_run` (`--dry-run`, `ctx.dry_run`), `.output`
+    (`-o text|json`, `ctx.render`, and JSON errors), `.logging` (`-v`, `--log-level`,
+    `ctx.log`), and `.feature` gates on commands and flags;
+  - flag `.requires`, `.min_len`, and `.max_len`;
+  - `help --search <words>`, an ENVIRONMENT section in man pages, and
+    `completion install [shell]`;
+  - `App.aliases` (user aliases), `App.defaults` (flag values from a configuration file),
+    and `App.middleware`;
+  - `examples/tasks`, which uses them with `cfg`;
+  - `cli.Flow`: commands as graphs of questions and actions, branching on the answers,
+    with flags answering questions, forms (`.form`, several questions on one screen
+    through `Asker.form`), dry runs, undo, JSON progress, and Mermaid output;
+    `cli.flow.Script` for tests; `runFrom`; `snek cli add --flow` writes one.
+- **`snek` (since):** `cfg validate` and `cfg schema check` show each problem's line with a
+  caret, and `cfg validate` warns about plain-text secrets and deprecated keys; `snek tui
+  file` chooses a file; `snek tui pager` opens the file in the editor with `v`; help goes
+  through the pager; `cfg get --as`, `cfg profile list|use`, `cfg fmt --sort`, and
+  `-c https://...` (cached, served offline); `tui demo` (with `--svg`); `ACCESSIBLE=1`
+  plain prompts for `tui choose`, `confirm`, and `input`.
+- **`platform` (since):** `remote.get`, a URL's body revalidated with its ETag and read
+  from a cache when offline.
+- **`platform`:**
+  - `update` unpacks `.tar.gz` and `.zip` assets and finds pre-releases when asked;
+  - `webauthn` verifies ES256 and EdDSA signatures from COSE keys, and sign counts;
+  - `ctap` talks CTAP2 to security keys over CTAPHID (Linux hidraw), with ClientPIN
+    (`getPinToken`, `getPinRetries`; PIN/UV auth protocols one and two), and `cbor`
+    encodes and decodes the CBOR it needs;
+  - `proctitle.scrub` works on Windows, through the process environment block.
+- **Engineering:**
+  - CI on Linux, macOS, and Windows;
+  - `zig build coverage` (kcov);
+  - `zig build fuzz` (coverage-guided, over the parsers, edits, reformatting, and
+    decoding, with an in-tree corpus and regressions);
+  - `zig build console`: `cli`'s Windows console code under a pseudo console;
+  - `zig build examples`;
+  - `zig build docs`;
+  - a release workflow that builds, signs, and publishes archives and manifests;
+  - [docs/upgrading-zig.md](docs/upgrading-zig.md).
+- **`term.live`:** spinners, progress bars (eighth-cell fill, gradients, counts, bytes/s,
+  ETA), live text, and step checklists, without `tui.Program`. At a terminal they redraw in
+  place; in pipes, CI, or without color they print a line per change. `ctx.live(items)`
+  draws them on standard error. The registry's `spinner`, `progress`, and `stopwatch` and
+  `snek tui spin` share them.
+- **`cli`:** `cli.docs.command`, a ready-made `docs` command; `App.color_flag` adds
+  `--color auto|always|never` (snek has it); `-o jsonl`; docs end with an EXIT STATUS
+  section, with the app's own codes from `App.exit_statuses`.
+- **Components:** `input` and `textarea` undo (Ctrl+Z)
+  and redo (Ctrl+Y, Ctrl+Shift+Z), grouped by word, with `undo_limit`.
+- **`term.image`:** JPEG (baseline, extended, and progressive; grayscale, YCbCr, CMYK; any
+  subsampling; restart markers; EXIF orientation); `image.decode` picks the format.
+  `term.graphics.detectByQuery` asks the terminal about kitty graphics and sixels;
+  `snek tui image -p auto` asks when the environment does not say.
+- **SSH:** `platform.ssh.Client` (host keys checked against `known_hosts`, Ed25519 keys or
+  passwords, commands and terminals, `forwardLocal` for `ssh -L`); `platform.ssh.known_hosts`;
+  the server takes `ssh -L` and `ssh -R` when `Config.direct_tcpip` and `tcpip_forward`
+  allow them; `snek platform ssh run [user@]host -- command`. The client logs in with the
+  Ed25519 keys of the ssh-agent at `$SSH_AUTH_SOCK` (`platform.ssh.Agent`), after `-i` and
+  before `~/.ssh/id_ed25519` as OpenSSH orders them; Windows' named-pipe agent is not supported.
+- **The browser:** `platform.web.Server` serves a terminal over a WebSocket with the SSH
+  session's surface, so `tui.Program.runSession` and `snek tui serve --web` (as ttyd) work
+  in a browser: an xterm.js page pinned with integrity hashes, a token link, an origin
+  check, loopback by default. `examples/lobby` takes `--web`. The token link is swapped for an
+  HttpOnly, SameSite=Strict cookie (Secure behind `X-Forwarded-Proto: https`) and a redirect
+  to the clean URL; at most `max_sessions` (32) at once, further upgrades get 503; the page
+  sends a heartbeat and sessions silent for `idle_timeout` (120 s) are closed, since std's
+  WebSocket hides pongs.
+- **Docs site:** `zig build site` writes `zig-out/site`: a guide, a page per library from
+  its module docs, a component gallery with each component's source, the command and API
+  reference, on one light and dark style sheet that works offline. `zig build site-gifs`
+  adds a GIF of each component recorded from `docs/tapes`; `.github/workflows/site.yml`
+  publishes it to GitHub Pages and replaces `docs.yml`. `cli.docs.Options.stylesheet` and
+  `snek cli docs --format html --stylesheet <url>` link a style sheet instead of inline
+  styles.
+- **Guide:** `docs/guide.md`, "Your first app in 10 minutes", every snippet checked against
+  `examples/first-app`.
+- **`examples/repos`:** a git repository dashboard built end to end: a config file under
+  `REPOS_*` overrides, a first-run `cli.Flow` that keeps the file's comments, `list -o
+  text|json|jsonl`, concurrent `git fetch` under `ctx.live`, and a filterable TUI from
+  components copied with `snek tui add`, also served with `--web`.
+- `snek tui add` works in any directory holding a `tui.zon`; it no longer requires
+  `build.zig` there.
+- **From the earlier implementation (`backup/`):**
+  - **`cli`:**
+    - `.secret` flags are never shown: their defaults in help and docs, and their values in
+      parse errors, print `<redacted>`.
+    - `Context.secretValues()` returns this run's secret values, for a log scrubber.
+    - Typed positionals take `.help`, shown in an "Arguments" section of help and docs.
+    - `App.defaults = .from(&config, .{ .prefix = "tool" })` reads flag defaults from any
+      source with `flagText(key)`, such as `cfg.Config`; a flag's `.config` sets its key.
+    - Runs under CI are never interactive, even at a terminal (`term.capability.ci`,
+      `cli.terminal.interactive`).
+    - A required positional with `.prompt` is asked for when missing.
+    - `Command.repl`: a command without a handler, run bare at a terminal, starts a shell
+      on its subcommands (`App.executeLineIn`, `repl.Options.path`).
+    - `-o yaml` for commands with `.output`; `-V` for `--version`;
+      `cli.text.aliasesFromIni` reads a git-style `[alias]` section into `App.aliases`.
+  - **`cfg`:**
+    - `snek cfg redact <file|->` prints a file with secret-looking values replaced,
+      keeping its layout, for bug reports.
+    - `snek cfg validate --schema` without files checks the effective configuration
+      (files, profile, environment, `--set`) and says where each bad value came from.
+    - `cfg.edit.sort` (and `snek cfg fmt --sort`) keeps TOML comments with their keys;
+      edits keep CRLF line endings and single-quoted strings.
+    - `meta.<field>.env = "NAME"` is honored (`Config.bindEnvs`); `Config.flagText`.
+    - Decrypted plaintext is wiped after parsing.
+  - **`term.diff`:** Myers line diff with a unified writer, optionally colored; golden
+    mismatches print unified diffs; `snek tui diff` colors its output.
+  - **`platform`:**
+    - `Logger.secrets` replaces known secret values wherever they appear, without
+      allocating; the `doctor` example feeds it `ctx.secretValues()`.
+    - `capture` takes a `timeout`; `editText` edits a string in `$EDITOR`.
+    - `signal.installWith` catches SIGHUP (`.hangup`, for reloads) and SIGQUIT.
+    - `dirs.binDir` (`~/.local/bin` and the like) and `dirs.tempDir`.
+    - `daemon.SystemdUnit` writes a complete unit, with systemd's escaping.
+    - A lock file left empty or unreadable for over `Lock.stale_grace` is stale.
+  - `snek tui add` with no names, at a terminal, offers a multi-select of components.
+
+### Security
+
+From a review before the repository went public:
+
+- **ssh:** a packet longer than 64 KiB, sent before login, crashed the server (and a
+  malicious server crashed the client); packets are read in full whatever their size.
+- **ssh:** `Server.Config.max_connections` and `login_timeout` are enforced; connections were
+  unlimited and could wait forever without logging in.
+- **ssh:** a session's `env`, `signal`, and `pty-req` requests and forwarded host names no
+  longer grow memory without bound: kept per channel, at most 64 variables, one terminal,
+  known signal names only.
+- **ssh:** strict key exchange requires the peer's KEXINIT first; a connection hangs up
+  before a key's nonce (the sequence number) would repeat; received packets are wiped on
+  disconnect.
+- **`tui serve`:** `authorized_keys` entries with options (`from=`, `command=`, `restrict`)
+  are left out with a warning, since the server cannot enforce them; client-chosen user
+  names are escaped in the log.
+- **`platform update`:** the new executable must report the release's version, so an older
+  signed archive re-published under a newer tag is rolled back; `update.HttpTransport`
+  fetches over https only and refuses a redirect to plain http.
+- **`platform.web`:** with `--anyone` on the loopback, DNS-rebound hostnames get 421;
+  connections that do not send their request within 10 s (`Config.head_timeout`) are hung
+  up on; the page sends a Content-Security-Policy; `tui serve --web --anyone` off the
+  loopback warns that any page a visitor opens can run the command.
+
+### Fixed
+
+- **Windows:** `snek platform update` replaces the running `snek.exe` (it failed renaming
+  it aside), and snek deletes the `snek.exe.old` left behind on its next start. The web
+  server's request timeout and the SSH server's login timeout fire (a `shutdown` did not
+  wake the read they waited on). The Windows Hello dialog appears when asked from Windows
+  Terminal or another pseudo console. `snek cli init`'s "next:" hint is two lines, since
+  Windows PowerShell 5.1 has no `&&`; `snek tui init` and `add` print `C:\x\build.zig`, not
+  `C:\x/build.zig`.
+- `snek tui init` works in a subdirectory of a project: it writes `tui.zon` where asked,
+  wires the nearest `build.zig` at or above it, and hints only when that applies.
+- `tui.testing.Driver`: a model `deinit` of any other signature is a compile error, not
+  silently skipped.
+- Usage errors are JSON when the arguments ask for `-o json` or `-o jsonl`, as other errors
+  were; `snek tui add -q --dry-run` prints only the files it would change, without the
+  steps or the "dry run" note; `snek tui add` no longer crashes when the components resolve
+  to exactly one.
+- `build.zig.zon` said `0.0.0` while snek said `0.1.0`: the version is now written once, in
+  `build.zig.zon`, and passed to snek by `build.zig`.
+- `snek cli record` prints its failures once, after the progress; `tui serve --web`'s
+  plain-HTTP warning, `cfg validate`'s warnings, and `tui demo`'s hint follow `-q` and the
+  theme's colors.
+- `platform.secure`'s page-range test assumed a 4 KiB page, which aarch64 need not have.
+- `ctx.render` text tables line up by display width, not by codepoints.
+- `Program.init` copied the model, so `deinit` on the caller's copy freed stale memory (kv,
+  lobby, repos, gum, prompts).
+- Flow step reports, `ctx.log`, and `ctx.warn` flush standard error, so they show when they
+  happen instead of after the command's output.
+- `term.live`: a SIGINT, SIGTERM, SIGHUP, or SIGQUIT that ends the process mid-animation no
+  longer leaves the cursor hidden (POSIX); signals the program handles itself are left alone.
+- The SSH server did not answer a channel close the client sent first.
+- `files.Store.read` refused a file of exactly `limit` bytes.
+- Crash reports written in the same second overwrote each other; names now carry
+  nanoseconds and a suffix on collision.
+- `Config.locateDiagnostic` pointed a key set by the environment or a flag at the file
+  that set its table.
+- `snek tui add --dry-run` printed "created" with no sign that nothing was written; it now
+  says so on standard error.
+- `snek cfg explain` printed secret values (from encrypted files, `${secret:...}`) in
+  clear; it now redacts them as `show` does, with the same `--secret` and `--reveal`.
+- A `cli.Flow` asked its questions through `App.asker` even without a terminal; it now
+  asks only in an interactive run, as with the default asker, and otherwise keeps the
+  values or names the flag to pass.
+- The `prompts` component pre-filled a text question with its default, so typing added to
+  it; the default now shows as a placeholder and is the answer when nothing is typed.
+- A value read under a key `meta.renamed_from` names is reported under that key, so
+  `locate` points at the line that holds it rather than at its table.
+- JSON Schemas from `cfg.schema` write whole bounds as integers (`"minimum": 1`, not
+  `1.0`).
+
+- dotenv: backticks in values are escaped, so sourcing the output cannot run commands.
+- Strict decoding (`DecodeOptions.strict`) rejected a key that `meta.renamed_from` still
+  reads.
+- PowerShell completion of a word typed so far no longer splits it into characters.
+- TOML `fmt` no longer takes a `#` inside a quoted header key for a comment.
+- TOML: setting a key at the top of a file and then removing it left a blank line where
+  it was.

@@ -1,0 +1,16 @@
+.{
+    .name = .termancy,
+    // The one place termancy's version is written: build.zig passes it to the binary.
+    .version = "0.1.0",
+    .fingerprint = 0x1524bbc7e6f3abf0, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    // What `zig fetch` keeps: the sources, and the case lists build.zig imports.
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "test",
+        "README.md",
+    },
+}
