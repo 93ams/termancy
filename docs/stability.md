@@ -1,6 +1,6 @@
 # API stability
 
-snek follows [Semantic Versioning](https://semver.org). The version is the one `snek
+termancy follows [Semantic Versioning](https://semver.org). The version is the one `termancy
 --version` reports; the libraries and the program are released together under it.
 
 ## What is covered
@@ -24,13 +24,13 @@ and a patch release only fixes. These are the stable declarations:
 | Typed access | `decode`, `encode`, `DecodeOptions`, `DecodeError`, `Duration`, `ByteSize`, `DateTime`, `infer`, `glob` |
 | Tools | `diff`, `Change`, `edit` (`apply`, `applyAll`, `reformat`, `sort`), `schema`, `encrypted`, `migrate`, `locate` |
 
-**Machine output is stable too:** what `snek` prints with `-o json` and the other formats
+**Machine output is stable too:** what `termancy` prints with `-o json` and the other formats
 in [machine-output.md](machine-output.md), its exit statuses, and the completion protocol
 (`__complete2`). A change to any of them is a breaking change.
 
 ## What is not covered
 
-- **`tui` and `platform`** stay at 0.x after `cli` and `cfg` reach 1.0: they still change
+- **`tui` and `sys`** stay at 0.x after `cli` and `cfg` reach 1.0: they still change
   shape as the components and the operating-system support grow. Their breaking changes
   are listed in the CHANGELOG under **Breaking**.
 - `cli.internal` (`spec`, `parse`, `values`, `text`, `shell`, `output`) and `cfg.internal`
@@ -41,9 +41,9 @@ in [machine-output.md](machine-output.md), its exit statuses, and the completion
 - Anything else whose doc comment says it is internal.
 - Error sets may gain members in a minor release. Switch on them with an `else` arm.
 - The Zig version: each release names the one it builds with (now 0.17.0), and a new Zig
-  can need a new snek. See [upgrading-zig.md](upgrading-zig.md).
+  can need a new termancy. See [upgrading-zig.md](upgrading-zig.md).
 - Output meant for people (help text, error messages, `-o text`).
-- Components copied by `snek tui add`, which are the project's own source once copied.
+- Components copied by `termancy tui add`, which are the project's own source once copied.
 
 ## Deprecation
 

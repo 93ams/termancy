@@ -5,27 +5,27 @@ needs: a config file, a two-step flow that asks for what was not given as a flag
 progress bar, and a full-screen picker taken from the component registry.
 
 Every Zig snippet below is part of `examples/first-app/main.zig`
-([on GitHub](https://github.com/93ams/snek/blob/master/examples/first-app/main.zig)),
+([on GitHub](https://github.com/93ams/termancy/blob/master/examples/first-app/main.zig)),
 and a test there fails when a snippet here is not in that file, so what you read compiles.
 `zig build examples` builds and tests it.
 
 ## 1. Make the project
 
-You need Zig 0.17 and `snek` on your PATH (`zig build` in a snek checkout puts it in
+You need Zig 0.17 and `termancy` on your PATH (`zig build` in a termancy checkout puts it in
 `zig-out/bin`).
 
 ```sh
-snek cli init brew --module-path /path/to/snek   # or --fetch <url>
+termancy cli init brew --module-path /path/to/termancy   # or --fetch <url>
 cd brew
-snek tui init --wire
-snek tui add select
+termancy tui init --wire
+termancy tui add select
 ```
 
-`snek cli init` writes `build.zig`, `build.zig.zon`, and `src/main.zig` wired to the `cli`
+`termancy cli init` writes `build.zig`, `build.zig.zon`, and `src/main.zig` wired to the `cli`
 and `cfg` modules, with an example command in `src/cmd/hello.zig` (`zig build run -- hello`)
-and its test. `snek tui init --wire` adds the `tui` module, and `snek tui add select`
+and its test. `termancy tui init --wire` adds the `tui` module, and `termancy tui add select`
 copies the `select` component, and `list` which it requires, into `src/ui/`. They are your
-files now: change them as you like, and `snek tui diff select` shows what changed upstream.
+files now: change them as you like, and `termancy tui diff select` shows what changed upstream.
 
 Replace `src/main.zig` with the snippets below, in order (brew does without `hello`, so
 delete `src/cmd/hello.zig` or keep it to crib from). It starts with the imports:
@@ -35,7 +35,7 @@ const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
 const tui = @import("tui");
-// `snek tui add select` copied select.zig, and list.zig which it requires, into src/ui.
+// `termancy tui add select` copied select.zig, and list.zig which it requires, into src/ui.
 const Select = @import("ui/select.zig").Select;
 ```
 
@@ -181,7 +181,7 @@ suggestions, and errors in the right exit status come with `cli.App`.
 ```zig
 pub const root = cli.command(.{
     .name = "brew",
-    .summary = "Brew coffee, as your first snek app",
+    .summary = "Brew coffee, as your first termancy app",
     .subcommands = .{
         cli.command(.{
             .name = "make",
@@ -224,6 +224,6 @@ and `tui.testing.Driver` runs a component on a virtual screen. The tests at the 
 ## Next
 
 - [The components](components/index.html): each one recorded, with its source.
-- [The command reference](commands.html): everything `snek` does.
+- [The command reference](commands.html): everything `termancy` does.
 - The libraries: [cli](lib/cli.html), [cfg](lib/cfg.html), [tui](lib/tui.html),
-  [term](lib/term.html), [platform](lib/platform.html).
+  [term](lib/term.html), [sys](lib/sys.html).

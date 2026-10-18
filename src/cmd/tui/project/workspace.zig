@@ -1,10 +1,10 @@
-//! A project as the `snek tui` commands see it: a directory, the `tui.zon` at its root, and
-//! the registry compiled into snek. Every read and write goes through a `project.Plan`, so
+//! A project as the `termancy tui` commands see it: a directory, the `tui.zon` at its root, and
+//! the registry compiled into termancy. Every read and write goes through a `project.Plan`, so
 //! no path leaves the project directory.
 
 const std = @import("std");
 const cli = @import("cli");
-const platform = @import("platform");
+const sys = @import("sys");
 const project = @import("../../cli/project.zig");
 const catalog = @import("catalog.zig");
 const manifest = @import("manifest.zig");
@@ -39,7 +39,7 @@ pub const Workspace = struct {
     /// `-C` as given, for messages.
     path: []const u8,
     /// Printed before project paths: empty for `.`, else the path and the separator it
-    /// uses (`platform.files.join`'s rule: `\` on Windows for a path written with it).
+    /// uses (`sys.files.join`'s rule: `\` on Windows for a path written with it).
     prefix: []const u8,
     plan: project.Plan,
     /// The manifest as it was on disk before this command changed it, for `add` to find
@@ -58,7 +58,7 @@ pub const Workspace = struct {
             .prefix = if (std.mem.eql(u8, path, "."))
                 ""
             else
-                try platform.files.join(ctx.arena, std.mem.trimEnd(u8, path, "/"), ""),
+                try sys.files.join(ctx.arena, std.mem.trimEnd(u8, path, "/"), ""),
             .plan = .{ .io = ctx.io, .arena = ctx.arena, .root = dir },
         };
         if (!zig_project) return ws;
@@ -79,7 +79,7 @@ pub const Workspace = struct {
     /// `prefix`, with its separator.
     pub fn show(ws: *const Workspace, arena: std.mem.Allocator, sub_path: []const u8) ![]const u8 {
         if (ws.prefix.len == 0) return sub_path;
-        return platform.files.join(arena, ws.prefix, sub_path);
+        return sys.files.join(arena, ws.prefix, sub_path);
     }
 
     /// The content of `sub_path`, or null when it does not exist.

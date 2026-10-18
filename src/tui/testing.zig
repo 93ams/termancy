@@ -310,7 +310,7 @@ pub fn Driver(comptime Model: type) type {
         }
 
         /// Checks the screen's text against the golden file at `path` (see `term.golden`;
-        /// `SNEK_UPDATE_GOLDEN=1` rewrites it).
+        /// `TERMANCY_UPDATE_GOLDEN=1` rewrites it).
         pub fn expectScreenGolden(d: *Self, path: []const u8) !void {
             const text = try d.screenText(d.gpa);
             defer d.gpa.free(text);
@@ -500,22 +500,22 @@ test "Driver: first frame, keys, and quit in inline mode" {
     var d: MenuDriver = undefined;
     try startMenu(&d, .{
         .program = .{ .size = .{ .width = 20, .height = 10 } },
-        .before = "$ snek\r\n",
+        .before = "$ termancy\r\n",
     });
     defer d.deinit();
     try testing.expect(d.model().started);
     try testing.expectEqual(Size{ .width = 20, .height = 10 }, d.model().size);
     try d.expectFrame("> apple\n  banana\n  cherry");
-    try d.expectScreen("$ snek\n> apple\n  banana\n  cherry");
+    try d.expectScreen("$ termancy\n> apple\n  banana\n  cherry");
     try testing.expect(!d.screen.cursor_visible);
     try d.press("down");
     try d.expectFrame("  apple\n> banana\n  cherry");
-    try d.expectScreen("$ snek\n  apple\n> banana\n  cherry");
+    try d.expectScreen("$ termancy\n  apple\n> banana\n  cherry");
     try d.press("enter");
     try testing.expect(d.done());
     try testing.expect(!d.interrupted());
     // The final frame stays, the cursor is back and below it.
-    try d.expectScreen("$ snek\n  apple\n> banana\n  cherry");
+    try d.expectScreen("$ termancy\n  apple\n> banana\n  cherry");
     try testing.expect(d.screen.cursor_visible);
     try testing.expectEqual(4, d.screen.row);
     try testing.expectEqual(0, d.screen.column);

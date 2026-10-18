@@ -7,7 +7,7 @@
 //!
 //! The default reader takes plain lines from `env.in`, so a script can be piped in. For
 //! editing, history, and tab completion, give `read_line` a line editor (such as the `tui`
-//! component `snek tui add shell` copies into a project): it gets the `Repl`, whose
+//! component `termancy tui add shell` copies into a project): it gets the `Repl`, whose
 //! `history` it can offer and whose `complete` answers the tab key from the same command
 //! tree the shell scripts complete from.
 

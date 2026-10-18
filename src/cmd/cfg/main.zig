@@ -1,4 +1,4 @@
-//! `snek cfg`: configuration commands, built on the `cfg` library.
+//! `termancy cfg`: configuration commands, built on the `cfg` library.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -16,9 +16,9 @@ pub const command = cli.command(.{
     \\Read configuration from TOML, YAML, JSON (with or without comments), ZON, dotenv,
     \\and INI files, layered with environment variables and --set overrides.
     \\
-    \\Without --config, the first snek.toml, snek.yaml, snek.yml, snek.json, snek.zon,
-    \\snek.env, snek.jsonc, or snek.ini found in ., $XDG_CONFIG_HOME/snek, or
-    \\~/.config/snek is loaded.
+    \\Without --config, the first termancy.toml, termancy.yaml, termancy.yml, termancy.json, termancy.zon,
+    \\termancy.env, termancy.jsonc, or termancy.ini found in ., $XDG_CONFIG_HOME/termancy, or
+    \\~/.config/termancy is loaded.
     ,
     .aliases = &.{"config"},
     .persistent_flags = load.Global,

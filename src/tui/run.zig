@@ -94,7 +94,7 @@ fn snapshot(
 
 /// Runs `model` (a pointer, which stays the caller's) over a remote session until it
 /// quits or the other end goes, and returns the exit status as `run` does. `session` is a
-/// `platform.ssh.Session` or `platform.web.Session`: anything `Program.runSession` takes
+/// `sys.ssh.Session` or `sys.web.Session`: anything `Program.runSession` takes
 /// that also has `writer(buffer)`. The program starts at the session's size (its `size`,
 /// or its `pty`'s), else at `options.size`.
 pub fn runSession(gpa: Allocator, io: Io, model: anytype, session: anytype, options: Options) !u8 {

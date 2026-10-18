@@ -1,4 +1,4 @@
-//! Flag specs for `snek cli add --flag`: `name:type[=default][,short=x][,required][,help=text]`.
+//! Flag specs for `termancy cli add --flag`: `name:type[=default][,short=x][,required][,help=text]`.
 //!
 //! | type                      | Zig field                     | default            |
 //! |---------------------------|-------------------------------|--------------------|

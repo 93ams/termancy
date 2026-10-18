@@ -2,7 +2,7 @@
 Set FontSize 16
 Set Width 760
 Set Height 360
-Type "snek tui demo textarea"
+Type "termancy ui demo textarea"
 Enter
 Sleep 1s
 Type@60ms "Fast builds,"

@@ -3,7 +3,7 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
-const platform = @import("platform");
+const sys = @import("sys");
 
 /// How results are printed. `text` is for people: scalars bare, structures as YAML.
 pub const Output = enum { text, json, yaml, toml, zon, env, ini, systemd };
@@ -19,16 +19,16 @@ pub const Global = struct {
     pub const meta = .{
         .config = .{
             .short = 'c',
-            .help = "Config file to load; repeatable, later files win (default: discover snek.*)",
+            .help = "Config file to load; repeatable, later files win (default: discover termancy.*)",
             .value_name = "path",
-            .env = "SNEK_CONFIG",
+            .env = "TERMANCY_CONFIG",
             .split = ',',
             .complete = completeConfigFiles,
         },
         .profile = .{
             .help = "Apply the profiles.<name> section",
             .value_name = "name",
-            .env = "SNEK_PROFILE",
+            .env = "TERMANCY_PROFILE",
             .complete = completeProfiles,
         },
         .env_prefix = .{
@@ -44,10 +44,10 @@ pub const Global = struct {
 pub const unknown_format =
     "unknown format (use .toml, .yaml, .json, .jsonc, .zon, .env, or .ini)";
 
-/// Where `snek` looks for `snek.toml`, `snek.yaml`, `snek.json`, `snek.zon`, `snek.env`,
-/// `snek.jsonc`, or `snek.ini`
+/// Where `termancy` looks for `termancy.toml`, `termancy.yaml`, `termancy.json`, `termancy.zon`, `termancy.env`,
+/// `termancy.jsonc`, or `termancy.ini`
 /// when no `--config` is given.
-pub const search_dirs = [_][]const u8{ ".", "$XDG_CONFIG_HOME/snek", "~/.config/snek" };
+pub const search_dirs = [_][]const u8{ ".", "$XDG_CONFIG_HOME/termancy", "~/.config/termancy" };
 
 /// Loads the configuration the global flags describe. The caller owns the result and must
 /// `deinit` it. Failures are reported through `ctx.fail`.
@@ -55,14 +55,14 @@ pub fn load(ctx: *cli.Context, global: Global) !cfg.Config {
     var config: cfg.Config = .init(ctx.gpa);
     errdefer config.deinit();
     config.useEnv(ctx.environ);
-    if (ctx.environ.get("SNEK_PASSPHRASE")) |passphrase| config.usePassphrase(passphrase);
+    if (ctx.environ.get("TERMANCY_PASSPHRASE")) |passphrase| config.usePassphrase(passphrase);
     if (global.env_prefix) |prefix| try config.automaticEnv(prefix);
 
     const files = if (global.config.len > 0) global.config else discovered: {
-        const found = try config.findFile(ctx.io, .{ .name = "snek", .dirs = &search_dirs });
+        const found = try config.findFile(ctx.io, .{ .name = "termancy", .dirs = &search_dirs });
         if (found) |file| {
             ctx.log(.debug, "found {s}", .{file});
-        } else ctx.log(.debug, "no snek.* file in {s}, {s}, or {s}", .{
+        } else ctx.log(.debug, "no termancy.* file in {s}, {s}, or {s}", .{
             search_dirs[0], search_dirs[1], search_dirs[2],
         });
         break :discovered if (found) |file| try ctx.arena.dupe([]const u8, &.{file}) else &.{};
@@ -79,10 +79,10 @@ pub fn load(ctx: *cli.Context, global: Global) !cfg.Config {
         try config.useProfile(profile);
         ctx.log(.debug, "profile {s}", .{profile});
     } else if (try currentProfile(&config)) |profile| {
-        // Chosen with `snek cfg profile use`; one since removed is ignored.
+        // Chosen with `termancy cfg profile use`; one since removed is ignored.
         if (hasProfile(&config, profile)) {
             try config.useProfile(profile);
-            ctx.log(.debug, "profile {s}, chosen with snek cfg profile use", .{profile});
+            ctx.log(.debug, "profile {s}, chosen with termancy cfg profile use", .{profile});
         } else ctx.log(.debug, "no profile {s} any more; none applied", .{profile});
     }
     for (global.set) |assignment| {
@@ -113,7 +113,7 @@ fn loadFile(ctx: *cli.Context, config: *cfg.Config, file: []const u8) !void {
         error.SyntaxError => return ctx.fail("{f}", .{diag}),
         error.SecretNotFound => return ctx.fail("{s}: {s}: {s}", .{ file, diag.key, diag.message }),
         error.PassphraseRequired => return ctx.fail(
-            "{s}: encrypted; set SNEK_PASSPHRASE to read it",
+            "{s}: encrypted; set TERMANCY_PASSPHRASE to read it",
             .{file},
         ),
         error.WrongPassphrase => return ctx.fail(
@@ -134,7 +134,7 @@ fn isUrl(file: []const u8) bool {
     return std.mem.startsWith(u8, file, "https://") or std.mem.startsWith(u8, file, "http://");
 }
 
-/// Loads a configuration file served over HTTP, through a cache in snek's cache
+/// Loads a configuration file served over HTTP, through a cache in termancy's cache
 /// directory: fetched again only when it changed, and read from the cache (with a
 /// warning) when the server cannot be reached.
 fn loadUrl(ctx: *cli.Context, config: *cfg.Config, url: []const u8) !void {
@@ -143,7 +143,7 @@ fn loadUrl(ctx: *cli.Context, config: *cfg.Config, url: []const u8) !void {
     const path_text = path.toRaw(&path_buffer) catch "";
     const format = cfg.Format.fromPath(path_text) orelse
         return ctx.fail("{s}: " ++ unknown_format, .{url});
-    const cache_root = platform.dirs.nativePath(ctx.arena, ctx.environ, .cache, "snek") catch
+    const cache_root = sys.dirs.nativePath(ctx.arena, ctx.environ, .cache, "termancy") catch
         return ctx.fail("{s}: no cache directory (HOME is not set)", .{url});
     const cache_path = try std.fs.path.join(ctx.arena, &.{ cache_root, "remote" });
     var cache = std.Io.Dir.cwd().createDirPathOpen(ctx.io, cache_path, .{}) catch |err|
@@ -151,8 +151,8 @@ fn loadUrl(ctx: *cli.Context, config: *cfg.Config, url: []const u8) !void {
     defer cache.close(ctx.io);
     var client: std.http.Client = .{ .allocator = ctx.gpa, .io = ctx.io };
     defer client.deinit();
-    var http: platform.remote.HttpFetcher = .{ .client = &client };
-    const file = platform.remote.get(
+    var http: sys.remote.HttpFetcher = .{ .client = &client };
+    const file = sys.remote.get(
         ctx.io,
         ctx.gpa,
         http.fetcher(),
@@ -175,10 +175,10 @@ fn loadUrl(ctx: *cli.Context, config: *cfg.Config, url: []const u8) !void {
     };
 }
 
-/// The key `snek cfg profile use` records the default profile under.
+/// The key `termancy cfg profile use` records the default profile under.
 pub const current_profile_key = "current_profile";
 
-/// The profile `snek cfg profile use` chose, if any.
+/// The profile `termancy cfg profile use` chose, if any.
 pub fn currentProfile(config: *cfg.Config) !?[]const u8 {
     const value = try config.get(current_profile_key) orelse return null;
     return if (value == .string) value.string else null;
@@ -197,7 +197,7 @@ pub fn targetFile(ctx: *cli.Context, global: Global) ![]const u8 {
     var config: cfg.Config = .init(ctx.gpa);
     defer config.deinit();
     config.useEnv(ctx.environ);
-    const found = try config.findFile(ctx.io, .{ .name = "snek", .dirs = &search_dirs }) orelse {
+    const found = try config.findFile(ctx.io, .{ .name = "termancy", .dirs = &search_dirs }) orelse {
         return ctx.fail("no config file found; pass --config <path>", .{});
     };
     ctx.log(.debug, "found {s}", .{found});
@@ -293,7 +293,7 @@ pub fn writeSystemd(ctx: *cli.Context, value: cfg.Value) !void {
             },
             else => try text.writer.print("{f}", .{leaf}),
         }
-        try platform.daemon.writeSystemdEnvironment(w, name.written(), text.written());
+        try sys.daemon.writeSystemdEnvironment(w, name.written(), text.written());
     }
     try ctx.out.writeAll(out.written());
 }
@@ -374,7 +374,7 @@ pub fn completeFileKeys(ctx: *cli.Context, prefix: []const u8) ![]const cli.Cand
     return candidatesOf(ctx, leaves.items);
 }
 
-/// Files in a format snek reads, for `--config` and file arguments.
+/// Files in a format termancy reads, for `--config` and file arguments.
 pub fn completeConfigFiles(ctx: *cli.Context, prefix: []const u8) ![]const cli.Candidate {
     _ = ctx;
     _ = prefix;
@@ -389,7 +389,7 @@ const config_files = [_]cli.Candidate{
 pub fn completeProfiles(ctx: *cli.Context, prefix: []const u8) ![]const cli.Candidate {
     _ = prefix;
     var global = try ctx.flags(Global);
-    global.profile = null; // A profile from SNEK_PROFILE that does not exist must not fail.
+    global.profile = null; // A profile from TERMANCY_PROFILE that does not exist must not fail.
     var config = try load(ctx, global);
     defer config.deinit();
     return candidatesOf(ctx, config.profileNames());

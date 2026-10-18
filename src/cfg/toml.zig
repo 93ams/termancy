@@ -1415,7 +1415,7 @@ test "write a representative document" {
     defer arena.deinit();
     const a = arena.allocator();
     const source =
-        \\title = "snek \"v1\""
+        \\title = "termancy \"v1\""
         \\ports = [8000, 8001]
         \\ratio = 5e-1
         \\point = {x=1, y = {}}
@@ -1439,7 +1439,7 @@ test "write a representative document" {
     defer out.deinit();
     try write(&out.writer, value, .{});
     try testing.expectEqualStrings(
-        \\title = "snek \"v1\""
+        \\title = "termancy \"v1\""
         \\ports = [8000, 8001]
         \\ratio = 0.5
         \\mixed = [1, { a = 1 }]

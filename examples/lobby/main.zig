@@ -2,16 +2,16 @@
 //! connects gets the same `tui` program in their own terminal, and what one signs, the
 //! others see. It shows:
 //!
-//! - `platform.ssh.Server`: logins by public key (or anyone, for a demo), one task per
+//! - `sys.ssh.Server`: logins by public key (or anyone, for a demo), one task per
 //!   session, the session's terminal type and size;
-//! - `platform.web.Server`: the same lobby in a browser tab (`--web`), behind a token;
+//! - `sys.web.Server`: the same lobby in a browser tab (`--web`), behind a token;
 //! - `tui.runSession`: a program run over a remote session instead of a terminal,
 //!   resizes and all;
 //! - state shared between sessions, behind an `Io.Mutex`, refreshed on a timer;
 //! - `term.Style` borders with a title and a gradient (Lip Gloss's border blend), and the
 //!   registry's `input` and `stopwatch` components;
 //! - tests: keys through `tui.testing.Driver`, the screen against a golden file
-//!   (`SNEK_UPDATE_GOLDEN=1 zig build examples` rewrites it), and the session path with a
+//!   (`TERMANCY_UPDATE_GOLDEN=1 zig build examples` rewrites it), and the session path with a
 //!   scripted session.
 //!
 //!     zig build examples
@@ -24,12 +24,12 @@ const std = @import("std");
 const cli = @import("cli");
 const tui = @import("tui");
 const term = @import("term");
-const platform = @import("platform");
+const sys = @import("sys");
 const components = @import("components");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const ssh = platform.ssh;
-const web = platform.web;
+const ssh = sys.ssh;
+const web = sys.web;
 
 /// What everyone has signed, shared by every session.
 pub const Guestbook = struct {
@@ -211,7 +211,7 @@ fn serve(ctx: *cli.Context, flags: ServeFlags) !void {
     var book: Guestbook = .{ .gpa = ctx.gpa, .io = ctx.io };
     defer book.deinit();
     var served: Served = .{ .book = &book, .allowed = allowed, .gpa = ctx.gpa, .io = ctx.io };
-    // A real server keeps its host key (see `snek tui serve`); a demo makes one each run.
+    // A real server keeps its host key (see `termancy serve`); a demo makes one each run.
     const host_key: ssh.keys.KeyPair = .generate(ctx.io);
     const host = flags.listen[0 .. std.mem.lastIndexOfScalar(u8, flags.listen, ':') orelse 0];
     try ctx.err.print("the lobby is open on {s}: ssh -p {d} <name>@{s}\n", .{

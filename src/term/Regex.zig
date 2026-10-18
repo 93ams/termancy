@@ -1,5 +1,5 @@
 //! Regular expressions, small and dependable: for waiting until a screen shows something
-//! (`snek cli record`'s `Wait /pattern/`) and for matching lines in tests. A backtracking
+//! (`termancy record`'s `Wait /pattern/`) and for matching lines in tests. A backtracking
 //! matcher over a compiled program, with a step limit so a pathological pattern fails
 //! instead of hanging.
 //!
@@ -514,9 +514,9 @@ test "groups, alternation, quantifiers" {
 test matchesWhole {
     var re = try compile(testing.allocator, "[a-z]+(-[a-z]+)*");
     defer re.deinit(testing.allocator);
-    try testing.expect(re.matchesWhole("snek-cli-record"));
-    try testing.expect(!re.matchesWhole("snek-"));
-    try testing.expect(!re.matchesWhole("snek cli"));
+    try testing.expect(re.matchesWhole("termancy-record"));
+    try testing.expect(!re.matchesWhole("termancy-"));
+    try testing.expect(!re.matchesWhole("termancy cli"));
 }
 
 test "bad patterns, and a pathological one ends" {

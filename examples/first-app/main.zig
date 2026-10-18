@@ -13,7 +13,7 @@ const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
 const tui = @import("tui");
-// `snek tui add select` copied select.zig, and list.zig which it requires, into src/ui.
+// `termancy tui add select` copied select.zig, and list.zig which it requires, into src/ui.
 const Select = @import("ui/select.zig").Select;
 
 /// What brew.toml holds.
@@ -112,7 +112,7 @@ fn pick(ctx: *cli.Context, flags: PickFlags) !void {
 
 pub const root = cli.command(.{
     .name = "brew",
-    .summary = "Brew coffee, as your first snek app",
+    .summary = "Brew coffee, as your first termancy app",
     .subcommands = .{
         cli.command(.{
             .name = "make",

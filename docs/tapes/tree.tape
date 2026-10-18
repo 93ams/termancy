@@ -2,7 +2,7 @@
 Set FontSize 16
 Set Width 760
 Set Height 360
-Type "snek tui demo tree"
+Type "termancy ui demo tree"
 Enter
 Sleep 1s
 Down@300ms 2

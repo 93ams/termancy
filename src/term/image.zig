@@ -1,6 +1,6 @@
 //! Images: pixels in memory, PNG written and read, animated GIFs written, and JPEGs read
 //! (`decode` reads any of them), with no dependency (deflate is the standard library's).
-//! What `snek cli record` and `freeze` write their pictures with, and what the terminal
+//! What `termancy record` and `freeze` write their pictures with, and what the terminal
 //! image protocols (`graphics`) read.
 //!
 //! ```zig

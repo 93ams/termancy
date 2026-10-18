@@ -1,5 +1,5 @@
 //! Golden files: output checked against a file kept with the tests, and the file rewritten
-//! instead when asked (`SNEK_UPDATE_GOLDEN=1 zig build test`). Escape sequences are written
+//! instead when asked (`TERMANCY_UPDATE_GOLDEN=1 zig build test`). Escape sequences are written
 //! out as text (`\x1b[1m`), so golden files of styled output read and diff as text.
 //!
 //! ```zig
@@ -16,11 +16,11 @@ const Writer = Io.Writer;
 const diff = @import("diff.zig");
 
 /// The variable that makes `expect` rewrite golden files instead of comparing.
-pub const update_variable = "SNEK_UPDATE_GOLDEN";
+pub const update_variable = "TERMANCY_UPDATE_GOLDEN";
 
 /// How `expect` compares.
 pub const Options = struct {
-    /// Rewrite the file; when null, as `SNEK_UPDATE_GOLDEN` says (in tests).
+    /// Rewrite the file; when null, as `TERMANCY_UPDATE_GOLDEN` says (in tests).
     update: ?bool = null,
     /// Write control characters out as text (`\x1b`); off, the bytes as they are.
     escape: bool = true,

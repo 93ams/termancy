@@ -1,4 +1,4 @@
-//! `snek tui list`: the registry's components, and their state in the project.
+//! `termancy tui list`: the registry's components, and their state in the project.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -35,8 +35,8 @@ pub const command = cli.command(.{
     .flags = ListFlags,
     .output = true,
     .examples =
-    \\snek tui list
-    \\snek tui list -o json -C demo
+    \\termancy tui list
+    \\termancy tui list -o json -C demo
     ,
     .run = run,
 });

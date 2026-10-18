@@ -1,6 +1,6 @@
 # Roadmap
 
-What can make `cli`, `cfg`, `tui`, `platform`, and `snek` more capable and more mature,
+What can make `cli`, `cfg`, `tui`, `sys`, and `termancy` more capable and more mature,
 ordered within each section by value for effort.
 
 ## The rule: no bloat
@@ -10,7 +10,7 @@ A feature belongs here only if it obeys all of these:
 1. **Pay only for what you use.** If an app doesn't use it, nothing is compiled in, run, or
    shown in help. In practice: an optional `meta` key, an optional `App` or `Config` field
    with an inert default, or a separate module.
-2. **No new dependencies.** Standard library only. OS services live in `platform`; network
+2. **No new dependencies.** Standard library only. OS services live in `sys`; network
    calls are thin, explicit functions there, never part of `cli`, `cfg`, or `tui`.
 3. **No hidden work.** No threads, timers, or I/O the caller did not ask for. "Watch" and
    "refresh" are explicit calls.
@@ -19,7 +19,7 @@ A feature belongs here only if it obeys all of these:
 5. **The libraries stay independent.** `cli` and `tui` may build on `term`, the terminal
    layer they share; otherwise none imports another. They meet through conventions
    (`parse`, flag records, `std.mem.Allocator`, `*std.Io.Writer`, duck-typed sessions),
-   and the program (`snek`) composes them.
+   and the program (`termancy`) composes them.
 
 Size: **S** is about a day, **M** a few days, **L** a week or more.
 
@@ -61,31 +61,31 @@ loops. Nothing is left.
 
 ---
 
-## 3. `snek`
+## 3. `termancy`
 
 Shipped: `cfg diff` (of files or layers), `cfg env`, key and profile completion, `cfg edit`,
 `cfg schema infer|check`, `cfg merge`, `cfg init`, `-o systemd`, `cfg encrypt|decrypt`, and
 `cli repl`. Since then: projects from `cli init` have a `Settings` struct and a
-`zig build schema` step, so `snek cfg init --schema zig-out/schema.json` writes a starter
+`zig build schema` step, so `termancy cfg init --schema zig-out/schema.json` writes a starter
 file from the struct; and `cfg edit`'s edit-again loop is tested in a pseudo-terminal.
 Nothing is left.
 
 ---
 
-## 4. `tui` and `platform`
+## 4. `tui` and `sys`
 
 Shipped in `tui`: redrawing only the lines that changed (checked against whole redraws
 by a property test), `Cmd.handoff` for editors and pagers, Ctrl-Z and `fg` (both run in
 a real pseudo-terminal by the e2e tests), terminal queries (colors, modes, the kitty
 keyboard), `tui.Keymap`, underline shapes and colors, and the `viewport`, `tree`, and
-`filepicker` components (with `snek tui file`). Also: mouse in the components, the kitty
+`filepicker` components (with `termancy ui file`). Also: mouse in the components, the kitty
 keyboard protocol, the macOS pty e2e cases,
 `tui init --dependency`, retiring removed component files, release archives and
-pre-releases in `platform.update`, WebAuthn signature and sign-count checks, CTAP2 over
+pre-releases in `sys.update`, WebAuthn signature and sign-count checks, CTAP2 over
 CTAPHID with a Linux hidraw transport and ClientPIN (both PIN/UV auth protocols), and
 `proctitle.scrub` on Windows (through the process environment block, checked against
-`Get-CimInstance Win32_Process`), and signed self-update for snek (its release key is
-compiled into `snek platform update`, which requires signatures). Since then: `tui.run` and
+`Get-CimInstance Win32_Process`), and signed self-update for termancy (its release key is
+compiled into `termancy update`, which requires signatures). Since then: `tui.run` and
 `tui.runSession`, the model borrowed by pointer, Ctrl-Z as an ordinary key (undo), the
 cursor shown again when a live display is killed, and a browser terminal that caps
 sessions, drops silent tabs, and moves its token into a cookie. Left:
@@ -93,7 +93,7 @@ sessions, drops silent tabs, and moves its token into a cookie. Left:
 | Item | Size | Notes |
 |---|---|---|
 | **CTAP2 on macOS and Windows** | M | `ctap.Device` has a Linux hidraw implementation only. macOS needs IOKit's HID manager; on Windows an unelevated process cannot open a FIDO device, so the way there is `webauthn.dll`, a different API from CTAP. Everything else left for Windows is in [docs/windows.md](docs/windows.md). |
-| **Dogfooding leftovers** | S | From building `examples/repos`: `Keymap` modes were judged unnecessary (two keymaps chosen in `view` do it); `testing.Driver` frees a model only when its `deinit` is `pub fn (*M) void`, which is documented, not checked at compile time; `cfg` places its configuration directory by hand to match `platform.dirs`, since it imports only std, so the two must be kept in step; `help`, `paginator`, `stopwatch`, `timer`, and `shell` have no `snek tui demo`, so the site shows no GIF for them. |
+| **Dogfooding leftovers** | S | From building `examples/repos`: `Keymap` modes were judged unnecessary (two keymaps chosen in `view` do it); `testing.Driver` frees a model only when its `deinit` is `pub fn (*M) void`, which is documented, not checked at compile time; `cfg` places its configuration directory by hand to match `sys.dirs`, since it imports only std, so the two must be kept in step; `help`, `paginator`, `stopwatch`, `timer`, and `shell` have no `termancy ui demo`, so the site shows no GIF for them. |
 | **CTAP2 on a real key** | S | The protocol layers, ClientPIN included, are tested against a simulated authenticator (and AES-CBC against NIST's vectors); no hardware key has been through `Hidraw` yet. |
 
 ---
@@ -105,7 +105,7 @@ coverage-guided fuzzing of the `cfg` parsers, in-place edits, reformatting, and 
 (`zig build fuzz --fuzz`, with the corpus and regressions replayed by every test run; it
 has found a dotenv bug and two in YAML reformatting, and the decode property found strict
 decoding rejecting renamed keys), the release
-pipeline (`.github/workflows/release.yml` with `snek platform release` for signatures and
+pipeline (`.github/workflows/release.yml` with `termancy release` for signatures and
 manifests), the API stability policy ([docs/stability.md](docs/stability.md)) and
 [CHANGELOG.md](CHANGELOG.md), `examples/` (run by `zig build test`), generated reference
 docs (`zig build docs`, and the site, `zig build site`, published by
@@ -115,7 +115,7 @@ guide ([docs/upgrading-zig.md](docs/upgrading-zig.md)). Left:
 | Item | Size | Notes |
 |---|---|---|
 | **CI on its first run** | S | `ci.yml` (tests on Linux, macOS, and Windows, the Windows console checks, cross-compiling, coverage, fuzzing), `release.yml`, and `site.yml` have not run on GitHub yet. Every step except publishing was run locally: the six release builds, the archives (bar the Windows `.zip`, as this machine has no `zip`), signing, the manifests, the docs, kcov, and the fuzzer. |
-| **The release key in CI** | S | The key exists and `snek platform update` requires its signatures; its secret half must be stored as the `SNEK_SIGNING_KEY` repository secret, or `release.yml` fails at its Sign step. |
+| **The release key in CI** | S | The key exists and `termancy update` requires its signatures; its secret half must be stored as the `TERMANCY_SIGNING_KEY` repository secret, or `release.yml` fails at its Sign step. |
 
 ---
 
@@ -128,25 +128,25 @@ against these libraries. Shipped from that list:
 
 - **Flows** (`cli.Flow`): multi-step commands as graphs whose path follows the answers,
   usable from scripts (flags answer questions) and at a terminal (plain or component
-  prompts), with dry runs, undo, and JSON progress; `snek cli add --flow` scaffolds one.
+  prompts), with dry runs, undo, and JSON progress; `termancy cli add --flow` scaffolds one.
 - **`cli`:** translation with locale detection and plurals; confirmation (`--yes`),
   `--dry-run`, `--output` with `ctx.render`; feature gates; one-way `requires` and string
   lengths; user aliases; flag defaults from a configuration file; middleware.
 - **`cfg`:** section views; custom `${name:arg}` resolvers; upward file discovery;
-  remote files with an ETag cache (`platform.remote`); `snek cfg get --as`,
+  remote files with an ETag cache (`sys.remote`); `termancy cfg get --as`,
   `profile list|use`, and `fmt --sort`. Feature flags are a convention, not a feature:
   `App.feature_enabled` reading a `features` table.
 - **`tui`:** background work (`Cmd.work`); lines above an inline program; constraint
   layout (`layout.split`); focus rings and grids; desktop notifications and taskbar
   progress; SVG screenshots; the `multiprogress`, `chart`, and `markdown` components;
-  `snek tui demo`; plain prompts for screen readers (`ACCESSIBLE=1`).
+  `termancy ui demo`; plain prompts for screen readers (`ACCESSIBLE=1`).
 
 Then Charm's open-source libraries and tools, which the README maps one by one: the `term`
 module (lipgloss, ultraviolet, x/ansi, x/vt, colorprofile, glamour, sequin, mosaic and the
 image protocols), the cell renderer, motion, and SSH serving in `tui` (Bubble Tea,
 harmonica, wish), the huh-style `form` and more components (Bubbles), golden files
-(x/exp/golden, teatest), and in `snek`: `cli record` (vhs, with GIF), `cli freeze`,
-`cli explain`, `tui md` (glow), `tui image`, `tui serve`, and `platform ssh` (keygen,
+(x/exp/golden, teatest), and in `termancy`: `record` (vhs, with GIF), `freeze`,
+`explain`, `md` (glow), `image`, `serve`, and `ssh` (keygen,
 melt). Left from that list:
 
 | Item | Size | Notes |
@@ -180,5 +180,5 @@ These would make every user pay for what a few want:
 - A WASM plugin runtime. `cli.App.executeLine` covers embedding a CLI in a WASM host; running
   third-party WASM inside a CLI is a separate project.
 
-`tui` and `platform` (terminal UIs, daemons, self-update, telemetry, crash reports) were on
+`tui` and `sys` (terminal UIs, daemons, self-update, telemetry, crash reports) were on
 this list for 0.1 and shipped in 0.2.

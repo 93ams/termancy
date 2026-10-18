@@ -409,7 +409,7 @@ test "structs, tuples, and the empty literal" {
     const v = try parse(arena.allocator(),
         \\// A comment.
         \\.{
-        \\    .name = "snek",
+        \\    .name = "termancy",
         \\    .@"quoted key" = 1,
         \\    .@"while" = .{ 1, .{ 2, 3 }, .{} },
         \\    .nested = .{ .deeper = .{ .x = true } },
@@ -417,7 +417,7 @@ test "structs, tuples, and the empty literal" {
         \\    .@"\x41\u{e9}" = null,
         \\}
     , null);
-    try testing.expectEqualStrings("snek", v.lookup("name").?.string);
+    try testing.expectEqualStrings("termancy", v.lookup("name").?.string);
     try testing.expectEqual(1, v.table.get("quoted key").?.int);
     const tuple = v.table.get("while").?.array.items;
     try testing.expectEqual(3, tuple.len);
@@ -620,14 +620,14 @@ test "write a representative document" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const value = try parse(arena.allocator(),
-        \\.{ .name = "snek \"v1\"", .ports = .{ 8000, 8001 }, .ratio = 0.5,
+        \\.{ .name = "termancy \"v1\"", .ports = .{ 8000, 8001 }, .ratio = 0.5,
         \\  .server = .{ .host = "localhost", .tls = .{ .enabled = true } },
         \\  .users = .{ .{ .name = "a" }, .{} }, .mixed = .{ 1, .{ 2 } },
         \\  .empty = .{}, .@"not an id" = null, .@"if" = -inf, .u8 = 'x', ._ = .flag }
     , null);
     try expectWrite(value, .{},
         \\.{
-        \\    .name = "snek \"v1\"",
+        \\    .name = "termancy \"v1\"",
         \\    .ports = .{ 8000, 8001 },
         \\    .ratio = 0.5,
         \\    .server = .{

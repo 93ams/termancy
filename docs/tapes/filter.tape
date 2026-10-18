@@ -2,7 +2,7 @@
 Set FontSize 16
 Set Width 760
 Set Height 360
-Type "snek tui demo filter"
+Type "termancy ui demo filter"
 Enter
 Sleep 1s
 Type@200ms "an"

@@ -1,7 +1,7 @@
 //! Finding fonts on this machine by family name, as a terminal does when told to use
 //! "JetBrains Mono": the system's and the user's font directories (and, under WSL,
 //! Windows'), their TrueType files read only as far as their names. For `raster`, so
-//! `snek cli record` and `freeze` draw in a font the user has, with fallbacks for what it
+//! `termancy record` and `freeze` draw in a font the user has, with fallbacks for what it
 //! lacks (CJK, symbols).
 //!
 //! ```zig

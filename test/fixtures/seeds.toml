@@ -1,4 +1,4 @@
-# Starting contents for the files the editing tests change. `snek cfg get <key>` prints
+# Starting contents for the files the editing tests change. `termancy cfg get <key>` prints
 # one into a fresh file in the test's own output directory, so these never change.
 
 commented = """

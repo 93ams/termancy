@@ -14,7 +14,7 @@
 //! }
 //! ```
 //!
-//! A file whose hash still matches is the registry's, and `snek tui add` may replace it; a
+//! A file whose hash still matches is the registry's, and `termancy tui add` may replace it; a
 //! file whose hash differs was edited, and is left alone without `--force`.
 
 const std = @import("std");

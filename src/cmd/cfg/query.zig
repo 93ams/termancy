@@ -18,9 +18,9 @@ pub const get = cli.command(.{
     .flags = GetFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<key>", .complete = load.completeKeys },
     .examples =
-    \\snek cfg get server.port --default 8080
-    \\snek cfg get servers.0.host -c prod.toml
-    \\snek cfg get server -o json
+    \\termancy cfg get server.port --default 8080
+    \\termancy cfg get servers.0.host -c prod.toml
+    \\termancy cfg get server -o json
     ,
     .run = runGet,
 });
@@ -171,9 +171,9 @@ pub const show = cli.command(.{
     .group = group,
     .flags = ShowFlags,
     .examples =
-    \\snek cfg show -c base.toml -c local.yaml -o toml
-    \\snek cfg show --secret db.password
-    \\snek cfg show --layer env --env-prefix APP
+    \\termancy cfg show -c base.toml -c local.yaml -o toml
+    \\termancy cfg show --secret db.password
+    \\termancy cfg show --layer env --env-prefix APP
     ,
     .run = runShow,
 });
@@ -307,9 +307,9 @@ pub const env = cli.command(.{
     .group = group,
     .flags = EnvFlags,
     .examples =
-    \\eval "$(snek cfg env --prefix APP)"
-    \\snek cfg env --prefix APP --shell fish | source
-    \\snek cfg env --shell powershell | Out-String | Invoke-Expression
+    \\eval "$(termancy cfg env --prefix APP)"
+    \\termancy cfg env --prefix APP --shell fish | source
+    \\termancy cfg env --shell powershell | Out-String | Invoke-Expression
     ,
     .run = runEnv,
 });

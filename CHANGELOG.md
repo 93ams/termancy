@@ -9,6 +9,19 @@ git history.
 
 ### Breaking
 
+- **snek is now termancy, and the `platform` library is `sys`:** the program, the package
+  (`.termancy` in `build.zig.zon`, with a new fingerprint), the repository URL, release
+  archives (`termancy-<os>-<cpu>`), configuration files and directories (`termancy.toml`,
+  `~/.config/termancy`), environment variables (`TERMANCY_*`), and plugins (`termancy-<name>`).
+  `@import("platform")` is `@import("sys")`. Files encrypted by `cfg.encrypted` start with
+  `termancy-encrypted`, which the encryption authenticates, so files sealed as
+  `snek-encrypted` must be decrypted with snek and sealed again. Entries below keep the old
+  names.
+- **snek's commands are grouped by what they act on, not by library:** `platform` is gone;
+  its `dirs`, `info`, `update`, `release`, and `ssh` move to the top level, and `platform
+  webauthn` becomes `passkey`. `cli freeze`, `cli record`, `cli explain`, `tui md`, `tui
+  image`, and `tui serve` move to the top level too. The gum-style widgets and `demo` move
+  from `tui` to `ui` (`snek ui choose`); `tui` keeps `init`, `add`, `list`, and `diff`.
 - **snek uses the library's built-ins:** `platform update` without a terminal (or under CI)
   and without `--yes` exits 1 naming `--yes` (was 2), and a declined update says "not
   confirmed; nothing was done". `platform update`, `tui add` (several components), `cli

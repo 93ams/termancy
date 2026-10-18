@@ -1,4 +1,4 @@
-# Runs the full gate on the three systems snek supports, Windows on both x86_64 and
+# Runs the full gate on the three systems termancy supports, Windows on both x86_64 and
 # ARM64. `zig build test` is the format check, unit, end-to-end, and compile-error tests;
 # `zig build check` cross-compiles for every target, so a change that breaks one is caught
 # on any runner.
@@ -69,7 +69,7 @@ jobs:
           path: zig-out/coverage
 
   # A bounded run of the coverage-guided fuzzer over the parsers of untrusted input (cfg,
-  # term, platform, and the tape parser), 30K runs per target (about ten minutes). A crash
+  # term, sys, and the tape parser), 30K runs per target (about ten minutes). A crash
   # fails the job; add its input to the regressions in the `fuzz.zig` holding the target.
   fuzz:
     runs-on: ubuntu-latest

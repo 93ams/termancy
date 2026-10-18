@@ -1,4 +1,4 @@
-//! `snek cfg profile list|use`: the `profiles.<name>` sections, and the one used by
+//! `termancy cfg profile list|use`: the `profiles.<name>` sections, and the one used by
 //! default.
 
 const std = @import("std");
@@ -12,7 +12,7 @@ pub const command = cli.command(.{
     .summary = "List profiles, or choose the one used by default",
     .description =
     \\A profile is a profiles.<name> section, applied over the rest of the file. --profile
-    \\(or $SNEK_PROFILE) chooses one for a run; "profile use" records one in the config
+    \\(or $TERMANCY_PROFILE) chooses one for a run; "profile use" records one in the config
     \\file, as current_profile, for every run that does not choose.
     ,
     .group = "Query Commands",
@@ -53,8 +53,8 @@ const use = cli.command(.{
     .flags = UseFlags,
     .args = .{ .max = 1, .usage = "<name>", .complete = load.completeProfiles },
     .examples =
-    \\snek cfg profile use staging
-    \\snek cfg profile use --clear
+    \\termancy cfg profile use staging
+    \\termancy cfg profile use --clear
     ,
     .run = runUse,
 });

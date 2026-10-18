@@ -1,11 +1,11 @@
-//! The files of a generated project, as `snek cli add` changes them: edits are planned in
+//! The files of a generated project, as `termancy cli add` changes them: edits are planned in
 //! memory, checked, and only then written, every path confined to the project directory.
 
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
-const platform = @import("platform");
+const sys = @import("sys");
 
 pub const InsertError = error{
     /// The file has no line that is exactly the marker (after indentation).
@@ -54,11 +54,11 @@ pub const PathError = error{
 };
 
 /// Checks that `sub_path` stays inside `root`: lexically (relative, no `.` or `..`
-/// components), and on disk, through `platform.sandbox`, where the path must resolve under
+/// components), and on disk, through `sys.sandbox`, where the path must resolve under
 /// `root`'s real path, so a symbolic link cannot lead out.
 pub fn checkInside(io: Io, root: Io.Dir, sub_path: []const u8) PathError!void {
     if (!isSafeRelative(sub_path)) return error.UnsafePath;
-    const policy: platform.sandbox.Policy = .{ .roots = &.{"."} };
+    const policy: sys.sandbox.Policy = .{ .roots = &.{"."} };
     policy.check(io, root, sub_path) catch |err| return switch (err) {
         error.SymlinkEscape, error.Unresolvable => error.OutsideProject,
         error.EmptyPath,
@@ -183,23 +183,23 @@ test insertAtMarker {
     const arena = arena_state.allocator();
     const source =
         \\    .subcommands = .{
-        \\        // snek:subcommands
+        \\        // termancy:subcommands
         \\    },
         \\
     ;
-    const once = try insertAtMarker(arena, source, "// snek:subcommands", "a,");
-    const twice = try insertAtMarker(arena, once, "// snek:subcommands", "b,");
+    const once = try insertAtMarker(arena, source, "// termancy:subcommands", "a,");
+    const twice = try insertAtMarker(arena, once, "// termancy:subcommands", "b,");
     try testing.expectEqualStrings(
         \\    .subcommands = .{
         \\        a,
         \\        b,
-        \\        // snek:subcommands
+        \\        // termancy:subcommands
         \\    },
         \\
     , twice);
     try testing.expectError(
         error.AlreadyPresent,
-        insertAtMarker(arena, twice, "// snek:subcommands", "a,"),
+        insertAtMarker(arena, twice, "// termancy:subcommands", "a,"),
     );
     try testing.expectError(error.MarkerNotFound, insertAtMarker(arena, "x\n", "// m", "a,"));
     try testing.expectError(

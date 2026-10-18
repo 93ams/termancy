@@ -1,13 +1,13 @@
-//! `snek tui add <component>...`: copies components, and every component they require,
+//! `termancy tui add <component>...`: copies components, and every component they require,
 //! from the registry into the project, and records what it wrote in `tui.zon`. With no
-//! names at a terminal, asks which, with the multi-select `snek tui choose` uses.
+//! names at a terminal, asks which, with the multi-select `termancy ui choose` uses.
 
 const std = @import("std");
 const cli = @import("cli");
 const tui = @import("tui");
 const live = @import("term").live;
-const term = @import("gum/term.zig");
-const plain = @import("gum/plain.zig");
+const term = @import("../ui/term.zig");
+const plain = @import("../ui/plain.zig");
 const List = @import("registry/list.zig").List;
 const MultiSelect = @import("registry/multiselect.zig").MultiSelect;
 const catalog = @import("project/catalog.zig");
@@ -22,7 +22,7 @@ const AddFlags = struct {
     prune: bool = false,
     project: []const u8 = ".",
     pub const meta = .{
-        .force = .{ .help = "Replace files modified since snek tui add wrote them" },
+        .force = .{ .help = "Replace files modified since termancy tui add wrote them" },
         .prune = .{ .help = "Remove files a component no longer has, unless edited" },
         .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
     };
@@ -36,13 +36,13 @@ pub const command = cli.command(.{
     \\names, and record each file's SHA-256 in tui.zon. One line per file:
     \\
     \\  created    the file was missing
-    \\  updated    the file was as snek tui add last wrote it, and the registry has changed
+    \\  updated    the file was as termancy tui add last wrote it, and the registry has changed
     \\  unchanged  the file is already the registry's version
     \\  skipped (modified; use --force)
-    \\             the file was edited; snek tui diff <component> shows how
+    \\             the file was edited; termancy tui diff <component> shows how
     \\  retired (no longer part of <component>; use --prune)
     \\             a file an earlier version had; --prune removes it
-    \\  removed    with --prune, a retired file as snek tui add wrote it
+    \\  removed    with --prune, a retired file as termancy tui add wrote it
     \\  kept (retired, modified)
     \\             with --prune, a retired file that was edited, left alone
     \\
@@ -56,10 +56,10 @@ pub const command = cli.command(.{
     .dry_run = true,
     .args = .{ .max = null, .usage = "<component>..." },
     .examples =
-    \\snek tui add
-    \\snek tui add select
-    \\snek tui add form tabs --dry-run
-    \\snek tui add select --force -C demo
+    \\termancy tui add
+    \\termancy tui add select
+    \\termancy tui add form tabs --dry-run
+    \\termancy tui add select --force -C demo
     ,
     .run = run,
 });
@@ -68,7 +68,7 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
     // `tui.zon` marks the project, as for `diff` and `list`: build.zig may be further up.
     var ws: Workspace = try .open(ctx, flags.project, false);
     defer ws.close(ctx.io);
-    var m = try ws.loadManifest(ctx) orelse return ctx.fail("{s}{s}: not found (run snek " ++
+    var m = try ws.loadManifest(ctx) orelse return ctx.fail("{s}{s}: not found (run termancy " ++
         "tui init first)", .{ ws.prefix, manifest.file_name });
     ws.manifest_before = try ws.loadManifest(ctx);
     const components = try workspace.components(ctx);
@@ -104,17 +104,17 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
         };
     }
     try ctx.out.writeAll(report.written());
-    if (ctx.dry_run and !ctx.quiet) try ctx.err.writeAll("snek: dry run: nothing was written\n");
+    if (ctx.dry_run and !ctx.quiet) try ctx.err.writeAll("termancy: dry run: nothing was written\n");
     if (skipped.items.len > 0) {
         const names = try std.mem.join(ctx.arena, ", ", skipped.items);
-        return ctx.fail("edited files were left alone ({s}); review them with snek tui diff " ++
+        return ctx.fail("edited files were left alone ({s}); review them with termancy tui diff " ++
             "<component>, then pass --force to replace them", .{names});
     }
 }
 
 /// The names of the components chosen at the terminal. Without one to ask at, the usage
 /// error a missing argument gets; esc cancels with status 1 and Ctrl-C with 130, as
-/// `snek tui choose` does.
+/// `termancy ui choose` does.
 fn ask(ctx: *cli.Context, components: []const catalog.Component) ![]const []const u8 {
     if (!ctx.interactive) {
         var words: std.ArrayList([]const u8) = .empty;
@@ -168,7 +168,7 @@ fn resolve(
     var culprit: []const u8 = "";
     return catalog.resolve(ctx.arena, components, names, &culprit) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        error.UnknownComponent => ctx.usageError("unknown component \"{s}\" (snek tui list " ++
+        error.UnknownComponent => ctx.usageError("unknown component \"{s}\" (termancy tui list " ++
             "lists them)", .{culprit}),
         error.DependencyCycle => ctx.fail("the built-in registry is invalid: {s} requires " ++
             "itself", .{culprit}),

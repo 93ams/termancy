@@ -1,5 +1,5 @@
 //! A service monitor in the terminal: a `tui` program composed of registry components
-//! (`tabs`, `table`, `chart`, `spinner`, `progress`; `snek tui add` copies them into a
+//! (`tabs`, `table`, `chart`, `spinner`, `progress`; `termancy tui add` copies them into a
 //! project), with:
 //!
 //! - one model forwarding messages to the components it embeds, the Elm way;

@@ -1,13 +1,13 @@
-//! End-to-end tests for the `snek tui` registry commands: `snek cli init` makes a project,
-//! `snek tui init --wire`, `add`, `list`, and `diff` work on it, and then the project builds
+//! End-to-end tests for the `termancy tui` registry commands: `termancy cli init` makes a project,
+//! `termancy tui init --wire`, `add`, `list`, and `diff` work on it, and then the project builds
 //! with `zig build` and the copied components pass their tests, compiled against the `tui`
 //! module the project now imports.
 
 const std = @import("std");
 
-/// A run of `snek`, or of `zig`, in the chain's directory.
+/// A run of `termancy`, or of `zig`, in the chain's directory.
 const Step = struct {
-    /// Run `zig` with these arguments instead of `snek` (see `zigRun`).
+    /// Run `zig` with these arguments instead of `termancy` (see `zigRun`).
     zig: bool = false,
     /// The working directory, relative to the chain's directory.
     cwd: []const u8 = ".",
@@ -31,7 +31,7 @@ const demo_created =
     \\
 ++ "next: cd demo" ++ then ++ "zig build run -- --help\n";
 
-/// How `snek cli init` joins the commands of its "next:" hint.
+/// How `termancy cli init` joins the commands of its "next:" hint.
 const then = if (@import("builtin").os.tag == .windows) "\n      " else " && ";
 
 /// The files `select` brings, `list` (which it requires) first.
@@ -41,7 +41,7 @@ const steps = [_]Step{
     .{ .args = &.{ "cli", "init", "demo" }, .module_path = true, .stdout = demo_created },
     .{
         .args = &.{ "tui", "add", "-C", "demo", "select" },
-        .stderr = "snek: demo/tui.zon: not found (run snek tui init first)\n",
+        .stderr = "termancy: demo/tui.zon: not found (run termancy tui init first)\n",
         .status = 1,
     },
     .{
@@ -50,7 +50,7 @@ const steps = [_]Step{
         .args = &.{ "tui", "init", "-C", "demo/src", "--dir", "widgets" },
         .stdout = "created demo/src/tui.zon\ncreated demo/src/widgets/\n" ++
             "next: pass --wire, or add this import to the root module in demo/build.zig:\n" ++
-            "    .{ .name = \"tui\", .module = snek.module(\"tui\") },\n",
+            "    .{ .name = \"tui\", .module = termancy.module(\"tui\") },\n",
     },
     .{
         .args = &.{ "tui", "init", "-C", "demo", "--wire" },
@@ -70,21 +70,21 @@ const steps = [_]Step{
     .{ .args = &.{ "tui", "diff", "-C", "demo", "select" } },
     .{
         .args = &.{ "tui", "diff", "-C", "demo", "confirm" },
-        .stderr = "snek: confirm: not installed (snek tui add confirm installs it)\n" ++
-            "Run 'snek tui diff --help' for usage.\n",
+        .stderr = "termancy: confirm: not installed (termancy tui add confirm installs it)\n" ++
+            "Run 'termancy tui diff --help' for usage.\n",
         .status = 2,
     },
     .{
         .args = &.{ "tui", "add", "-C", "demo", "nope" },
-        .stderr = "snek: unknown component \"nope\" (snek tui list lists them)\n" ++
-            "Run 'snek tui add --help' for usage.\n",
+        .stderr = "termancy: unknown component \"nope\" (termancy tui list lists them)\n" ++
+            "Run 'termancy tui add --help' for usage.\n",
         .status = 2,
     },
     .{
         // Without a terminal to choose at, no names is a usage error.
         .args = &.{ "tui", "add", "-C", "demo" },
-        .stderr = "snek: \"snek tui add\" requires at least 1 argument, received 0\n" ++
-            "Run 'snek tui add --help' for usage.\n",
+        .stderr = "termancy: \"termancy tui add\" requires at least 1 argument, received 0\n" ++
+            "Run 'termancy tui add --help' for usage.\n",
         .status = 2,
     },
     .{
@@ -103,7 +103,7 @@ const steps = [_]Step{
     .{ .zig = true, .cwd = "demo", .args = &.{"build"}, .stderr = null },
 };
 
-/// `snek tui list -o json` after the steps, in part: the shape and the installed component.
+/// `termancy tui list -o json` after the steps, in part: the shape and the installed component.
 const list_json = [_][]const u8{
     "{\n  \"version\": 1,\n  \"manifest\": true,\n  \"components\": [\n",
     \\    {
@@ -123,9 +123,9 @@ const list_json = [_][]const u8{
 };
 
 pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.Step) void {
-    // The chain's directory is the output directory of a `snek version` run. No step has
+    // The chain's directory is the output directory of a `termancy version` run. No step has
     // side effects, so the chain is cached and runs again, in a new directory, only when
-    // snek or this file changes (the build system never empties a directory it reuses, so
+    // termancy or this file changes (the build system never empties a directory it reuses, so
     // a chain that failed part way must not get the same one back).
     const seed = b.addRunArtifact(exe);
     seed.setName("e2e: tui registry: directory");
@@ -136,7 +136,7 @@ pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
 
     var previous = &seed.step;
     for (steps, 1..) |s, index| {
-        const run = if (s.zig) zigRun(b, s.args) else snekRun(b, exe, s);
+        const run = if (s.zig) zigRun(b, s.args) else termancyRun(b, exe, s);
         run.setName(b.fmt("e2e: tui registry ({d})", .{index}));
         run.setCwd(dir.path(b, s.cwd));
         if (s.stdout) |bytes| run.expectStdOutEqual(bytes);
@@ -146,7 +146,7 @@ pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
         previous = &run.step;
     }
 
-    const list = snekRun(b, exe, .{ .args = &.{ "tui", "list", "-C", "demo", "-o", "json" } });
+    const list = termancyRun(b, exe, .{ .args = &.{ "tui", "list", "-C", "demo", "-o", "json" } });
     list.setName("e2e: tui registry: list -o json");
     list.setCwd(dir);
     list.step.dependOn(previous);
@@ -173,7 +173,7 @@ pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
     step.dependOn(previous);
 }
 
-fn snekRun(b: *std.Build, exe: *std.Build.Step.Compile, s: Step) *std.Build.Step.Run {
+fn termancyRun(b: *std.Build, exe: *std.Build.Step.Compile, s: Step) *std.Build.Step.Run {
     const run = b.addRunArtifact(exe);
     run.clearEnvironment();
     run.addArgs(s.args);

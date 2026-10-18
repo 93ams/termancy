@@ -1,4 +1,4 @@
-//! End-to-end tests: `snek` run as a process in `test/fixtures` (or a directory under it),
+//! End-to-end tests: `termancy` run as a process in `test/fixtures` (or a directory under it),
 //! with an empty environment plus what each case sets, comparing standard output, standard
 //! error, and exit status.
 //!
@@ -8,7 +8,7 @@
 //! generated completion scripts are also run by each shell the host has: bash, zsh, fish,
 //! and PowerShell (`pwsh`).
 
-/// What `snek --version` prints: the version in `build.zig.zon`.
+/// What `termancy --version` prints: the version in `build.zig.zon`.
 const version = @import("../build.zig.zon").version;
 const std = @import("std");
 const builtin = @import("builtin");
@@ -28,7 +28,7 @@ const Case = struct {
     status: u8 = 0,
 };
 
-const snek_toml_json =
+const termancy_toml_json =
     \\{
     \\  "name": "demo",
     \\  "debug": false,
@@ -44,7 +44,7 @@ const snek_toml_json =
     \\
 ;
 
-const snek_toml_yaml =
+const termancy_toml_yaml =
     \\name: demo
     \\debug: false
     \\server:
@@ -79,84 +79,84 @@ const cfg_subcommands =
 
 const unknown_format = "unknown format (use .toml, .yaml, .json, .jsonc, .zon, .env, or .ini)";
 
-const get_usage = "Usage:\n  snek cfg get [flags] <key>\n";
+const get_usage = "Usage:\n  termancy cfg get [flags] <key>\n";
 
 const cases = [_]Case{
     // Discovery and layering.
     .{
-        .name = "discovers snek.toml",
+        .name = "discovers termancy.toml",
         .args = &.{ "cfg", "get", "server.port" },
         .stdout = "8080\n",
     },
     .{
-        .name = "discovers snek.yaml",
+        .name = "discovers termancy.yaml",
         .args = &.{ "cfg", "explain" },
         .cwd = "yaml",
         .stdout =
         \\KEY          VALUE      SOURCE
-        \\name         from-yaml  file (./snek.yaml)
-        \\server.port  7001       file (./snek.yaml)
+        \\name         from-yaml  file (./termancy.yaml)
+        \\server.port  7001       file (./termancy.yaml)
         \\
         ,
     },
     .{
-        .name = "discovers snek.json",
+        .name = "discovers termancy.json",
         .args = &.{ "cfg", "explain" },
         .cwd = "json",
         .stdout =
         \\KEY          VALUE      SOURCE
-        \\name         from-json  file (./snek.json)
-        \\server.port  7002       file (./snek.json)
+        \\name         from-json  file (./termancy.json)
+        \\server.port  7002       file (./termancy.json)
         \\
         ,
     },
     .{
-        .name = "discovers snek.env",
+        .name = "discovers termancy.env",
         .args = &.{ "cfg", "explain" },
         .cwd = "env",
         .stdout =
         \\KEY          VALUE     SOURCE
-        \\name         from-env  file (./snek.env)
-        \\server.port  7003      file (./snek.env)
+        \\name         from-env  file (./termancy.env)
+        \\server.port  7003      file (./termancy.env)
         \\
         ,
     },
     .{
         .name = "later files win",
-        .args = &.{ "cfg", "get", "server.port", "-c", "snek.toml", "-c", "extra.yaml" },
+        .args = &.{ "cfg", "get", "server.port", "-c", "termancy.toml", "-c", "extra.yaml" },
         .stdout = "9090\n",
     },
     .{
         .name = "later files win, reversed",
-        .args = &.{ "cfg", "-c", "extra.yaml", "-c", "snek.toml", "explain", "server.port" },
+        .args = &.{ "cfg", "-c", "extra.yaml", "-c", "termancy.toml", "explain", "server.port" },
         .stdout =
         \\KEY          VALUE  SOURCE
-        \\server.port  8080   file (snek.toml)
+        \\server.port  8080   file (termancy.toml)
         \\
         ,
     },
     .{
         .name = "-c with an unknown extension",
         .args = &.{ "cfg", "-c", "notes.txt", "get", "a" },
-        .stderr = "snek: notes.txt: " ++ unknown_format ++ "\n",
+        .stderr = "termancy: notes.txt: " ++ unknown_format ++ "\n",
         .status = 1,
     },
     .{
         .name = "-c with a missing file",
         .args = &.{ "cfg", "-c", "missing.toml", "get", "a" },
-        .stderr = "snek: missing.toml: no such file\n",
+        .stderr = "termancy: missing.toml: no such file\n",
         .status = 1,
     },
     .{
         .name = "TOML syntax error",
         .args = &.{ "cfg", "-c", "bad.toml", "get", "a" },
-        .stderr = "snek: bad.toml:2:5: expected a value\n",
+        .stderr = "termancy: bad.toml:2:5: expected a value\n",
         .status = 1,
     },
     .{
         .name = "YAML syntax error",
         .args = &.{ "cfg", "-c", "bad.yaml", "get", "a" },
-        .stderr = "snek: bad.yaml:3:2: inconsistent indentation\n",
+        .stderr = "termancy: bad.yaml:3:2: inconsistent indentation\n",
         .status = 1,
     },
     .{
@@ -169,34 +169,34 @@ const cases = [_]Case{
         .args = &.{ "cfg", "--profile", "prod", "explain", "server.host" },
         .stdout =
         \\KEY          VALUE        SOURCE
-        \\server.host  example.com  profile (./snek.toml)
+        \\server.host  example.com  profile (./termancy.toml)
         \\
         ,
     },
     .{
-        .name = "SNEK_PROFILE selects the profile",
+        .name = "TERMANCY_PROFILE selects the profile",
         .args = &.{ "cfg", "get", "server.host" },
-        .env = &.{.{ "SNEK_PROFILE", "prod" }},
+        .env = &.{.{ "TERMANCY_PROFILE", "prod" }},
         .stdout = "example.com\n",
     },
     .{
         .name = "unknown profile",
         .args = &.{ "cfg", "--profile", "qa", "get", "server.host" },
-        .stderr = "snek: no profile \"qa\" in the loaded files\n",
+        .stderr = "termancy: no profile \"qa\" in the loaded files\n",
         .status = 1,
     },
     .{
-        .name = "--profile beats SNEK_PROFILE",
+        .name = "--profile beats TERMANCY_PROFILE",
         .args = &.{ "cfg", "--profile", "qa", "get", "server.host" },
-        .env = &.{.{ "SNEK_PROFILE", "prod" }},
-        .stderr = "snek: no profile \"qa\" in the loaded files\n",
+        .env = &.{.{ "TERMANCY_PROFILE", "prod" }},
+        .stderr = "termancy: no profile \"qa\" in the loaded files\n",
         .status = 1,
     },
     .{
-        .name = "unknown profile from SNEK_PROFILE",
+        .name = "unknown profile from TERMANCY_PROFILE",
         .args = &.{ "cfg", "get", "server.host" },
-        .env = &.{.{ "SNEK_PROFILE", "qa" }},
-        .stderr = "snek: no profile \"qa\" in the loaded files\n",
+        .env = &.{.{ "TERMANCY_PROFILE", "qa" }},
+        .stderr = "termancy: no profile \"qa\" in the loaded files\n",
         .status = 1,
     },
     .{
@@ -208,13 +208,13 @@ const cases = [_]Case{
     .{
         .name = "flags read the environment",
         .args = &.{ "cfg", "get", "server.port" },
-        .env = &.{.{ "SNEK_CONFIG", "snek.toml,extra.yaml" }},
+        .env = &.{.{ "TERMANCY_CONFIG", "termancy.toml,extra.yaml" }},
         .stdout = "9090\n",
     },
     .{
-        .name = "SNEK_CONFIG list in order",
+        .name = "TERMANCY_CONFIG list in order",
         .args = &.{ "cfg", "explain" },
-        .env = &.{.{ "SNEK_CONFIG", "extra.yaml,app.env" }},
+        .env = &.{.{ "TERMANCY_CONFIG", "extra.yaml,app.env" }},
         .stdout =
         \\KEY          VALUE  SOURCE
         \\app_name     demo   file (app.env)
@@ -239,21 +239,21 @@ const cases = [_]Case{
     .{
         .name = "--set without =",
         .args = &.{ "cfg", "--set", "server.port", "get", "name" },
-        .stderr = "snek: --set expects key=value, got \"server.port\"\n" ++
-            "Run 'snek cfg get --help' for usage.\n",
+        .stderr = "termancy: --set expects key=value, got \"server.port\"\n" ++
+            "Run 'termancy cfg get --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "--set with an invalid key",
         .args = &.{ "cfg", "--set", "a..b=1", "get", "name" },
-        .stderr = "snek: --set: invalid key \"a..b\"\n" ++
-            "Run 'snek cfg get --help' for usage.\n",
+        .stderr = "termancy: --set: invalid key \"a..b\"\n" ++
+            "Run 'termancy cfg get --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "--set crossing a scalar",
         .args = &.{ "cfg", "--set", "a=1", "--set", "a.b=2", "get", "a" },
-        .stderr = "snek: --set: \"a.b\" crosses a value that is not a table\n",
+        .stderr = "termancy: --set: \"a.b\" crosses a value that is not a table\n",
         .status = 1,
     },
 
@@ -301,7 +301,7 @@ const cases = [_]Case{
     .{
         .name = "get past the end of an array",
         .args = &.{ "cfg", "-c", "servers.toml", "get", "servers.2.host" },
-        .stderr = "snek: key \"servers.2.host\" is not set\n",
+        .stderr = "termancy: key \"servers.2.host\" is not set\n",
         .status = 1,
     },
     .{
@@ -337,19 +337,19 @@ const cases = [_]Case{
     .{
         .name = "a scalar cannot be TOML",
         .args = &.{ "cfg", "get", "name", "-o", "toml" },
-        .stderr = "snek: this value cannot be written as toml\n",
+        .stderr = "termancy: this value cannot be written as toml\n",
         .status = 1,
     },
     .{
         .name = "a scalar cannot be env",
         .args = &.{ "cfg", "get", "name", "-o", "env" },
-        .stderr = "snek: this value cannot be written as env\n",
+        .stderr = "termancy: this value cannot be written as env\n",
         .status = 1,
     },
     .{
         .name = "missing key",
         .args = &.{ "cfg", "get", "missing" },
-        .stderr = "snek: key \"missing\" is not set\n",
+        .stderr = "termancy: key \"missing\" is not set\n",
         .status = 1,
     },
 
@@ -361,26 +361,26 @@ const cases = [_]Case{
     .{
         .name = "get --as fails for the wrong type",
         .args = &.{ "cfg", "get", "server.host", "--as", "int" },
-        .stderr = "snek: server.host: expected an integer of type i64\n",
+        .stderr = "termancy: server.host: expected an integer of type i64\n",
         .status = 1,
     },
 
     .{
         .name = "--log-level debug says which files were loaded",
-        .args = &.{ "cfg", "-c", "snek.toml", "--log-level", "debug", "get", "server.port" },
+        .args = &.{ "cfg", "-c", "termancy.toml", "--log-level", "debug", "get", "server.port" },
         .stdout = "8080\n",
-        .stderr = "snek: debug: loaded snek.toml\n",
+        .stderr = "termancy: debug: loaded termancy.toml\n",
     },
 
     // validate --schema
     .{
         .name = "validate against a schema",
         .args = &.{
-            "cfg",       "validate", "--schema",   "schema.json",
-            "snek.toml", "app.ini",  "extra.yaml",
+            "cfg",           "validate", "--schema",   "schema.json",
+            "termancy.toml", "app.ini",  "extra.yaml",
         },
-        .stdout = "snek.toml: ok\napp.ini: ok\n",
-        .stderr = "snek: extra.yaml: name: required key is missing\n",
+        .stdout = "termancy.toml: ok\napp.ini: ok\n",
+        .stderr = "termancy: extra.yaml: name: required key is missing\n",
         .status = 1,
     },
     .{
@@ -388,10 +388,10 @@ const cases = [_]Case{
         .args = &.{ "cfg", "validate", "--schema", "lint-schema.json", "lint.toml" },
         .stdout = "lint.toml: ok\n",
         .stderr =
-        \\snek: warning: lint.toml:4:12: db.password: a secret in plain text (use ${secret:...})
+        \\termancy: warning: lint.toml:4:12: db.password: a secret in plain text (use ${secret:...})
         \\  4 | password = "hunter2"
         \\    |            ^
-        \\snek: warning: lint.toml:6:12: db.old_port: deprecated: use port
+        \\termancy: warning: lint.toml:6:12: db.old_port: deprecated: use port
         \\  6 | old_port = 5
         \\    |            ^
         \\
@@ -406,10 +406,10 @@ const cases = [_]Case{
         .name = "validate suggests the key a typo meant",
         .args = &.{ "cfg", "validate", "--schema", "schema.json", "typo.toml" },
         .stderr =
-        \\snek: warning: typo.toml:2:10: srever: unknown key; did you mean 'server'?
+        \\termancy: warning: typo.toml:2:10: srever: unknown key; did you mean 'server'?
         \\  2 | srever = "x"
         \\    |          ^
-        \\snek: typo.toml:5:8: server.prot: unknown key; did you mean 'port'?
+        \\termancy: typo.toml:5:8: server.prot: unknown key; did you mean 'port'?
         \\  5 | prot = 8080
         \\    |        ^
         \\
@@ -420,16 +420,16 @@ const cases = [_]Case{
         .name = "validate against a schema reports every problem",
         .args = &.{ "cfg", "validate", "--schema", "schema.json", "invalid.yaml" },
         .stderr =
-        \\snek: invalid.yaml:1:7: name: must be at least 2 characters
+        \\termancy: invalid.yaml:1:7: name: must be at least 2 characters
         \\  1 | name: x
         \\    |       ^
-        \\snek: invalid.yaml:3:9: server.port: must be at least 1
+        \\termancy: invalid.yaml:3:9: server.port: must be at least 1
         \\  3 |   port: 0
         \\    |         ^
-        \\snek: invalid.yaml:4:10: server.extra: unknown key
+        \\termancy: invalid.yaml:4:10: server.extra: unknown key
         \\  4 |   extra: 1
         \\    |          ^
-        \\snek: invalid.yaml:5:9: server.tags.1: expected string, found an integer
+        \\termancy: invalid.yaml:5:9: server.tags.1: expected string, found an integer
         \\  5 |   tags: [a, 2]
         \\    |         ^
         \\
@@ -449,13 +449,13 @@ const cases = [_]Case{
         },
         .env = &.{.{ "APP_SERVER_HOST", "1" }},
         .stderr =
-        \\snek: invalid.yaml:3:9: server.port: must be at least 1
+        \\termancy: invalid.yaml:3:9: server.port: must be at least 1
         \\  3 |   port: 0
         \\    |         ^
-        \\snek: invalid.yaml:4:10: server.extra: unknown key
+        \\termancy: invalid.yaml:4:10: server.extra: unknown key
         \\  4 |   extra: 1
         \\    |          ^
-        \\snek: invalid.yaml:5:9: server.tags.1: expected string, found an integer
+        \\termancy: invalid.yaml:5:9: server.tags.1: expected string, found an integer
         \\  5 |   tags: [a, 2]
         \\    |         ^
         \\
@@ -469,8 +469,8 @@ const cases = [_]Case{
             "--set", "name=x",
         },
         .env = &.{.{ "APP_SERVER_PORT", "0" }},
-        .stderr = "snek: name: must be at least 2 characters (from --set)\n" ++
-            "snek: server.port: must be at least 1 (from $APP_SERVER_PORT)\n",
+        .stderr = "termancy: name: must be at least 2 characters (from --set)\n" ++
+            "termancy: server.port: must be at least 1 (from $APP_SERVER_PORT)\n",
         .status = 1,
     },
 
@@ -500,7 +500,7 @@ const cases = [_]Case{
         .name = "redact standard input needs --from",
         .args = &.{ "cfg", "redact", "-" },
         .stdin = "",
-        .stderr = "snek: reading standard input needs --from\n",
+        .stderr = "termancy: reading standard input needs --from\n",
         .status = 1,
     },
 
@@ -526,20 +526,20 @@ const cases = [_]Case{
     },
     .{
         .name = "diff needs two files or two layers",
-        .args = &.{ "cfg", "diff", "snek.toml" },
-        .stderr = "snek: give two files, or --layer twice\nRun 'snek cfg diff --help' for usage.\n",
+        .args = &.{ "cfg", "diff", "termancy.toml" },
+        .stderr = "termancy: give two files, or --layer twice\nRun 'termancy cfg diff --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "schema check",
-        .args = &.{ "cfg", "schema", "check", "schema.json", "snek.toml" },
-        .stdout = "snek.toml: ok\n",
+        .args = &.{ "cfg", "schema", "check", "schema.json", "termancy.toml" },
+        .stdout = "termancy.toml: ok\n",
     },
     .{
         .name = "edit needs a terminal",
         .args = &.{ "cfg", "edit" },
-        .stderr = "snek: edit needs a terminal; use \"snek cfg set\" in scripts\n" ++
-            "Run 'snek cfg edit --help' for usage.\n",
+        .stderr = "termancy: edit needs a terminal; use \"termancy cfg set\" in scripts\n" ++
+            "Run 'termancy cfg edit --help' for usage.\n",
         .status = 2,
     },
 
@@ -567,7 +567,7 @@ const cases = [_]Case{
     // diff
     .{
         .name = "diff across formats",
-        .args = &.{ "cfg", "diff", "snek.toml", "json/snek.json" },
+        .args = &.{ "cfg", "diff", "termancy.toml", "json/termancy.json" },
         .stdout =
         \\- debug = false
         \\- name = demo
@@ -583,12 +583,12 @@ const cases = [_]Case{
     },
     .{
         .name = "diff of identical configurations",
-        .args = &.{ "cfg", "diff", "snek.toml", "snek.toml" },
+        .args = &.{ "cfg", "diff", "termancy.toml", "termancy.toml" },
         .stdout = "",
     },
     .{
         .name = "diff as JSON",
-        .args = &.{ "cfg", "diff", "extra.yaml", "json/snek.json", "-o", "json" },
+        .args = &.{ "cfg", "diff", "extra.yaml", "json/termancy.json", "-o", "json" },
         .stdout =
         \\[
         \\  {
@@ -610,8 +610,8 @@ const cases = [_]Case{
     },
     .{
         .name = "diff of a missing file",
-        .args = &.{ "cfg", "diff", "snek.toml", "missing.toml" },
-        .stderr = "snek: missing.toml: no such file\n",
+        .args = &.{ "cfg", "diff", "termancy.toml", "missing.toml" },
+        .stderr = "termancy: missing.toml: no such file\n",
         .status = 1,
     },
 
@@ -643,7 +643,7 @@ const cases = [_]Case{
     .{
         .name = "env with two keys for one name",
         .args = &.{ "cfg", "env", "--set", "server_port=1" },
-        .stderr = "snek: server.port and server_port both map to SERVER_PORT\n",
+        .stderr = "termancy: server.port and server_port both map to SERVER_PORT\n",
         .status = 1,
     },
     .{
@@ -651,7 +651,7 @@ const cases = [_]Case{
         .args = &.{ "cfg", "env", "-o", "json" },
         // Under -o json, errors are JSON too.
         .stderr = "{\"error\":\"env writes shell commands; drop -o json\",\"hint\":" ++
-            "\"Run 'snek cfg env --help' for usage.\"}\n",
+            "\"Run 'termancy cfg env --help' for usage.\"}\n",
         .status = 2,
     },
 
@@ -690,17 +690,17 @@ const cases = [_]Case{
     .{
         .name = "show",
         .args = &.{ "cfg", "show" },
-        .stdout = snek_toml_yaml,
+        .stdout = termancy_toml_yaml,
     },
     .{
         .name = "show as YAML",
         .args = &.{ "cfg", "show", "-o", "yaml" },
-        .stdout = snek_toml_yaml,
+        .stdout = termancy_toml_yaml,
     },
     .{
         .name = "show as JSON",
         .args = &.{ "cfg", "show", "-o", "json" },
-        .stdout = snek_toml_json,
+        .stdout = termancy_toml_json,
     },
     .{
         .name = "show as env",
@@ -717,7 +717,7 @@ const cases = [_]Case{
     .{
         .name = "show what env cannot hold",
         .args = &.{ "cfg", "-c", "servers.toml", "show", "-o", "env" },
-        .stderr = "snek: the configuration cannot be written as env\n",
+        .stderr = "termancy: the configuration cannot be written as env\n",
         .status = 1,
     },
     .{
@@ -770,7 +770,7 @@ const cases = [_]Case{
     .{
         .name = "show --reveal",
         .args = &.{ "cfg", "show", "--secret", "server.host", "--reveal", "-o", "json" },
-        .stdout = snek_toml_json,
+        .stdout = termancy_toml_json,
     },
     .{
         .name = "explain redacts secrets",
@@ -779,9 +779,9 @@ const cases = [_]Case{
         },
         .stdout =
         \\KEY          VALUE       SOURCE
-        \\server.host  <redacted>  file (./snek.toml)
-        \\server.port  8080        file (./snek.toml)
-        \\server.tags  <redacted>  file (./snek.toml)
+        \\server.host  <redacted>  file (./termancy.toml)
+        \\server.port  8080        file (./termancy.toml)
+        \\server.tags  <redacted>  file (./termancy.toml)
         \\
         ,
     },
@@ -790,7 +790,7 @@ const cases = [_]Case{
         .args = &.{ "cfg", "explain", "name", "--secret", "name", "--reveal" },
         .stdout =
         \\KEY   VALUE  SOURCE
-        \\name  demo   file (./snek.toml)
+        \\name  demo   file (./termancy.toml)
         \\
         ,
     },
@@ -801,7 +801,7 @@ const cases = [_]Case{
     },
     .{
         .name = "show the file layer",
-        .args = &.{ "cfg", "-c", "snek.toml", "-c", "extra.yaml", "show", "--layer", "file" },
+        .args = &.{ "cfg", "-c", "termancy.toml", "-c", "extra.yaml", "show", "--layer", "file" },
         .stdout =
         \\name: demo
         \\debug: false
@@ -831,9 +831,9 @@ const cases = [_]Case{
     .{
         .name = "show an unknown layer",
         .args = &.{ "cfg", "show", "--layer", "disk" },
-        .stderr = "snek: invalid value \"disk\" for flag --layer: expected one of " ++
+        .stderr = "termancy: invalid value \"disk\" for flag --layer: expected one of " ++
             "default, file, profile, env, flag, override\n" ++
-            "Run 'snek cfg show --help' for usage.\n",
+            "Run 'termancy cfg show --help' for usage.\n",
         .status = 2,
     },
 
@@ -841,17 +841,17 @@ const cases = [_]Case{
     .{
         .name = "explain names each source",
         .args = &.{
-            "cfg", "explain",   "--env-prefix", "APP",
-            "-c",  "snek.toml", "-c",           "extra.yaml",
+            "cfg", "explain",       "--env-prefix", "APP",
+            "-c",  "termancy.toml", "-c",           "extra.yaml",
         },
         .env = &.{.{ "APP_NAME", "env-name" }},
         .stdout =
         \\KEY          VALUE      SOURCE
-        \\debug        false      file (snek.toml)
+        \\debug        false      file (termancy.toml)
         \\name         env-name   env (APP_NAME)
-        \\server.host  localhost  file (snek.toml)
+        \\server.host  localhost  file (termancy.toml)
         \\server.port  9090       file (extra.yaml)
-        \\server.tags  [a, b]     file (snek.toml)
+        \\server.tags  [a, b]     file (termancy.toml)
         \\
         ,
     },
@@ -867,7 +867,7 @@ const cases = [_]Case{
     .{
         .name = "explain with no keys under the prefix",
         .args = &.{ "cfg", "explain", "nope" },
-        .stderr = "snek: no keys under \"nope\"\n",
+        .stderr = "termancy: no keys under \"nope\"\n",
         .status = 1,
     },
     .{
@@ -879,13 +879,13 @@ const cases = [_]Case{
         \\    "key": "server.host",
         \\    "value": "localhost",
         \\    "layer": "file",
-        \\    "source": "./snek.toml"
+        \\    "source": "./termancy.toml"
         \\  },
         \\  {
         \\    "key": "server.port",
         \\    "value": 8080,
         \\    "layer": "file",
-        \\    "source": "./snek.toml"
+        \\    "source": "./termancy.toml"
         \\  },
         \\  {
         \\    "key": "server.tags",
@@ -894,7 +894,7 @@ const cases = [_]Case{
         \\      "b"
         \\    ],
         \\    "layer": "file",
-        \\    "source": "./snek.toml"
+        \\    "source": "./termancy.toml"
         \\  }
         \\]
         \\
@@ -942,8 +942,8 @@ const cases = [_]Case{
     },
     .{
         .name = "convert TOML to YAML",
-        .args = &.{ "cfg", "convert", "snek.toml", "-t", "yaml" },
-        .stdout = snek_toml_yaml ++ "profiles:\n  prod:\n    server:\n      host: example.com\n",
+        .args = &.{ "cfg", "convert", "termancy.toml", "-t", "yaml" },
+        .stdout = termancy_toml_yaml ++ "profiles:\n  prod:\n    server:\n      host: example.com\n",
     },
     .{
         .name = "convert YAML to TOML",
@@ -967,7 +967,7 @@ const cases = [_]Case{
     },
     .{
         .name = "convert TOML to env",
-        .args = &.{ "cfg", "convert", "snek.toml", "--to", "env" },
+        .args = &.{ "cfg", "convert", "termancy.toml", "--to", "env" },
         .stdout =
         \\NAME=demo
         \\DEBUG=false
@@ -992,15 +992,15 @@ const cases = [_]Case{
     },
     .{
         .name = "convert standard input without --from",
-        // No input: snek fails before reading it, and writing it would race the exit.
+        // No input: termancy fails before reading it, and writing it would race the exit.
         .args = &.{ "cfg", "convert", "-", "--to", "json" },
-        .stderr = "snek: reading standard input needs --from\n",
+        .stderr = "termancy: reading standard input needs --from\n",
         .status = 1,
     },
     .{
         .name = "convert an unknown extension",
         .args = &.{ "cfg", "convert", "notes.txt", "--to", "json" },
-        .stderr = "snek: notes.txt: unknown format; pass --from\n",
+        .stderr = "termancy: notes.txt: unknown format; pass --from\n",
         .status = 1,
     },
     .{
@@ -1011,16 +1011,16 @@ const cases = [_]Case{
     .{
         .name = "convert to an unknown format",
         .args = &.{ "cfg", "convert", "data.json", "--to", "xml" },
-        .stderr = "snek: invalid value \"xml\" for flag --to: expected one of " ++
+        .stderr = "termancy: invalid value \"xml\" for flag --to: expected one of " ++
             "json, yaml, toml, zon, env, jsonc, ini\n" ++
-            "Run 'snek cfg convert --help' for usage.\n",
+            "Run 'termancy cfg convert --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "convert without --to",
         .args = &.{ "cfg", "convert", "data.json" },
-        .stderr = "snek: required flag --to is not set\n" ++
-            "Run 'snek cfg convert --help' for usage.\n",
+        .stderr = "termancy: required flag --to is not set\n" ++
+            "Run 'termancy cfg convert --help' for usage.\n",
         .status = 2,
     },
 
@@ -1028,16 +1028,16 @@ const cases = [_]Case{
     .{
         .name = "validate every format",
         .args = &.{
-            "cfg",       "validate", "snek.toml",      "extra.yaml",
-            "data.json", "app.env",  "yaml/snek.yaml", "json/snek.json",
+            "cfg",       "validate", "termancy.toml",      "extra.yaml",
+            "data.json", "app.env",  "yaml/termancy.yaml", "json/termancy.json",
         },
         .stdout =
-        \\snek.toml: ok
+        \\termancy.toml: ok
         \\extra.yaml: ok
         \\data.json: ok
         \\app.env: ok
-        \\yaml/snek.yaml: ok
-        \\json/snek.json: ok
+        \\yaml/termancy.yaml: ok
+        \\json/termancy.json: ok
         \\
         ,
     },
@@ -1045,7 +1045,7 @@ const cases = [_]Case{
         .name = "validate reports positions",
         .args = &.{ "cfg", "validate", "bad.json", "data.json" },
         .stdout = "data.json: ok\n",
-        .stderr = "snek: bad.json:1:9: invalid JSON\n",
+        .stderr = "termancy: bad.json:1:9: invalid JSON\n",
         .status = 1,
     },
     .{
@@ -1056,11 +1056,11 @@ const cases = [_]Case{
         },
         .stdout = "servers.toml: ok\n",
         .stderr =
-        \\snek: bad.toml:2:5: expected a value
-        \\snek: bad.yaml:3:2: inconsistent indentation
-        \\snek: notes.txt: unknown format (use .toml, .yaml, .json, .jsonc, .zon, .env, or .ini)
-        \\snek: bad.json:1:9: invalid JSON
-        \\snek: missing.toml: no such file
+        \\termancy: bad.toml:2:5: expected a value
+        \\termancy: bad.yaml:3:2: inconsistent indentation
+        \\termancy: notes.txt: unknown format (use .toml, .yaml, .json, .jsonc, .zon, .env, or .ini)
+        \\termancy: bad.json:1:9: invalid JSON
+        \\termancy: missing.toml: no such file
         \\
         ,
         .status = 1,
@@ -1078,7 +1078,7 @@ const cases = [_]Case{
     .{
         .name = "fmt --check an unknown format",
         .args = &.{ "cfg", "fmt", "--check", "notes.txt" },
-        .stderr = "snek: notes.txt: " ++ unknown_format ++ "\n",
+        .stderr = "termancy: notes.txt: " ++ unknown_format ++ "\n",
         .status = 1,
     },
 
@@ -1086,34 +1086,34 @@ const cases = [_]Case{
     .{
         .name = "set with an unknown extension",
         .args = &.{ "cfg", "set", "a", "1", "-c", "notes.txt" },
-        .stderr = "snek: notes.txt: " ++ unknown_format ++ "\n",
+        .stderr = "termancy: notes.txt: " ++ unknown_format ++ "\n",
         .status = 1,
     },
     .{
         .name = "set with no file to edit",
         .args = &.{ "cfg", "set", "a", "1" },
-        .cwd = "..", // test/, which has no snek.* file
+        .cwd = "..", // test/, which has no termancy.* file
 
-        .stderr = "snek: no config file found; pass --config <path>\n",
+        .stderr = "termancy: no config file found; pass --config <path>\n",
         .status = 1,
     },
     .{
         .name = "unset in a missing file",
         .args = &.{ "cfg", "unset", "a", "-c", "missing.toml" },
-        .stderr = "snek: missing.toml: no such file\n",
+        .stderr = "termancy: missing.toml: no such file\n",
         .status = 1,
     },
     .{
         .name = "set into a file with a syntax error",
         .args = &.{ "cfg", "set", "a", "1", "-c", "bad.toml" },
-        .stderr = "snek: bad.toml:2:5: expected a value\n",
+        .stderr = "termancy: bad.toml:2:5: expected a value\n",
         .status = 1,
     },
     .{
         .name = "set needs a value",
         .args = &.{ "cfg", "set", "a" },
-        .stderr = "snek: \"snek cfg set\" requires at least 2 arguments, received 1\n" ++
-            "Run 'snek cfg set --help' for usage.\n",
+        .stderr = "termancy: \"termancy cfg set\" requires at least 2 arguments, received 1\n" ++
+            "Run 'termancy cfg set --help' for usage.\n",
         .status = 2,
     },
 
@@ -1121,30 +1121,30 @@ const cases = [_]Case{
     .{
         .name = "unknown command suggests",
         .args = &.{ "cfg", "gte" },
-        .stderr = "snek: unknown command \"gte\" for \"snek cfg\"\nDid you mean \"get\"?\n" ++
-            "Run 'snek cfg --help' for usage.\n",
+        .stderr = "termancy: unknown command \"gte\" for \"termancy cfg\"\nDid you mean \"get\"?\n" ++
+            "Run 'termancy cfg --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "invalid enum flag",
         .args = &.{ "cfg", "get", "name", "-o", "xml" },
-        .stderr = "snek: invalid value \"xml\" for flag --output: expected one of " ++
+        .stderr = "termancy: invalid value \"xml\" for flag --output: expected one of " ++
             "text, json, yaml, toml, zon, env, ini, systemd\n" ++
-            "Run 'snek cfg get --help' for usage.\n",
+            "Run 'termancy cfg get --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "missing argument",
         .args = &.{ "cfg", "get" },
-        .stderr = "snek: \"snek cfg get\" requires at least 1 argument, received 0\n" ++
-            "Run 'snek cfg get --help' for usage.\n",
+        .stderr = "termancy: \"termancy cfg get\" requires at least 1 argument, received 0\n" ++
+            "Run 'termancy cfg get --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "unknown group suggests",
         .args = &.{"cgf"},
-        .stderr = "snek: unknown command \"cgf\" for \"snek\"\nDid you mean \"cfg\"?\n" ++
-            "Run 'snek --help' for usage.\n",
+        .stderr = "termancy: unknown command \"cgf\" for \"termancy\"\nDid you mean \"cfg\"?\n" ++
+            "Run 'termancy --help' for usage.\n",
         .status = 2,
     },
     .{
@@ -1157,7 +1157,7 @@ const cases = [_]Case{
     .{
         .name = "cli docs as Markdown",
         .args = &.{ "cli", "docs" },
-        .stdout_contains = "## snek cfg get\n\n" ++
+        .stdout_contains = "## termancy cfg get\n\n" ++
             "Print the effective value of a key. Scalars print bare; tables and arrays " ++
             "print in\nthe --output format (YAML for text).\n\n```\n" ++ get_usage ++ "```\n",
     },
@@ -1169,25 +1169,25 @@ const cases = [_]Case{
     .{
         .name = "cli docs as a man page",
         .args = &.{ "cli", "docs", "--format", "man" },
-        .stdout_contains = ".TH SNEK 1\n.SH NAME\n" ++
-            "snek \\- Configuration tooling, built with the snek cli and cfg libraries\n",
+        .stdout_contains = ".TH TERMANCY 1\n.SH NAME\n" ++
+            "termancy \\- Configuration tooling, built with the termancy cli and cfg libraries\n",
     },
     .{
         .name = "cli docs as a man page has a section per command",
         .args = &.{ "cli", "docs", "-f", "man" },
-        .stdout_contains = ".SS \"snek cfg convert\"\n",
+        .stdout_contains = ".SS \"termancy cfg convert\"\n",
     },
     .{
         .name = "cli docs in an unknown format",
         .args = &.{ "cli", "docs", "--format", "pdf" },
-        .stderr = "snek: invalid value \"pdf\" for flag --format: expected one of " ++
-            "markdown, man, html, json\nRun 'snek cli docs --help' for usage.\n",
+        .stderr = "termancy: invalid value \"pdf\" for flag --format: expected one of " ++
+            "markdown, man, html, json\nRun 'termancy cli docs --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "cli docs as JSON",
         .args = &.{ "cli", "docs", "--format", "json" },
-        .stdout_contains = "{\n  \"name\": \"snek\",\n  \"path\": \"snek\",",
+        .stdout_contains = "{\n  \"name\": \"termancy\",\n  \"path\": \"termancy\",",
     },
     .{
         .name = "cli docs as JSON: a flag object, every key",
@@ -1217,7 +1217,7 @@ const cases = [_]Case{
     .{
         .name = "cli docs as HTML",
         .args = &.{ "cli", "docs", "--format", "html" },
-        .stdout_contains = "<section id=\"snek-cfg-get\">\n<h2>snek cfg get</h2>",
+        .stdout_contains = "<section id=\"termancy-cfg-get\">\n<h2>termancy cfg get</h2>",
     },
     .{
         .name = "cli docs as a man page lists exit statuses",
@@ -1239,11 +1239,11 @@ const cases = [_]Case{
         .name = "--color never wins over FORCE_COLOR",
         .args = &.{ "--color=never", "version", "--help" },
         .env = &.{.{ "FORCE_COLOR", "1" }},
-        .stdout_contains = "information\n\nUsage:\n  snek version",
+        .stdout_contains = "information\n\nUsage:\n  termancy version",
     },
     .{
-        .name = "cli explain -o jsonl: one object per line",
-        .args = &.{ "cli", "explain", "-o", "jsonl" },
+        .name = "explain -o jsonl: one object per line",
+        .args = &.{ "explain", "-o", "jsonl" },
         .stdin = "\x1b[1mhi",
         .stdout = "{\"kind\":\"sequence\",\"raw\":\"\\u001b[1m\"," ++
             "\"description\":\"SGR: bold\"}\n" ++
@@ -1252,7 +1252,7 @@ const cases = [_]Case{
     .{
         .name = "cli docs --dir needs the man format",
         .args = &.{ "cli", "docs", "--dir", "out" },
-        .stderr = "snek: --dir applies to --format man\nRun 'snek cli docs --help' for usage.\n",
+        .stderr = "termancy: --dir applies to --format man\nRun 'termancy cli docs --help' for usage.\n",
         .status = 2,
     },
     .{
@@ -1260,62 +1260,62 @@ const cases = [_]Case{
         .args = &.{ "cli", "repl" },
         .stdin = "cfg get name\n\ncfg get server.port --default 1\ncfg get nope\nexit\ncfg keys\n",
         .stdout = "demo\n8080\n",
-        .stderr = "snek: key \"nope\" is not set\n",
+        .stderr = "termancy: key \"nope\" is not set\n",
         .status = 1,
     },
     .{
         .name = "cli docs as JSON lists nested commands",
         .args = &.{ "cli", "docs", "--format", "json" },
-        .stdout_contains = "\"path\": \"snek cli add\"",
+        .stdout_contains = "\"path\": \"termancy cli add\"",
     },
     .{
         .name = "cli init with an invalid name",
         .args = &.{ "cli", "init", "Demo" },
-        .stderr = "snek: invalid name \"Demo\": use at most 32 lowercase letters, digits, _ " ++
+        .stderr = "termancy: invalid name \"Demo\": use at most 32 lowercase letters, digits, _ " ++
             "and -, starting with a letter, and not a Zig keyword\n" ++
-            "Run 'snek cli init --help' for usage.\n",
+            "Run 'termancy cli init --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "cli init with two dependencies",
         .args = &.{ "cli", "init", "y", "--module-path", "a", "--fetch", "b" },
-        .stderr = "snek: flags --module-path and --fetch cannot be used together\n" ++
-            "Run 'snek cli init --help' for usage.\n",
+        .stderr = "termancy: flags --module-path and --fetch cannot be used together\n" ++
+            "Run 'termancy cli init --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "bash completion script",
         .args = &.{ "cli", "completion", "bash" },
-        .stdout_contains = "#   source <(snek cli completion bash)\n",
+        .stdout_contains = "#   source <(termancy cli completion bash)\n",
     },
     .{
         .name = "zsh completion script",
         .args = &.{ "cli", "completion", "zsh" },
-        .stdout_contains = "#   source <(snek cli completion zsh)\n",
+        .stdout_contains = "#   source <(termancy cli completion zsh)\n",
     },
     .{
         .name = "fish completion script",
         .args = &.{ "cli", "completion", "fish" },
-        .stdout_contains = "#   snek cli completion fish | source\n",
+        .stdout_contains = "#   termancy cli completion fish | source\n",
     },
     .{
         .name = "powershell completion script",
         .args = &.{ "cli", "completion", "powershell" },
-        .stdout_contains = "#   snek cli completion powershell | Out-String | " ++
+        .stdout_contains = "#   termancy cli completion powershell | Out-String | " ++
             "Invoke-Expression\n",
     },
     .{
         .name = "completion for an unknown shell",
         .args = &.{ "cli", "completion", "tcsh" },
-        .stderr = "snek: unknown command \"tcsh\" for \"snek cli completion\"\n" ++
-            "Run 'snek cli completion --help' for usage.\n",
+        .stderr = "termancy: unknown command \"tcsh\" for \"termancy cli completion\"\n" ++
+            "Run 'termancy cli completion --help' for usage.\n",
         .status = 2,
     },
     .{
         .name = "completion is not a root command",
         .args = &.{ "completion", "bash" },
-        .stderr = "snek: unknown command \"completion\" for \"snek\"\n" ++
-            "Run 'snek --help' for usage.\n",
+        .stderr = "termancy: unknown command \"completion\" for \"termancy\"\n" ++
+            "Run 'termancy --help' for usage.\n",
         .status = 2,
     },
 
@@ -1323,7 +1323,7 @@ const cases = [_]Case{
     .{
         .name = "version command",
         .args = &.{"version"},
-        .stdout_contains = "snek " ++ version ++ "\nzig 0.17.0, ",
+        .stdout_contains = "termancy " ++ version ++ "\nzig 0.17.0, ",
     },
     .{
         .name = "show --layer env shows what the environment supplied",
@@ -1337,7 +1337,7 @@ const cases = [_]Case{
         .stdout = "{\n  \"server\": {\n    \"host\": \"example.com\"\n  }\n}\n",
     },
     .{
-        .name = "discovers snek.zon",
+        .name = "discovers termancy.zon",
         .cwd = "zon",
         .args = &.{ "cfg", "get", "server.port" },
         .stdout = "7070\n",
@@ -1363,7 +1363,7 @@ const cases = [_]Case{
         .name = "keys --null rejects structured output",
         .args = &.{ "cfg", "keys", "--null", "-o", "json" },
         .stderr = "{\"error\":\"--null applies to text output; drop -o json\",\"hint\":" ++
-            "\"Run 'snek cfg keys --help' for usage.\"}\n",
+            "\"Run 'termancy cfg keys --help' for usage.\"}\n",
         .status = 2,
     },
     .{
@@ -1400,18 +1400,18 @@ const cases = [_]Case{
     .{
         .name = "version flag",
         .args = &.{"--version"},
-        .stdout = "snek " ++ version ++ "\n",
+        .stdout = "termancy " ++ version ++ "\n",
     },
     .{
         .name = "no arguments print help",
         .args = &.{},
-        .stdout_contains = "Usage:\n  snek <command>\n\nCommands:\n" ++
-            "  cfg        Query, explain, edit, and convert configuration\n",
+        .stdout_contains = "Usage:\n  termancy <command>\n\nCommands:\n" ++
+            "  cfg       Query, explain, edit, and convert configuration\n",
     },
     .{
         .name = "help flag",
         .args = &.{"--help"},
-        .stdout_contains = "Use \"snek <command> --help\" for more information about a command.\n",
+        .stdout_contains = "Use \"termancy <command> --help\" for more information about a command.\n",
     },
     .{
         .name = "cfg alone prints its help",
@@ -1432,100 +1432,100 @@ const cases = [_]Case{
     .{
         .name = "help for an unknown command",
         .args = &.{ "help", "cfg", "nope" },
-        .stderr = "snek: unknown command \"nope\" for \"snek cfg\"\n" ++
-            "Run 'snek cfg --help' for usage.\n",
+        .stderr = "termancy: unknown command \"nope\" for \"termancy cfg\"\n" ++
+            "Run 'termancy cfg --help' for usage.\n",
         .status = 2,
     },
 
-    // platform
+    // dirs, info, update, release, passkey
     .{
-        .name = "platform dirs on any OS",
-        .args = &.{ "platform", "dirs", "myapp", "-o", "json" },
+        .name = "dirs on any OS",
+        .args = &.{ "dirs", "myapp", "-o", "json" },
         .env = &.{ .{ "HOME", "/home/ann" }, .{ "USERPROFILE", "C:\\Users\\ann" } },
         .stdout_contains = "{\n  \"app\": \"myapp\",\n  \"os\": \"" ++ @tagName(builtin.os.tag) ++
             "\",\n  \"config\": ",
     },
     .{
-        .name = "platform dirs without a home directory",
-        .args = &.{ "platform", "dirs" },
-        .stderr = "snek: no home directory: set " ++
+        .name = "dirs without a home directory",
+        .args = &.{"dirs"},
+        .stderr = "termancy: no home directory: set " ++
             (if (builtin.os.tag == .windows) "USERPROFILE" else "HOME") ++
             " to an absolute path\n",
         .status = 1,
     },
     .{
-        .name = "platform dirs with a path for a name",
-        .args = &.{ "platform", "dirs", "a/b" },
-        .stderr = "snek: invalid app name \"a/b\": it names a directory, so it cannot be " ++
-            "empty, . or .., or hold / or \\\nRun 'snek platform dirs --help' for usage.\n",
+        .name = "dirs with a path for a name",
+        .args = &.{ "dirs", "a/b" },
+        .stderr = "termancy: invalid app name \"a/b\": it names a directory, so it cannot be " ++
+            "empty, . or .., or hold / or \\\nRun 'termancy dirs --help' for usage.\n",
         .status = 2,
     },
     .{
-        .name = "platform info as JSON",
-        .args = &.{ "platform", "info", "-o", "json" },
+        .name = "info as JSON",
+        .args = &.{ "info", "-o", "json" },
         .stdin = "",
         .stdout_contains = "{\n  \"os\": \"" ++ @tagName(builtin.os.tag) ++
             "\",\n  \"arch\": \"" ++ @tagName(builtin.cpu.arch) ++
             "\",\n  \"zig\": \"" ++ builtin.zig_version_string ++
-            "\",\n  \"snek\": \"" ++ version ++ "\",\n  \"ci\": null,\n  \"stdin_tty\": false,\n" ++
+            "\",\n  \"termancy\": \"" ++ version ++ "\",\n  \"ci\": null,\n  \"stdin_tty\": false,\n" ++
             "  \"stdout_tty\": false,\n  \"elevated\": ",
     },
     .{
-        .name = "platform info names the CI service",
-        .args = &.{ "platform", "info", "-o", "json" },
+        .name = "info names the CI service",
+        .args = &.{ "info", "-o", "json" },
         .env = &.{ .{ "CI", "true" }, .{ "GITHUB_ACTIONS", "true" } },
         .stdout_contains = "  \"ci\": \"github_actions\",\n",
     },
     .{
-        .name = "platform info as text",
-        .args = &.{ "platform", "info" },
+        .name = "info as text",
+        .args = &.{"info"},
         .stdin = "",
-        .stdout_contains = "snek        " ++ version ++ "\nci          none\nstdin_tty   no\nstdout_tty  no\n",
+        .stdout_contains = "termancy    " ++ version ++ "\nci          none\nstdin_tty   no\nstdout_tty  no\n",
     },
     .{
         // Refused before any network access: the suite never touches the network.
-        .name = "platform update never prompts without a terminal",
-        .args = &.{ "platform", "update" },
+        .name = "update never prompts without a terminal",
+        .args = &.{"update"},
         .stdin = "",
-        .stderr = "snek: \"snek platform update\" asks for confirmation; run it at a " ++
+        .stderr = "termancy: \"termancy update\" asks for confirmation; run it at a " ++
             "terminal or pass --yes\n",
         .status = 1,
     },
     .{
-        .name = "platform dirs reports errors as JSON under -o json",
-        .args = &.{ "platform", "dirs", "a/b", "-o", "json" },
+        .name = "dirs reports errors as JSON under -o json",
+        .args = &.{ "dirs", "a/b", "-o", "json" },
         .stderr = "{\"error\":\"invalid app name \\\"a/b\\\": it names a directory, so it " ++
-            "cannot be empty, . or .., or hold / or \\\\\",\"hint\":\"Run 'snek platform " ++
+            "cannot be empty, . or .., or hold / or \\\\\",\"hint\":\"Run 'termancy " ++
             "dirs --help' for usage.\"}\n",
         .status = 2,
     },
     .{
-        .name = "platform dirs reports a usage error the parser finds as JSON under -o json",
-        .args = &.{ "platform", "dirs", "-o", "json", "--bogus" },
-        .stderr = "{\"error\":\"unknown flag: --bogus\",\"hint\":\"Run 'snek platform " ++
+        .name = "dirs reports a usage error the parser finds as JSON under -o json",
+        .args = &.{ "dirs", "-o", "json", "--bogus" },
+        .stderr = "{\"error\":\"unknown flag: --bogus\",\"hint\":\"Run 'termancy " ++
             "dirs --help' for usage.\"}\n",
         .status = 2,
     },
     .{
-        .name = "platform webauthn get needs the origin",
-        .args = &.{ "platform", "webauthn", "get" },
+        .name = "passkey get needs the origin",
+        .args = &.{ "passkey", "get" },
         .stdin = "{}",
-        .stderr = "snek: required flag --origin is not set\n" ++
-            "Run 'snek platform webauthn get --help' for usage.\n",
+        .stderr = "termancy: required flag --origin is not set\n" ++
+            "Run 'termancy passkey get --help' for usage.\n",
         .status = 2,
     },
     .{
-        .name = "platform webauthn get refuses options that are not JSON",
-        .args = &.{ "platform", "webauthn", "get", "--origin", "https://example.com" },
+        .name = "passkey get refuses options that are not JSON",
+        .args = &.{ "passkey", "get", "--origin", "https://example.com" },
         .stdin = "not json",
-        .stderr = "snek: the options are not a JSON object\n",
+        .stderr = "termancy: the options are not a JSON object\n",
         .status = 1,
     },
     .{
-        .name = "platform webauthn create refuses options without the user",
-        .args = &.{ "platform", "webauthn", "create", "--origin", "https://example.com" },
+        .name = "passkey create refuses options without the user",
+        .args = &.{ "passkey", "create", "--origin", "https://example.com" },
         .stdin = "{\"rp\":{\"name\":\"x\"},\"challenge\":\"AA\"}",
-        .stderr = "snek: the options lack a required field\n",
+        .stderr = "termancy: the options lack a required field\n",
         .status = 1,
     },
 
@@ -1534,10 +1534,21 @@ const cases = [_]Case{
         .name = "completion of root commands",
         .args = &.{ "__complete", "" },
         .stdout = "cfg\tQuery, explain, edit, and convert configuration\n" ++
-            "cli\tGenerate cli applications; documentation and completion for snek\n" ++
-            "platform\tDirectories, system information, self-update, releases, SSH keys, " ++
-            "and WebAuthn\n" ++
-            "tui\tTerminal widgets for scripts, and components to copy into your project\n" ++
+            "cli\tGenerate cli applications; documentation and completion for termancy\n" ++
+            "tui\tComponents to copy into your project\n" ++
+            "ui\tTerminal widgets for shell scripts, and demos of the components\n" ++
+            "md\tRead Markdown in the terminal: a file, a URL, a repository's README\n" ++
+            "image\tShow a PNG, JPEG, or GIF in the terminal\n" ++
+            "freeze\tMake images of code and terminal output (freeze)\n" ++
+            "record\tRecord terminal sessions from tapes, as GIFs and more (vhs)\n" ++
+            "explain\tExplain the escape sequences in a program's output\n" ++
+            "serve\tServe a terminal program over SSH (wish) or the web (ttyd)\n" ++
+            "ssh\tSSH: run commands remotely; keys: make, show, back up as words, sign, verify\n" ++
+            "passkey\tSign in with a passkey or security key, or create one, from a script\n" ++
+            "release\tSign release assets and write package manifests\n" ++
+            "dirs\tPrint where an application's files go on this system\n" ++
+            "info\tPrint the OS, architecture, CI service, and terminal state\n" ++
+            "update\tUpdate termancy to its latest release\n" ++
             "version\tPrint version information\n" ++
             "help\tHelp about any command\n",
     },
@@ -1548,7 +1559,7 @@ const cases = [_]Case{
     },
     .{
         .name = "completion of keys reads -c and --set",
-        .args = &.{ "__complete", "cfg", "get", "-c", "json/snek.json", "--set", "x=1", "" },
+        .args = &.{ "__complete", "cfg", "get", "-c", "json/termancy.json", "--set", "x=1", "" },
         .stdout = "name\nserver.port\nx\n",
     },
     .{
@@ -1569,7 +1580,7 @@ const cases = [_]Case{
     .{
         .name = "completion of profiles, with a missing one in the environment",
         .args = &.{ "__complete", "cfg", "show", "--profile=p" },
-        .env = &.{.{ "SNEK_PROFILE", "nope" }},
+        .env = &.{.{ "TERMANCY_PROFILE", "nope" }},
         .stdout = "--profile=prod\n",
     },
     .{
@@ -1594,7 +1605,7 @@ const cases = [_]Case{
             "--raw\tPrint a scalar bare, without the output format's quoting\n" ++
             "--as\tFail unless the value is one of these, and print it as one\n" ++
             "--config\tConfig file to load; repeatable, later files win " ++
-            "(default: discover snek.*)\n" ++
+            "(default: discover termancy.*)\n" ++
             "--profile\tApply the profiles.<name> section\n" ++
             "--env-prefix\tRead key a.b from the variable <PREFIX>_A_B\n" ++
             "--set\tOverride a value; repeatable\n" ++
@@ -1639,25 +1650,25 @@ const cases = [_]Case{
 /// Cases whose output follows the XDG conventions, which only Linux uses by default.
 const linux_cases = [_]Case{
     .{
-        .name = "platform dirs on Linux",
-        .args = &.{ "platform", "dirs" },
+        .name = "dirs on Linux",
+        .args = &.{"dirs"},
         .env = &.{
             .{ "HOME", "/home/ann" },
             .{ "XDG_CONFIG_HOME", "/xdg/config" },
             .{ "XDG_RUNTIME_DIR", "/run/user/1000" },
         },
         .stdout =
-        \\config   /xdg/config/snek
-        \\cache    /home/ann/.cache/snek
-        \\data     /home/ann/.local/share/snek
-        \\state    /home/ann/.local/state/snek
-        \\runtime  /run/user/1000/snek
+        \\config   /xdg/config/termancy
+        \\cache    /home/ann/.cache/termancy
+        \\data     /home/ann/.local/share/termancy
+        \\state    /home/ann/.local/state/termancy
+        \\runtime  /run/user/1000/termancy
         \\
         ,
     },
     .{
-        .name = "platform dirs on Linux as JSON",
-        .args = &.{ "platform", "dirs", "myapp", "-o", "json" },
+        .name = "dirs on Linux as JSON",
+        .args = &.{ "dirs", "myapp", "-o", "json" },
         .env = &.{ .{ "HOME", "/home/ann" }, .{ "XDG_CACHE_HOME", "relative/is/ignored" } },
         .stdout =
         \\{
@@ -1673,22 +1684,22 @@ const linux_cases = [_]Case{
         ,
     },
     .{
-        .name = "platform dirs --search on Linux",
-        .args = &.{ "platform", "dirs", "--search" },
+        .name = "dirs --search on Linux",
+        .args = &.{ "dirs", "--search" },
         .env = &.{ .{ "HOME", "/home/ann" }, .{ "XDG_CONFIG_DIRS", "/etc/a:relative:/etc/b" } },
-        .stdout = "/home/ann/.config/snek\n/etc/a/snek\n/etc/b/snek\n",
+        .stdout = "/home/ann/.config/termancy\n/etc/a/termancy\n/etc/b/termancy\n",
     },
     .{
-        .name = "platform dirs --search on Linux as JSON",
-        .args = &.{ "platform", "dirs", "--search", "-o", "json" },
+        .name = "dirs --search on Linux as JSON",
+        .args = &.{ "dirs", "--search", "-o", "json" },
         .env = &.{.{ "HOME", "/home/ann" }},
         .stdout =
         \\{
-        \\  "app": "snek",
+        \\  "app": "termancy",
         \\  "os": "linux",
         \\  "search": [
-        \\    "/home/ann/.config/snek",
-        \\    "/etc/xdg/snek"
+        \\    "/home/ann/.config/termancy",
+        \\    "/etc/xdg/termancy"
         \\  ]
         \\}
         \\
@@ -1701,7 +1712,7 @@ const posix_cases = [_]Case{
     .{
         .name = "cli add outside a project",
         .args = &.{ "cli", "add", "-C", "/tmp", "x" },
-        .stderr = "snek: /tmp/src/main.zig: not found (is /tmp a project made by snek cli " ++
+        .stderr = "termancy: /tmp/src/main.zig: not found (is /tmp a project made by termancy cli " ++
             "init?)\n",
         .status = 1,
     },
@@ -1806,7 +1817,7 @@ const edit_chains = [_]EditChain{
             .{ .args = &.{ "get", "server.host" }, .stdout = "example.com\n" },
             .{
                 .args = &.{ "profile", "use", "nope" },
-                .stderr = "snek: no profile \"nope\" in the loaded files\n",
+                .stderr = "termancy: no profile \"nope\" in the loaded files\n",
                 .status = 1,
             },
             .{ .args = &.{ "profile", "use", "--clear" } },
@@ -1907,7 +1918,7 @@ const edit_chains = [_]EditChain{
         .file = "array.jsonc",
         .steps = &.{.{
             .args = &.{ "set", "ports.0", "2" },
-            .stderr = "snek: warning: array.jsonc: comments are not preserved\n",
+            .stderr = "termancy: warning: array.jsonc: comments are not preserved\n",
         }},
         .content = "{\n  \"ports\": [\n    2\n  ]\n}\n",
     },
@@ -1939,22 +1950,22 @@ const edit_chains = [_]EditChain{
         .steps = &.{
             .{
                 .args = &.{ "set", "n", "null" },
-                .stderr = "snek: this value cannot be written as toml\n",
+                .stderr = "termancy: this value cannot be written as toml\n",
                 .status = 1,
             },
             .{
                 .args = &.{ "set", "a.b", "1" },
-                .stderr = "snek: \"a.b\" crosses a value that is not a table\n",
+                .stderr = "termancy: \"a.b\" crosses a value that is not a table\n",
                 .status = 1,
             },
             .{
                 .args = &.{ "set", "a..b", "1" },
-                .stderr = "snek: invalid key \"a..b\"\n",
+                .stderr = "termancy: invalid key \"a..b\"\n",
                 .status = 1,
             },
             .{
                 .args = &.{ "unset", "missing" },
-                .stderr = "snek: key \"missing\" is not set in plain.toml\n",
+                .stderr = "termancy: key \"missing\" is not set in plain.toml\n",
                 .status = 1,
             },
         },
@@ -2033,13 +2044,13 @@ const edit_chains = [_]EditChain{
         .file = "flow.yaml",
         .steps = &.{.{
             .args = &.{"fmt"},
-            .stderr = "snek: warning: flow.yaml: comments are not preserved\n",
+            .stderr = "termancy: warning: flow.yaml: comments are not preserved\n",
         }},
         .content = "list:\n  - a\n  - b\n",
     },
 };
 
-/// Each chain's file is printed by `snek cfg get` into the seed step's output directory.
+/// Each chain's file is printed by `termancy cfg get` into the seed step's output directory.
 /// Every step re-runs on every build (`has_side_effects`), seed included, so the chain
 /// always starts from the seed and never from what an earlier build left behind.
 fn addEditChains(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.Step) void {
@@ -2126,7 +2137,7 @@ fn addEncryptChain(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build
         run.setName(b.fmt("e2e: encrypt: {s}", .{s.name}));
         run.setCwd(dir);
         run.clearEnvironment();
-        run.setEnvironmentVariable("SNEK_PASSPHRASE", "correct horse");
+        run.setEnvironmentVariable("TERMANCY_PASSPHRASE", "correct horse");
         run.addArgs(s.args);
         run.has_side_effects = true;
         run.expectStdOutEqual(s.stdout);
@@ -2142,16 +2153,16 @@ fn addEncryptChain(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build
     locked.clearEnvironment();
     locked.addArgs(&.{ "cfg", "-c", "secrets.toml.enc", "show" });
     locked.has_side_effects = true;
-    locked.expectStdErrEqual("snek: secrets.toml.enc: encrypted; set SNEK_PASSPHRASE to read it\n");
+    locked.expectStdErrEqual("termancy: secrets.toml.enc: encrypted; set TERMANCY_PASSPHRASE to read it\n");
     locked.expectExitCode(1);
     locked.step.dependOn(previous);
     step.dependOn(&locked.step);
 }
 
-/// A run of `snek` (or of `zig build`) in a project chain's directory.
+/// A run of `termancy` (or of `zig build`) in a project chain's directory.
 const ProjectStep = struct {
     /// Run `zig` with these arguments and a `--cache-dir` under the build's cache, instead
-    /// of `snek`.
+    /// of `termancy`.
     zig: bool = false,
     /// The working directory, relative to the chain's directory.
     cwd: []const u8 = ".",
@@ -2182,7 +2193,7 @@ const demo_created =
     \\
 ++ "next: cd demo" ++ then ++ "zig build run -- --help\n";
 
-/// How `snek cli init` joins the commands of its "next:" hint.
+/// How `termancy cli init` joins the commands of its "next:" hint.
 const then = if (builtin.os.tag == .windows) "\n      " else " && ";
 
 const project_chains = [_]ProjectChain{
@@ -2201,41 +2212,41 @@ const project_chains = [_]ProjectChain{
             },
             .{
                 .args = &.{ "cli", "init", "demo" },
-                .stderr = "snek: demo: directory is not empty (use --force to write into it)\n",
+                .stderr = "termancy: demo: directory is not empty (use --force to write into it)\n",
                 .status = 1,
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "hello" },
-                .stderr = "snek: src/cmd/hello.zig: the command already exists\n",
+                .stderr = "termancy: src/cmd/hello.zig: the command already exists\n",
                 .status = 1,
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "hello", "world" },
-                .stderr = "snek: src/cmd/hello.zig: \"hello\" is a command, not a group\n",
+                .stderr = "termancy: src/cmd/hello.zig: \"hello\" is a command, not a group\n",
                 .status = 1,
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "x", "--flag", "bad" },
-                .stderr = "snek: flag spec \"bad\" needs name:type\n" ++
-                    "Run 'snek cli add --help' for usage.\n",
+                .stderr = "termancy: flag spec \"bad\" needs name:type\n" ++
+                    "Run 'termancy cli add --help' for usage.\n",
                 .status = 2,
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "../x" },
-                .stderr = "snek: invalid command name \"../x\" (use lowercase words joined by " ++
-                    "-, not main)\nRun 'snek cli add --help' for usage.\n",
+                .stderr = "termancy: invalid command name \"../x\" (use lowercase words joined by " ++
+                    "-, not main)\nRun 'termancy cli add --help' for usage.\n",
                 .status = 2,
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "main" },
-                .stderr = "snek: invalid command name \"main\" (use lowercase words joined by " ++
-                    "-, not main)\nRun 'snek cli add --help' for usage.\n",
+                .stderr = "termancy: invalid command name \"main\" (use lowercase words joined by " ++
+                    "-, not main)\nRun 'termancy cli add --help' for usage.\n",
                 .status = 2,
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "x", "--args", "3:1" },
-                .stderr = "snek: invalid --args \"3:1\" (use N, N:M, or N:)\n" ++
-                    "Run 'snek cli add --help' for usage.\n",
+                .stderr = "termancy: invalid --args \"3:1\" (use N, N:M, or N:)\n" ++
+                    "Run 'termancy cli add --help' for usage.\n",
                 .status = 2,
             },
             .{
@@ -2249,7 +2260,7 @@ const project_chains = [_]ProjectChain{
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "x", "--flow", "--args", "1" },
-                .stderr = "snek: a --flow takes no --args\nRun 'snek cli add --help' for usage.\n",
+                .stderr = "termancy: a --flow takes no --args\nRun 'termancy cli add --help' for usage.\n",
                 .status = 2,
             },
             .{ .zig = true, .cwd = "demo", .args = &.{ "build", "test" }, .stderr = null },
@@ -2305,7 +2316,7 @@ const project_chains = [_]ProjectChain{
             \\created z/README.md
             \\created z/.gitignore
             \\
-            ++ "next: cd z" ++ then ++ "zig fetch --save=snek <url of snek>\n",
+            ++ "next: cd z" ++ then ++ "zig fetch --save=termancy <url of termancy>\n",
         }},
         .files = &.{.{ "z/build.zig.zon", ".dependencies = .{}," }},
     },
@@ -2313,16 +2324,16 @@ const project_chains = [_]ProjectChain{
 
 /// POSIX paths again.
 const posix_project_chains = [_]ProjectChain{.{
-    .name = "init with a module path that is not snek creates nothing",
+    .name = "init with a module path that is not termancy creates nothing",
     .steps = &.{
         .{
             .args = &.{ "cli", "init", "x", "--module-path", "/tmp" },
-            .stderr = "snek: /tmp: not a snek checkout (no src/cli/root.zig)\n",
+            .stderr = "termancy: /tmp: not a termancy checkout (no src/cli/root.zig)\n",
             .status = 1,
         },
         .{
             .args = &.{ "cli", "add", "-C", "x", "hello" },
-            .stderr = "snek: x: cannot open: FileNotFound\n",
+            .stderr = "termancy: x: cannot open: FileNotFound\n",
             .status = 1,
         },
     },
@@ -2335,7 +2346,7 @@ fn addProjectChains(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Buil
     }
 }
 
-/// The chain's directory is the output directory of a `snek version` run. No step has side
+/// The chain's directory is the output directory of a `termancy version` run. No step has side
 /// effects, so, as in `addEditCase`, the whole chain is cached and runs again, in a new
 /// directory, only when the binary changes (the build system never empties a directory it
 /// reuses). The generated project is built with a cache under the build's own, so it is
@@ -2399,7 +2410,7 @@ fn projectRun(
 }
 
 /// Completion as the shells run it: `test/complete.<shell>` loads the script that
-/// `snek cli completion <shell>` prints, completes the last word, and prints the result.
+/// `termancy cli completion <shell>` prints, completes the last word, and prints the result.
 const ShellCase = struct {
     words: []const []const u8,
     stdout: []const u8,
@@ -2415,7 +2426,7 @@ const bash_cases = [_]ShellCase{
     .{ .words = &.{ "cfg", "get", "-o", "y" }, .stdout = "yaml\n" },
     .{ .words = &.{ "cfg", "get", "--pro" }, .stdout = "--profile\n" },
     .{ .words = &.{ "cfg", "get", "server.p" }, .stdout = "server.port\n" },
-    // Directives: files of the formats snek reads, directories.
+    // Directives: files of the formats termancy reads, directories.
     .{ .words = &.{ "cfg", "-c", "se" }, .stdout = "seeds.toml\nservers.toml\n" },
     .{ .words = &.{ "cli", "docs", "--dir", "y" }, .stdout = "yaml\n" },
     // After `--flag=`, as one word and as bash splits it at the `=`.
@@ -2544,7 +2555,7 @@ fn addShellCases(
     shell_cases: []const ShellCase,
 ) void {
     for (shell_cases) |case| {
-        const run = std.Build.Step.Run.create(b, b.fmt("e2e: {s} snek {s}", .{
+        const run = std.Build.Step.Run.create(b, b.fmt("e2e: {s} termancy {s}", .{
             std.fs.path.extension(shell.script)[1..],
             std.mem.join(b.allocator, " ", case.words) catch @panic("OOM"),
         }));

@@ -1,4 +1,4 @@
-//! What `platform` gives a command-line program, as a `doctor` command that checks its
+//! What `sys` gives a command-line program, as a `doctor` command that checks its
 //! surroundings:
 //!
 //! - `dirs`: where an app keeps config, cache, data, state, and runtime files, on Linux,
@@ -10,7 +10,7 @@
 //! - `log`: leveled logs as text or JSON lines, with secrets redacted by key and by value
 //!   (a `.secret` flag's value, wherever it shows up);
 //! - `trace`: W3C trace context continued from `TRACEPARENT` and handed to a child;
-//! - `--profile`: a middleware timing the command's phases with `platform.profiler`.
+//! - `--profile`: a middleware timing the command's phases with `sys.profiler`.
 //!
 //!     zig build examples
 //!     zig-out/bin/doctor dirs --os macos
@@ -21,16 +21,16 @@
 
 const std = @import("std");
 const cli = @import("cli");
-const platform = @import("platform");
+const sys = @import("sys");
 
-const dirs = platform.dirs;
+const dirs = sys.dirs;
 
 const Global = struct {
     profile: bool = false,
     pub const meta = .{ .profile = .{ .help = "Print how long each phase took" } };
 };
 
-const Profiler = platform.profiler.Profiler(true);
+const Profiler = sys.profiler.Profiler(true);
 
 /// Marks the start of a phase, when `--profile` is timing the command.
 fn phase(ctx: *cli.Context, name: []const u8) void {
@@ -83,7 +83,7 @@ fn showDirs(ctx: *cli.Context, flags: DirsFlags) !void {
 // -- env ---------------------------------------------------------------------------------
 
 fn showEnv(ctx: *cli.Context) !void {
-    const env = platform.env;
+    const env = sys.env;
     const ci = if (env.ci(ctx.environ)) |ci| @tagName(ci) else "no";
     try ctx.out.print("ci:            {s}\n", .{ci});
     try ctx.out.print("do not track:  {}\n", .{env.doNotTrack(ctx.environ)});
@@ -97,7 +97,7 @@ fn showEnv(ctx: *cli.Context) !void {
 const NewerArgs = struct { current: []const u8, latest: []const u8 };
 
 fn newer(ctx: *cli.Context, args: NewerArgs) !void {
-    const Version = platform.version.Version;
+    const Version = sys.version.Version;
     const current = Version.parse(args.current) catch
         return ctx.usageError("\"{s}\" is not a version", .{args.current});
     const latest = Version.parse(args.latest) catch
@@ -120,7 +120,7 @@ const PathsArgs = struct {
 };
 
 fn checkPaths(ctx: *cli.Context, flags: PathsFlags, args: PathsArgs) !void {
-    const policy: platform.sandbox.Policy = .{ .roots = flags.root };
+    const policy: sys.sandbox.Policy = .{ .roots = flags.root };
     var refused: usize = 0;
     for (args.paths) |path| {
         if (policy.check(ctx.io, .cwd(), path)) {
@@ -136,7 +136,7 @@ fn checkPaths(ctx: *cli.Context, flags: PathsFlags, args: PathsArgs) !void {
 // -- log ---------------------------------------------------------------------------------
 
 const LogFlags = struct {
-    format: platform.log.Format = .text,
+    format: sys.log.Format = .text,
     level: []const u8 = "info",
     token: ?[]const u8 = null,
     pub const meta = .{
@@ -152,10 +152,10 @@ const LogFlags = struct {
 fn showLog(ctx: *cli.Context, flags: LogFlags) !void {
     phase(ctx, "log");
     defer endPhase(ctx, "log");
-    var logger: platform.log.Logger = .{
+    var logger: sys.log.Logger = .{
         .writer = ctx.out,
         .format = flags.format,
-        .level = try platform.log.parseLevel(flags.level),
+        .level = try sys.log.parseLevel(flags.level),
         .secrets = try ctx.secretValues(),
     };
     if (flags.token) |token| logger.info("logging in", .{ .url = try std.fmt.allocPrint(
@@ -172,7 +172,7 @@ fn showLog(ctx: *cli.Context, flags: LogFlags) !void {
 // -- trace -------------------------------------------------------------------------------
 
 fn showTrace(ctx: *cli.Context) !void {
-    const trace = platform.trace;
+    const trace = sys.trace;
     const incoming = trace.Context.fromEnviron(ctx.environ);
     const span = if (incoming) |parent| parent.child(ctx.io) else trace.Context.root(ctx.io, true);
     const how = if (incoming != null) "continuing" else "new trace";

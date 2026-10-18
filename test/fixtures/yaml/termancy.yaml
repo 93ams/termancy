@@ -1,0 +1,4 @@
+# Discovered as ./termancy.yaml.
+name: from-yaml
+server:
+  port: 7001

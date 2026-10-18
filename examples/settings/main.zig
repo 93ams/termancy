@@ -20,7 +20,7 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
-const platform = @import("platform");
+const sys = @import("sys");
 
 const LogLevel = enum { debug, info, warn, @"error" };
 
@@ -226,7 +226,7 @@ fn set(ctx: *cli.Context, args: SetArgs) !void {
         const before = try format.parse(ctx.arena, source, null);
         return printChanges(ctx, before, tree);
     }
-    try platform.files.writeAtomic(ctx.io, .cwd(), global.file, edited, .{});
+    try sys.files.writeAtomic(ctx.io, .cwd(), global.file, edited, .{});
 }
 
 // -- diff --------------------------------------------------------------------------------
@@ -286,7 +286,7 @@ fn migrate(ctx: *cli.Context) !void {
     if (ctx.dry_run) return printChanges(ctx, before, tree);
     var out: std.Io.Writer.Allocating = .init(ctx.arena);
     try format.write(&out.writer, tree);
-    try platform.files.writeAtomic(ctx.io, .cwd(), global.file, out.written(), .{});
+    try sys.files.writeAtomic(ctx.io, .cwd(), global.file, out.written(), .{});
     try ctx.out.print("{s}: version {d} -> {d}\n", .{ global.file, result.from, result.to });
 }
 

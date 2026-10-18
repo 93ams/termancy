@@ -2,7 +2,7 @@
 Set FontSize 16
 Set Width 760
 Set Height 360
-Type "snek tui demo confirm"
+Type "termancy ui demo confirm"
 Enter
 Sleep 1s
 Right

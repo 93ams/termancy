@@ -2,7 +2,7 @@
 Set FontSize 16
 Set Width 760
 Set Height 360
-Type "snek tui demo spinner"
+Type "termancy ui demo spinner"
 Enter
 Sleep 1s
 Sleep 2s

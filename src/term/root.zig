@@ -25,7 +25,7 @@
 //! | `TrueType` | TrueType fonts: glyphs by codepoint, metrics, anti-aliased masks |
 //! | `image` | RGBA images; PNG and GIF written and read; JPEG read (baseline, progressive) |
 //! | `graphics` | images in the terminal: kitty, iTerm2, sixel, or half-block mosaic |
-//! | `golden` | output checked against golden files, rewritten on `SNEK_UPDATE_GOLDEN=1` |
+//! | `golden` | output checked against golden files, rewritten on `TERMANCY_UPDATE_GOLDEN=1` |
 //! | `diff` | line diffs (Myers): `unified` writes `diff -u` output, colored or plain |
 //! | `raster` | a screen drawn as pixels in a font, and the window around it |
 //! | `fonts` | the machine's fonts, found by family name, loaded with fallbacks |

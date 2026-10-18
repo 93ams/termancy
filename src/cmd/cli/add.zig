@@ -1,9 +1,9 @@
-//! `snek cli add <path...>`: writes a command into a project made by `snek cli init` and
+//! `termancy cli add <path...>`: writes a command into a project made by `termancy cli init` and
 //! lists it in its parent.
 //!
 //! For `add config get`: the leaf is `src/cmd/config/get.zig`; the group `config` is
 //! `src/cmd/config/main.zig`, created when missing and listed in `src/main.zig`. Each
-//! parent gets two lines, at its `// snek:subcommands` and `// snek:tests` markers. Nothing
+//! parent gets two lines, at its `// termancy:subcommands` and `// termancy:tests` markers. Nothing
 //! is written unless every change can be made, and no file is ever overwritten.
 
 const std = @import("std");
@@ -36,7 +36,7 @@ const AddFlags = struct {
 
 pub const command = cli.command(.{
     .name = "add",
-    .summary = "Add a command to an application made by snek cli init",
+    .summary = "Add a command to an application made by termancy cli init",
     .description =
     \\Write a command with a typed flags struct, a handler that prints what it receives,
     \\and a test, then list it in its parent. Every word of the path but the last is a
@@ -49,10 +49,10 @@ pub const command = cli.command(.{
     .flags = AddFlags,
     .args = .{ .min = 1, .max = null, .usage = "<command>..." },
     .examples =
-    \\snek cli add greet --flag name:string=world --summary "Greet someone"
-    \\snek cli add config get --flag key:string,required --flag verbose:count,short=v
-    \\snek cli add files copy --args 2: --flag mode:enum(fast|safe)=safe
-    \\snek cli add deploy --flow --flag env:enum(staging|production) --flag version:string,required
+    \\termancy cli add greet --flag name:string=world --summary "Greet someone"
+    \\termancy cli add config get --flag key:string,required --flag verbose:count,short=v
+    \\termancy cli add files copy --args 2: --flag mode:enum(fast|safe)=safe
+    \\termancy cli add deploy --flow --flag env:enum(staging|production) --flag version:string,required
     ,
     .run = run,
 });
@@ -208,7 +208,7 @@ fn planError(
     err: project.Plan.ReadError,
 ) (cli.Context.Failure || std.mem.Allocator.Error) {
     return switch (err) {
-        error.FileNotFound => ctx.fail("{s}/{s}: not found (is {s} a project made by snek cli " ++
+        error.FileNotFound => ctx.fail("{s}/{s}: not found (is {s} a project made by termancy cli " ++
             "init?)", .{ dir, path, dir }),
         error.UnsafePath, error.OutsideProject => ctx.fail("{s}/{s}: outside the project", .{
             dir, path,
@@ -229,8 +229,8 @@ test parseArgs {
     try testing.expectEqual(null, parseArgs("x"));
 }
 
-/// Runs snek with `args`; the caller frees the result.
-fn snek(args: []const []const u8) !cli.testing.Run {
+/// Runs termancy with `args`; the caller frees the result.
+fn termancy(args: []const []const u8) !cli.testing.Run {
     const app: cli.App = .{ .root = &@import("../../main.zig").root, .completion_command = false };
     return cli.testing.run(app, args, .{});
 }
@@ -241,12 +241,12 @@ test "init, then add twice" {
     const base = ".zig-cache/tmp/" ++ tmp.sub_path;
     const project_dir = base ++ "/demo";
 
-    const init = try snek(&.{ "cli", "init", "demo", "--dir", project_dir });
+    const init = try termancy(&.{ "cli", "init", "demo", "--dir", project_dir });
     defer init.deinit();
     try testing.expectEqualStrings("", init.err);
     try testing.expectEqual(0, init.status);
 
-    const leaf = try snek(&.{ "cli", "add", "-C", project_dir, "config", "get", "-f", "raw:bool" });
+    const leaf = try termancy(&.{ "cli", "add", "-C", project_dir, "config", "get", "-f", "raw:bool" });
     defer leaf.deinit();
     try testing.expectEqualStrings("", leaf.err);
     try testing.expectEqualStrings(
@@ -255,7 +255,7 @@ test "init, then add twice" {
             "updated " ++ project_dir ++ "/src/main.zig\n",
         leaf.out,
     );
-    const sibling = try snek(&.{ "cli", "add", "-C", project_dir, "config", "set", "--args", "2" });
+    const sibling = try termancy(&.{ "cli", "add", "-C", project_dir, "config", "set", "--args", "2" });
     defer sibling.deinit();
     try testing.expectEqual(0, sibling.status);
 
@@ -265,26 +265,26 @@ test "init, then add twice" {
         \\    .subcommands = .{
         \\        @import("get.zig").command,
         \\        @import("set.zig").command,
-        \\        // snek:subcommands
+        \\        // termancy:subcommands
         \\    },
     ) != null);
     try testing.expect(std.mem.indexOf(u8, group_text,
         \\    _ = @import("get.zig");
         \\    _ = @import("set.zig");
-        \\    // snek:tests
+        \\    // termancy:tests
     ) != null);
     const main_text = try tmp.dir.readFile(testing.io, "demo/src/main.zig", &buffer);
     // Listed once in `.subcommands` and once in the tests, however many leaves it has.
     try testing.expectEqual(2, std.mem.count(u8, main_text, "@import(\"cmd/config/main.zig\")"));
 
-    const again = try snek(&.{ "cli", "add", "-C", project_dir, "config", "get" });
+    const again = try termancy(&.{ "cli", "add", "-C", project_dir, "config", "get" });
     defer again.deinit();
     try testing.expectEqual(1, again.status);
     try testing.expectEqualStrings(
-        "snek: src/cmd/config/get.zig: the command already exists\n",
+        "termancy: src/cmd/config/get.zig: the command already exists\n",
         again.err,
     );
-    const not_empty = try snek(&.{ "cli", "init", "demo", "--dir", project_dir });
+    const not_empty = try termancy(&.{ "cli", "init", "demo", "--dir", project_dir });
     defer not_empty.deinit();
     try testing.expectEqual(1, not_empty.status);
 }

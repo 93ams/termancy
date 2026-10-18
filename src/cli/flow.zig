@@ -57,7 +57,7 @@
 //! Each action reports one line on standard error when it ends (`✓ Build (1.2s)`; with
 //! `-q`, only failures and undos), or, with `-o json`, one JSON object on standard
 //! output. Questions are asked by `Context.asker`: plain lines by default (`App.asker`
-//! replaces it; the `prompts` component of `snek tui add` asks with the terminal
+//! replaces it; the `prompts` component of `termancy tui add` asks with the terminal
 //! interface instead).
 //! `writeMermaid` draws the graph for documentation.
 

@@ -195,7 +195,7 @@ fn exitStatus(err: anyerror) ?u8 {
 
 pub fn main(init: std.process.Init) u8 {
     // At a terminal, the questions are drawn by the `prompts` component (copied into a
-    // project with `snek tui add prompts`); elsewhere they are never asked.
+    // project with `termancy tui add prompts`); elsewhere they are never asked.
     var prompts: components.prompts.Prompts = .{
         .gpa = init.gpa,
         .io = init.io,

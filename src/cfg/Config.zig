@@ -617,11 +617,11 @@ pub fn changed(config: *const Config, io: Io) bool {
     return false;
 }
 
-/// Lets `loadFile` open files encrypted with `encrypted.encrypt` (`snek cfg encrypt`).
+/// Lets `loadFile` open files encrypted with `encrypted.encrypt` (`termancy cfg encrypt`).
 /// Their keys are all marked secret, so `write` redacts them. The decrypted text is wiped
 /// once parsed and not kept, so `locateDiagnostic` does not point into such a file (nor
 /// quote it); the values themselves stay in memory as any configuration does.
-/// `passphrase` is borrowed: keep it alive, ideally in memory from `platform.secure`, as
+/// `passphrase` is borrowed: keep it alive, ideally in memory from `sys.secure`, as
 /// long as files may load.
 pub fn usePassphrase(config: *Config, passphrase: []const u8) void {
     config.passphrase = passphrase;
@@ -939,7 +939,7 @@ pub const AppFileError = LoadError || error{
 
 /// Loads the application's own configuration file, or none: `options.path` when given,
 /// else the file the variable `options.env` names, else `options.name` in the user's
-/// configuration directory for `app`, as `platform.dirs` places it (`$XDG_CONFIG_HOME/<app>`
+/// configuration directory for `app`, as `sys.dirs` places it (`$XDG_CONFIG_HOME/<app>`
 /// or `~/.config/<app>`; `~/Library/Application Support/<app>` on macOS;
 /// `%APPDATA%\<app>` on Windows). A file that does not exist is not an error: `found` is
 /// false, and `path` says where one would go. Call `useEnv` first.
@@ -980,7 +980,7 @@ fn separator(os: std.Target.Os.Tag) []const u8 {
 }
 
 /// The user's configuration directory for `app` on `os`, in `a`; null without a home.
-/// Follows `platform.dirs`, which `cfg` does not import.
+/// Follows `sys.dirs`, which `cfg` does not import.
 fn appConfigDir(
     a: Allocator,
     environ: *const std.process.Environ.Map,
@@ -1691,8 +1691,8 @@ pub fn keys(config: *Config) Allocator.Error![]const []const u8 {
 }
 
 /// `base` and `name` joined with the separator `base` already uses, so a source reads the
-/// way it was written: `./snek.toml`, `conf/shared/base.yaml`, `C:\x\snek.toml`. As
-/// `platform.files.join`, which `cfg` does not import.
+/// way it was written: `./termancy.toml`, `conf/shared/base.yaml`, `C:\x\termancy.toml`. As
+/// `sys.files.join`, which `cfg` does not import.
 fn joinPath(gpa: Allocator, base: []const u8, name: []const u8) Allocator.Error![]u8 {
     if (base.len == 0) return gpa.dupe(u8, name);
     const windows = @import("builtin").os.tag == .windows;

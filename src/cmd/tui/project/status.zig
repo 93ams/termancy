@@ -1,4 +1,4 @@
-//! What `snek tui add` does with each file, and what `snek tui list` says of each
+//! What `termancy tui add` does with each file, and what `termancy tui list` says of each
 //! component, from three versions of a file: on disk, recorded in `tui.zon`, and in the
 //! registry.
 

@@ -1,13 +1,13 @@
-//! Build graph: the `term`, `cli`, `cfg`, `tui`, and `platform` library modules, the `snek`
+//! Build graph: the `term`, `cli`, `cfg`, `tui`, and `sys` library modules, the `termancy`
 //! executable, and the checks.
 //!
 //! | step                       | what it does                                                 |
 //! |----------------------------|--------------------------------------------------------------|
-//! | `zig build`                | builds and installs `snek`                                   |
-//! | `zig build run`            | runs `snek` with the arguments after `--`                    |
+//! | `zig build`                | builds and installs `termancy`                                   |
+//! | `zig build run`            | runs `termancy` with the arguments after `--`                    |
 //! | `zig build test`           | format check, unit, end-to-end, and compile-error tests      |
 //! | `zig build unit`           | unit tests only                                              |
-//! | `zig build e2e`            | end-to-end tests only: runs `snek` over `test/fixtures`      |
+//! | `zig build e2e`            | end-to-end tests only: runs `termancy` over `test/fixtures`      |
 //! | `zig build compile-errors` | checks that `cli` rejects bad commands at compile time       |
 //! | `zig build check`          | compiles for Linux, macOS, Windows (WASI for cli/cfg, unit   |
 //! |                            | tests for aarch64 Linux too)                                 |
@@ -56,8 +56,8 @@ const Example = struct {
     /// A new, empty directory, appended to this prefix as the last argument.
     empty_dir_prefix: ?[]const u8 = null,
     stdout: []const u8,
-    /// Copies the registry's components into `ui/` beside `main.zig`, where `snek tui add`
-    /// puts them in a project made by `snek cli init`.
+    /// Copies the registry's components into `ui/` beside `main.zig`, where `termancy tui add`
+    /// puts them in a project made by `termancy cli init`.
     components: bool = false,
 };
 
@@ -265,21 +265,21 @@ const docs_index =
     \\<html lang="en">
     \\<meta charset="utf-8">
     \\<meta name="viewport" content="width=device-width, initial-scale=1">
-    \\<title>snek reference</title>
+    \\<title>termancy reference</title>
     \\<style>
     \\body { font: 16px/1.5 system-ui, sans-serif; max-width: 40em; margin: 2em auto;
     \\       padding: 0 1em }
     \\</style>
-    \\<h1>snek reference</h1>
+    \\<h1>termancy reference</h1>
     \\<h2>Libraries</h2>
     \\<ul>
     \\<li><a href="api/term/index.html">term</a>: the terminal: styles, width, escapes</li>
     \\<li><a href="api/cli/index.html">cli</a>: command-line applications</li>
     \\<li><a href="api/cfg/index.html">cfg</a>: layered configuration</li>
     \\<li><a href="api/tui/index.html">tui</a>: terminal user interfaces</li>
-    \\<li><a href="api/platform/index.html">platform</a>: the operating system</li>
+    \\<li><a href="api/sys/index.html">sys</a>: the operating system</li>
     \\</ul>
-    \\<h2>The snek program</h2>
+    \\<h2>The termancy program</h2>
     \\<ul>
     \\<li><a href="commands.html">Every command</a>,
     \\also as man pages in <code>man/man1</code></li>
@@ -288,7 +288,7 @@ const docs_index =
 ;
 
 /// The library modules, in the order `unit` runs them, each after the ones it imports.
-const libraries = [_][]const u8{ "term", "cli", "cfg", "tui", "platform" };
+const libraries = [_][]const u8{ "term", "cli", "cfg", "tui", "sys" };
 
 /// The libraries `name` imports besides `std`.
 fn libraryImports(comptime name: []const u8) []const []const u8 {
@@ -309,10 +309,10 @@ fn library(comptime name: []const u8) usize {
 const Modules = struct {
     /// One per entry of `libraries`, in the same order.
     libs: [libraries.len]*std.Build.Module,
-    snek: *std.Build.Module,
+    termancy: *std.Build.Module,
 
     fn all(m: Modules) [libraries.len + 1]*std.Build.Module {
-        return m.libs ++ [_]*std.Build.Module{m.snek};
+        return m.libs ++ [_]*std.Build.Module{m.termancy};
     }
 };
 
@@ -339,20 +339,20 @@ fn modules(
         }
         import.* = .{ .name = name, .module = lib.* };
     }
-    const snek = b.createModule(.{
+    const termancy = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = b.allocator.dupe(std.Build.Module.Import, &imports) catch @panic("OOM"),
     });
-    snek.addImport("build_options", build_options);
-    return .{ .libs = libs, .snek = snek };
+    termancy.addImport("build_options", build_options);
+    return .{ .libs = libs, .termancy = termancy };
 }
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // What `snek --version` reports beyond the version. Given, not detected, so that a build
+    // What `termancy --version` reports beyond the version. Given, not detected, so that a build
     // is reproducible: a release passes `-Dcommit=$(git rev-parse HEAD) -Ddate=...`.
     const options = b.addOptions();
     options.addOption([]const u8, "version", @import("build.zig.zon").version);
@@ -361,13 +361,13 @@ pub fn build(b: *std.Build) void {
     const build_options = options.createModule();
     const host = modules(b, target, optimize, true, build_options);
 
-    const exe = b.addExecutable(.{ .name = "snek", .root_module = host.snek });
+    const exe = b.addExecutable(.{ .name = "termancy", .root_module = host.termancy });
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
     run.step.dependOn(b.getInstallStep());
     run.addPassthruArgs();
-    b.step("run", "Run snek").dependOn(&run.step);
+    b.step("run", "Run termancy").dependOn(&run.step);
 
     const unit = b.step("unit", "Run the unit tests");
     // kcov runs each test binary and merges the reports; it needs Linux and kcov on PATH.
@@ -398,7 +398,7 @@ pub fn build(b: *std.Build) void {
     // runs a second than Debug, with the same safety checks.
     const fuzz = b.step("fuzz", "Fuzz the parsers of untrusted input (--fuzz, or --fuzz=100K)");
     const tape_test_root: std.Build.Module.CreateOptions = .{
-        .root_source_file = b.path("src/cmd/cli/record/fuzz.zig"),
+        .root_source_file = b.path("src/cmd/record/fuzz.zig"),
         .target = target,
         .optimize = optimize,
     };
@@ -410,7 +410,7 @@ pub fn build(b: *std.Build) void {
     for ([_]*std.Build.Module{
         safe.libs[library("term")],
         safe.libs[library("cfg")],
-        safe.libs[library("platform")],
+        safe.libs[library("sys")],
         b.createModule(tape_fuzz_root),
     }) |module| {
         const fuzz_tests = b.addTest(.{ .root_module = module, .use_llvm = true });
@@ -455,7 +455,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const examples_step = b.step("examples", "Build, test, and run the apps in examples/");
-    // The registry's components, which a project would copy in with `snek tui add`.
+    // The registry's components, which a project would copy in with `termancy tui add`.
     const components = b.createModule(.{
         .root_source_file = b.path("src/cmd/tui/registry/root.zig"),
         .target = target,
@@ -478,7 +478,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "cli", .module = host.libs[library("cli")] },
                 .{ .name = "cfg", .module = host.libs[library("cfg")] },
                 .{ .name = "tui", .module = host.libs[library("tui")] },
-                .{ .name = "platform", .module = host.libs[library("platform")] },
+                .{ .name = "sys", .module = host.libs[library("sys")] },
                 .{ .name = "components", .module = components },
             },
         });
@@ -537,12 +537,12 @@ pub fn build(b: *std.Build) void {
     }) });
     unit.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = site_tool.root_module })).step);
     addSite(b, b.step("site", "Generate the documentation site into zig-out/site"), .{
-        .snek = exe,
+        .termancy = exe,
         .tool = site_tool,
         .api = api,
     });
     addSite(b, b.step("site-gifs", "Record the components' GIFs, then generate the site"), .{
-        .snek = exe,
+        .termancy = exe,
         .tool = site_tool,
         .api = api,
         .gifs = true,
@@ -552,8 +552,8 @@ pub fn build(b: *std.Build) void {
     e2e.addCases(b, exe, end_to_end);
     e2e_tui_widgets.addCases(b, exe, end_to_end);
     e2e_tui_registry.addCases(b, exe, end_to_end);
-    e2e_ssh.addCases(b, exe, host.libs[library("platform")], end_to_end);
-    e2e_web.addCases(b, exe, host.libs[library("platform")], end_to_end);
+    e2e_ssh.addCases(b, exe, host.libs[library("sys")], end_to_end);
+    e2e_web.addCases(b, exe, host.libs[library("sys")], end_to_end);
 
     const rejected = b.step("compile-errors", "Check that cli rejects bad commands when compiling");
     compile_errors.addCases(b, rejected);
@@ -605,7 +605,7 @@ pub fn build(b: *std.Build) void {
     const check = b.step("check", "Compile everything for every supported target");
     for (check_targets) |query| {
         const cross = modules(b, b.resolveTargetQuery(query), optimize, false, build_options);
-        check.dependOn(&b.addExecutable(.{ .name = "snek", .root_module = cross.snek }).step);
+        check.dependOn(&b.addExecutable(.{ .name = "termancy", .root_module = cross.termancy }).step);
         for (cross.all()) |module| {
             check.dependOn(&b.addTest(.{ .root_module = module }).step);
         }
@@ -615,7 +615,7 @@ pub fn build(b: *std.Build) void {
     const arm = modules(b, b.resolveTargetQuery(arm_target), optimize, false, build_options);
     for (arm.all()) |module| check.dependOn(&b.addTest(.{ .root_module = module }).step);
     // `cli` and `cfg` (and `term` under them) also run inside WASM hosts (`App.executeLine`);
-    // `tui` and `platform` need a real operating system and are not built for WASI.
+    // `tui` and `sys` need a real operating system and are not built for WASI.
     const wasi = modules(b, b.resolveTargetQuery(wasi_target), optimize, false, build_options);
     for (wasi.libs, libraries) |module, name| {
         if (!isWasiLibrary(name)) continue;
@@ -624,20 +624,20 @@ pub fn build(b: *std.Build) void {
 }
 
 const Site = struct {
-    snek: *std.Build.Step.Compile,
+    termancy: *std.Build.Step.Compile,
     tool: *std.Build.Step.Compile,
     /// Each library's API reference, as `zig build docs` makes it.
     api: [libraries.len]std.Build.LazyPath,
-    /// Record `docs/tapes/<component>.tape` with `snek cli record`. Each GIF is cached until
-    /// snek or the tape changes; without them, the gallery says how to record them.
+    /// Record `docs/tapes/<component>.tape` with `termancy record`. Each GIF is cached until
+    /// termancy or the tape changes; without them, the gallery says how to record them.
     gifs: bool = false,
 };
 
-/// `step` writes `zig-out/site` with `tools/site.zig`, from what snek itself prints.
+/// `step` writes `zig-out/site` with `tools/site.zig`, from what termancy itself prints.
 fn addSite(b: *std.Build, step: *std.Build.Step, site: Site) void {
-    const commands = b.addRunArtifact(site.snek);
+    const commands = b.addRunArtifact(site.termancy);
     commands.addArgs(&.{ "cli", "docs", "--format", "html", "--stylesheet", "style.css" });
-    const listing = b.addRunArtifact(site.snek);
+    const listing = b.addRunArtifact(site.termancy);
     listing.addArgs(&.{ "tui", "list", "-o", "json", "-C" });
     _ = listing.addOutputDirectoryArg("project");
 
@@ -651,15 +651,15 @@ fn addSite(b: *std.Build, step: *std.Build.Step, site: Site) void {
     generate.addFileArg(commands.captureStdOut(.{}));
     generate.addFileArg(b.path("docs/guide.md"));
     if (site.gifs) for (tapes(b)) |name| {
-        // The tapes type `snek ...`, so the snek being built goes first on PATH.
+        // The tapes type `termancy ...`, so the termancy being built goes first on PATH.
         const record = b.addSystemCommand(&.{
             "sh",
             "-c",
-            "PATH=\"$(dirname \"$1\"):$PATH\" exec \"$1\" cli record -q \"$2\" -o \"$3\"",
+            "PATH=\"$(dirname \"$1\"):$PATH\" exec \"$1\" record -q \"$2\" -o \"$3\"",
             "record",
         });
         record.setName(b.fmt("record {s}", .{name}));
-        record.addArtifactArg(site.snek);
+        record.addArtifactArg(site.termancy);
         record.addFileArg(b.path(b.fmt("docs/tapes/{s}.tape", .{name})));
         const gif = record.addOutputFileArg(b.fmt("{s}.gif", .{name}));
         generate.addPrefixedFileArg(b.fmt("{s}=", .{name}), gif);

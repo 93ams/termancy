@@ -12,8 +12,8 @@
 //!   per repository and a bar for all of them;
 //! - `tui`: `ui` is a table to filter as you type (`/`) beside a scrolling details pane,
 //!   from the `table`, `input`, `filter`, and `viewport` components that
-//!   `snek tui add table filter viewport` copied into `ui/` (see `tui.zon`);
-//! - `platform.web`: `ui --web 127.0.0.1:7681` serves the same interface to browsers.
+//!   `termancy tui add table filter viewport` copied into `ui/` (see `tui.zon`);
+//! - `sys.web`: `ui --web 127.0.0.1:7681` serves the same interface to browsers.
 //!
 //!     zig build examples
 //!     zig-out/bin/repos setup                      # asks, at a terminal
@@ -28,14 +28,14 @@ const cli = @import("cli");
 const cfg = @import("cfg");
 const term = @import("term");
 const tui = @import("tui");
-const platform = @import("platform");
+const sys = @import("sys");
 const Table = @import("ui/table.zig").Table;
 const Input = @import("ui/input.zig").Input;
 const Viewport = @import("ui/viewport.zig").Viewport;
 const fuzzy = @import("ui/filter.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
-const web = platform.web;
+const web = sys.web;
 
 // Configuration.
 
@@ -250,7 +250,7 @@ fn save(ctx: *cli.Context, state: *Setup) !void {
     };
     const text = try cfg.edit.applyAll(ctx.arena, format, before, &changes) orelse
         return ctx.fail("{s}: cannot change it in place; edit the file by hand", .{path});
-    platform.files.writeAtomic(ctx.io, cwd, path, text, .{ .make_path = true }) catch |err|
+    sys.files.writeAtomic(ctx.io, cwd, path, text, .{ .make_path = true }) catch |err|
         return ctx.fail("{s}: {t}", .{ path, err });
     if (ctx.output == .text) try ctx.out.print("wrote {s}\n", .{path});
 }
@@ -327,8 +327,8 @@ fn walk(
         const child_name = if (name.len == 0)
             try ctx.arena.dupe(u8, entry.name)
         else
-            try platform.files.join(ctx.arena, name, entry.name);
-        const child_path = try platform.files.join(ctx.arena, path, entry.name);
+            try sys.files.join(ctx.arena, name, entry.name);
+        const child_path = try sys.files.join(ctx.arena, path, entry.name);
         var child = dir.openDir(ctx.io, entry.name, .{ .iterate = true }) catch continue;
         defer child.close(ctx.io);
         try walk(ctx, child, child_path, child_name, depth - 1, ignore, found);
@@ -445,7 +445,7 @@ fn git(gpa: Allocator, io: Io, path: []const u8, args: []const []const u8) ?[]u8
     var argv: [8][]const u8 = undefined;
     argv[0..3].* = .{ "git", "-C", path };
     @memcpy(argv[3..][0..args.len], args);
-    const output = platform.process.capture(gpa, io, argv[0 .. 3 + args.len], .{
+    const output = sys.process.capture(gpa, io, argv[0 .. 3 + args.len], .{
         .timeout = .fromSeconds(30),
     }) catch return null;
     defer gpa.free(output.stderr);
@@ -540,7 +540,7 @@ const Fetching = struct {
     fn one(f: *Fetching, i: usize) void {
         const ctx = f.ctx;
         f.update(i, .running, "");
-        const output = platform.process.capture(ctx.gpa, ctx.io, &.{
+        const output = sys.process.capture(ctx.gpa, ctx.io, &.{
             "git", "-C", f.found[i].path, "fetch", "--quiet",
         }, .{ .timeout = f.timeout.toIo() });
         const result = output catch |err| return f.update(i, .failed, @errorName(err));
@@ -1006,7 +1006,7 @@ const Fixture = struct {
         argv[0..3].* = .{ "git", "-C", f.path };
         @memcpy(argv[3..][0..args.len], args);
         const argv_used = argv[0 .. 3 + args.len];
-        const output = try platform.process.capture(testing.allocator, testing.io, argv_used, .{});
+        const output = try sys.process.capture(testing.allocator, testing.io, argv_used, .{});
         defer output.deinit(testing.allocator);
         if (!output.success()) {
             std.debug.print("git {s}: {s}\n", .{ args[0], output.stderr });

@@ -1,4 +1,4 @@
-//! `snek tui diff <component>`: the project's copy of a component against the registry's,
+//! `termancy tui diff <component>`: the project's copy of a component against the registry's,
 //! as a unified diff.
 
 const std = @import("std");
@@ -30,8 +30,8 @@ pub const command = cli.command(.{
     .flags = DiffFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<component>" },
     .examples =
-    \\snek tui diff select
-    \\snek tui diff select -C demo | less
+    \\termancy tui diff select
+    \\termancy tui diff select -C demo | less
     ,
     .run = run,
 });
@@ -41,11 +41,11 @@ fn run(ctx: *cli.Context, flags: DiffFlags) !void {
     var ws: Workspace = try .open(ctx, flags.project, false);
     defer ws.close(ctx.io);
     const m = try ws.loadManifest(ctx) orelse return ctx.usageError("{s}{s}: not found (run " ++
-        "snek tui init first)", .{ ws.prefix, manifest.file_name });
+        "termancy tui init first)", .{ ws.prefix, manifest.file_name });
     const component = catalog.find(try workspace.components(ctx), name) orelse
-        return ctx.usageError("unknown component \"{s}\" (snek tui list lists them)", .{name});
+        return ctx.usageError("unknown component \"{s}\" (termancy tui list lists them)", .{name});
     if (m.components.get(name) == null) {
-        return ctx.usageError("{s}: not installed (snek tui add {s} installs it)", .{
+        return ctx.usageError("{s}: not installed (termancy tui add {s} installs it)", .{
             name, name,
         });
     }

@@ -1120,7 +1120,7 @@ pub fn Program(comptime Model: type) type {
         }
 
         /// Runs the program over a remote terminal until it quits or the other end goes:
-        /// an SSH session (`platform.ssh.Session`), or anything with `next(Io.Timeout)`
+        /// an SSH session (`sys.ssh.Session`), or anything with `next(Io.Timeout)`
         /// returning `.data`, `.resize`, `.signal`, `.eof`, `.timeout`, or `.closed`. The
         /// program writes to the writer it was made with (the session's); set
         /// `Options.size` to the session's terminal. Handing the terminal to another

@@ -1,13 +1,13 @@
 # Upgrading Zig
 
-snek builds with exactly one Zig release at a time, named in `build.zig.zon`
+termancy builds with exactly one Zig release at a time, named in `build.zig.zon`
 (`minimum_zig_version`) and in the README. Zig changes quickly, so each toolchain bump gets
 a section here: what moved in the language and standard library, and what that means for
-code built on snek. Newest first.
+code built on termancy. Newest first.
 
 ## 0.16 → 0.17
 
-**For code using snek:** nothing in the `cli` or `cfg` API changed shape for the bump. Your
+**For code using termancy:** nothing in the `cli` or `cfg` API changed shape for the bump. Your
 own code is likely to need the changes below.
 
 ### Build scripts
@@ -49,7 +49,7 @@ own code is likely to need the changes below.
   make some of its code misbehave. `zig build fuzz` and `zig build coverage` build their
   tests with `.use_llvm = true` for that reason.
 - **Generic code that nothing calls is not analysed.** A green test suite after an upgrade
-  does not prove every function compiles; snek's tests instantiate each public generic
+  does not prove every function compiles; termancy's tests instantiate each public generic
   writer for that reason.
 - Keep the build cache on a native file system: under WSL, a cache on `/mnt/c` fails with
   `AccessDenied`. Pass `--cache-dir` to put it elsewhere.

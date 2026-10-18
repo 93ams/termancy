@@ -121,7 +121,7 @@ fn ticks(ctx: *cli.Context) !void {
     try ctx.out.print("quit after {d} ticks\n", .{ticker.ticks});
 }
 
-/// Asks the console which image protocol it speaks, as `snek tui image -p auto` does: the
+/// Asks the console which image protocol it speaks, as `termancy image -p auto` does: the
 /// answer depends on the console host, but the question must come back within its time.
 fn query(ctx: *cli.Context) !void {
     var buffer: [256]u8 = undefined;

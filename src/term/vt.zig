@@ -1,7 +1,7 @@
 //! A virtual terminal: what a screen shows after a program's output, as xterm-compatible
 //! terminals interpret it. Runs anything a real terminal runs (shells, editors, `tui`
 //! programs) when its output is fed to `Screen.write`, which is how `tui.testing` checks
-//! redraws, `snek cli record` turns sessions into GIFs, and `snek cli freeze` captures
+//! redraws, `termancy record` turns sessions into GIFs, and `termancy freeze` captures
 //! command output.
 //!
 //! ```zig

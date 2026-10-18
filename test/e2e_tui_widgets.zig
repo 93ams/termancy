@@ -1,4 +1,4 @@
-//! End-to-end tests for the gum-style `snek tui` commands, run as processes in
+//! End-to-end tests for the gum-style `termancy ui` commands, run as processes in
 //! `test/fixtures` with an empty environment plus what each case sets.
 //!
 //! Three kinds of case:
@@ -11,7 +11,7 @@
 //! - Interactive commands driven through a pseudo-terminal by util-linux `script`: a shell
 //!   types the keys once the first frame is drawn (raw mode is on by then, so no key is
 //!   lost), and the command's standard output, redirected to a file, is the result. This
-//!   is the `x=$(snek tui choose ...)` situation: the interface on the terminal, the answer
+//!   is the `x=$(termancy ui choose ...)` situation: the interface on the terminal, the answer
 //!   in the pipe. Skipped without `script` and `sh`.
 
 const std = @import("std");
@@ -33,7 +33,7 @@ const force_color = [_][2][]const u8{.{ "FORCE_COLOR", "3" }};
 const both = [_][2][]const u8{ .{ "NO_COLOR", "1" }, .{ "FORCE_COLOR", "3" } };
 
 const style_args = [_][]const u8{
-    "tui",    "style",        "--border", "rounded", "--padding", "0 1",
+    "ui",     "style",        "--border", "rounded", "--padding", "0 1",
     "--bold", "--foreground", "212",      "hello",   "world",
 };
 const style_plain =
@@ -110,11 +110,11 @@ const people_table =
     \\
 ;
 
-const no_terminal = "snek: no terminal to draw on: standard input and output are not " ++
+const no_terminal = "termancy: no terminal to draw on: standard input and output are not " ++
     "terminals and /dev/tty cannot be opened\n";
 
 fn usage(comptime command: []const u8) []const u8 {
-    return "Run 'snek tui " ++ command ++ " --help' for usage.\n";
+    return "Run 'termancy ui " ++ command ++ " --help' for usage.\n";
 }
 
 /// Cases that never need a terminal.
@@ -136,52 +136,52 @@ const cases = [_]Case{
     },
     .{
         .name = "style, 16 colors",
-        .args = &.{ "tui", "style", "--foreground", "#ff0000", "--underline", "x" },
+        .args = &.{ "ui", "style", "--foreground", "#ff0000", "--underline", "x" },
         .env = &.{.{ "FORCE_COLOR", "1" }},
         .stdout = "\x1b[4;91mx\x1b[0m\n",
     },
     .{
         .name = "style from standard input, aligned in a width",
-        .args = &.{ "tui", "style", "--align", "right", "--width", "8", "--border", "normal" },
+        .args = &.{ "ui", "style", "--align", "right", "--width", "8", "--border", "normal" },
         .stdin = "right\n",
         .stdout = "┌────────┐\n│   right│\n└────────┘\n",
     },
     .{
         .name = "style with margin and padding",
-        .args = &.{ "tui", "style", "--margin", "1 2", "--padding", "0 1 0 3", "x" },
+        .args = &.{ "ui", "style", "--margin", "1 2", "--padding", "0 1 0 3", "x" },
         .stdout = "         \n     x   \n         \n",
     },
     .{
         .name = "style with a bad color",
-        .args = &.{ "tui", "style", "--foreground", "nope", "x" },
-        .stderr = "snek: invalid value \"nope\" for flag --foreground: expected color\n" ++
+        .args = &.{ "ui", "style", "--foreground", "nope", "x" },
+        .stderr = "termancy: invalid value \"nope\" for flag --foreground: expected color\n" ++
             usage("style"),
         .status = 2,
     },
     .{
         .name = "style with bad padding",
-        .args = &.{ "tui", "style", "--padding", "1 2 3", "x" },
-        .stderr = "snek: invalid value \"1 2 3\" for flag --padding: expected spacing\n" ++
+        .args = &.{ "ui", "style", "--padding", "1 2 3", "x" },
+        .stderr = "termancy: invalid value \"1 2 3\" for flag --padding: expected spacing\n" ++
             usage("style"),
         .status = 2,
     },
     // format
     .{
         .name = "format, piped",
-        .args = &.{ "tui", "format" },
+        .args = &.{ "ui", "format" },
         .stdin = markdown,
         .stdout = markdown_plain,
     },
     .{
         .name = "format, NO_COLOR",
-        .args = &.{ "tui", "format" },
+        .args = &.{ "ui", "format" },
         .env = &no_color,
         .stdin = markdown,
         .stdout = markdown_plain,
     },
     .{
         .name = "format, FORCE_COLOR",
-        .args = &.{ "tui", "format", "# T", "*i* `c`" },
+        .args = &.{ "ui", "format", "# T", "*i* `c`" },
         .env = &force_color,
         .stdout = "\n  \x1b[1;38;5;228;48;5;63m \x1b[0m\x1b[1;38;5;228;48;5;63mT\x1b[0m" ++
             "\x1b[1;38;5;228;48;5;63m \x1b[0m\n\n  \x1b[3;38;5;252mi\x1b[0m\x1b[38;5;252m " ++
@@ -190,20 +190,20 @@ const cases = [_]Case{
     // table --print
     .{
         .name = "table --print, piped",
-        .args = &.{ "tui", "table", "--print" },
+        .args = &.{ "ui", "table", "--print" },
         .stdin = people_csv,
         .stdout = people_table,
     },
     .{
         .name = "table --print, NO_COLOR",
-        .args = &.{ "tui", "table", "--print" },
+        .args = &.{ "ui", "table", "--print" },
         .env = &no_color,
         .stdin = people_csv,
         .stdout = people_table,
     },
     .{
         .name = "table --print, FORCE_COLOR",
-        .args = &.{ "tui", "table", "-p", "--border", "ascii" },
+        .args = &.{ "ui", "table", "-p", "--border", "ascii" },
         .env = &force_color,
         .stdin = "a,b\n1,2\n",
         .stdout = "\x1b[38;5;238m+---+---+\x1b[0m\n" ++
@@ -216,64 +216,64 @@ const cases = [_]Case{
     .{
         .name = "table --print: TSV, titles, widths, no border",
         .args = &.{
-            "tui", "table", "-p",       "-s",   "tab", "-c", "x,y",
-            "-w",  "6,0",   "--border", "none",
+            "ui", "table", "-p",       "-s",   "tab", "-c", "x,y",
+            "-w", "6,0",   "--border", "none",
         },
         .stdin = "a\tb\nlonger cell\t2\n",
         .stdout = "x       y\na       b\nlonge…  2\n",
     },
     .{
         .name = "table with no input",
-        .args = &.{ "tui", "table", "--print" },
+        .args = &.{ "ui", "table", "--print" },
         .stdin = "",
-        .stderr = "snek: standard input holds no table\n",
+        .stderr = "termancy: standard input holds no table\n",
         .status = 1,
     },
     .{
         .name = "table with an unterminated quote",
-        .args = &.{ "tui", "table", "--print" },
+        .args = &.{ "ui", "table", "--print" },
         .stdin = "a\n\"b\n",
-        .stderr = "snek: standard input: a quoted field never ends\n",
+        .stderr = "termancy: standard input: a quoted field never ends\n",
         .status = 1,
     },
     .{
         .name = "table with a bad separator",
-        .args = &.{ "tui", "table", "--separator", "ab" },
-        .stderr = "snek: invalid --separator \"ab\" (use one character, or \\t)\n" ++
+        .args = &.{ "ui", "table", "--separator", "ab" },
+        .stderr = "termancy: invalid --separator \"ab\" (use one character, or \\t)\n" ++
             usage("table"),
         .status = 2,
     },
     // failures that come before any terminal
     .{
         .name = "choose with no items",
-        .args = &.{ "tui", "choose" },
+        .args = &.{ "ui", "choose" },
         .stdin = "",
-        .stderr = "snek: no items to choose from\n",
+        .stderr = "termancy: no items to choose from\n",
         .status = 1,
     },
     .{
         .name = "filter with no items",
-        .args = &.{ "tui", "filter" },
+        .args = &.{ "ui", "filter" },
         .stdin = "",
-        .stderr = "snek: no items to choose from\n",
+        .stderr = "termancy: no items to choose from\n",
         .status = 1,
     },
     .{
         .name = "choose --limit 0",
-        .args = &.{ "tui", "choose", "--limit", "0", "a" },
-        .stderr = "snek: --limit must be at least 1\n" ++ usage("choose"),
+        .args = &.{ "ui", "choose", "--limit", "0", "a" },
+        .stderr = "termancy: --limit must be at least 1\n" ++ usage("choose"),
         .status = 2,
     },
     .{
         .name = "pager with a missing file",
-        .args = &.{ "tui", "pager", "missing.txt" },
-        .stderr = "snek: missing.txt: no such file\n",
+        .args = &.{ "ui", "pager", "missing.txt" },
+        .stderr = "termancy: missing.txt: no such file\n",
         .status = 1,
     },
     .{
         .name = "spin without a command",
-        .args = &.{ "tui", "spin" },
-        .stderr = "snek: \"snek tui spin\" requires at least 1 argument, received 0\n" ++
+        .args = &.{ "ui", "spin" },
+        .stderr = "termancy: \"termancy ui spin\" requires at least 1 argument, received 0\n" ++
             usage("spin"),
         .status = 2,
     },
@@ -283,78 +283,78 @@ const cases = [_]Case{
 const detached_cases = [_]Case{
     .{
         .name = "choose without a terminal",
-        .args = &.{ "tui", "choose", "a", "b" },
+        .args = &.{ "ui", "choose", "a", "b" },
         .stderr = no_terminal ++ usage("choose"),
         .status = 2,
     },
     .{
         .name = "choose without a terminal, items piped",
-        .args = &.{ "tui", "choose" },
+        .args = &.{ "ui", "choose" },
         .stdin = "a\nb\n",
         .stderr = no_terminal ++ usage("choose"),
         .status = 2,
     },
     .{
         .name = "choose --limit without a terminal",
-        .args = &.{ "tui", "choose", "--limit", "2", "a", "b" },
+        .args = &.{ "ui", "choose", "--limit", "2", "a", "b" },
         .stderr = no_terminal ++ usage("choose"),
         .status = 2,
     },
     .{
         .name = "confirm without a terminal",
-        .args = &.{ "tui", "confirm" },
+        .args = &.{ "ui", "confirm" },
         .stderr = no_terminal ++ usage("confirm"),
         .status = 2,
     },
     .{
         .name = "input without a terminal",
-        .args = &.{ "tui", "input" },
+        .args = &.{ "ui", "input" },
         .stderr = no_terminal ++ usage("input"),
         .status = 2,
     },
     .{
         .name = "write without a terminal",
-        .args = &.{ "tui", "write" },
+        .args = &.{ "ui", "write" },
         .stderr = no_terminal ++ usage("write"),
         .status = 2,
     },
     .{
         .name = "filter without a terminal",
-        .args = &.{ "tui", "filter" },
+        .args = &.{ "ui", "filter" },
         .stdin = "a\nb\n",
         .stderr = no_terminal ++ usage("filter"),
         .status = 2,
     },
     .{
         .name = "table without a terminal",
-        .args = &.{ "tui", "table" },
+        .args = &.{ "ui", "table" },
         .stdin = "a,b\n1,2\n",
         .stderr = no_terminal ++ usage("table"),
         .status = 2,
     },
     .{
         .name = "pager without a terminal",
-        .args = &.{ "tui", "pager", "notes.txt" },
+        .args = &.{ "ui", "pager", "notes.txt" },
         .stderr = no_terminal ++ usage("pager"),
         .status = 2,
     },
     // spin needs no terminal: without one, the command just runs.
     .{
         .name = "spin passes output and status through",
-        .args = &.{ "tui", "spin", "--", "sh", "-c", "echo out; echo err >&2; exit 3" },
+        .args = &.{ "ui", "spin", "--", "sh", "-c", "echo out; echo err >&2; exit 3" },
         .stdout = "out\n",
         .stderr = "err\n",
         .status = 3,
     },
     .{
         .name = "spin with a successful command",
-        .args = &.{ "tui", "spin", "--title", "Working", "--", "sh", "-c", "echo ok" },
+        .args = &.{ "ui", "spin", "--title", "Working", "--", "sh", "-c", "echo ok" },
         .stdout = "ok\n",
     },
     .{
         .name = "spin with a command that does not exist",
-        .args = &.{ "tui", "spin", "--", "snek-e2e-no-such-command" },
-        .stderr = "snek: snek-e2e-no-such-command: command not found\n",
+        .args = &.{ "ui", "spin", "--", "termancy-e2e-no-such-command" },
+        .stderr = "termancy: termancy-e2e-no-such-command: command not found\n",
         .status = 127,
     },
 };
@@ -362,7 +362,7 @@ const detached_cases = [_]Case{
 /// A command run in a pseudo-terminal, with keys typed into it.
 const PtyCase = struct {
     name: []const u8,
-    /// A shell command; `"$SNEK"` is the snek binary. Its standard output is the result.
+    /// A shell command; `"$TERMANCY"` is the termancy binary. Its standard output is the result.
     command: []const u8,
     /// Typed once the first frame is drawn, as `printf` reads them (`\r` is enter,
     /// `\033` esc, `\003` Ctrl-C, `\004` Ctrl-D).
@@ -382,13 +382,13 @@ const PtyCase = struct {
 };
 
 /// `cfg edit` of a fresh `app.toml` holding `a = 1`, with `reedit.sh` as the editor (a
-/// broken file first, then `a = 2`); prints the file afterwards, and exits as snek did.
+/// broken file first, then `a = 2`); prints the file afterwards, and exits as termancy did.
 const cfg_edit =
     "(d=$(mktemp -d); printf 'a = 1\\n' > \"$d/app.toml\"; " ++
-    "EDITOR=\"sh $PWD/reedit.sh\" \"$SNEK\" cfg edit \"$d/app.toml\"; s=$?; " ++
+    "EDITOR=\"sh $PWD/reedit.sh\" \"$TERMANCY\" cfg edit \"$d/app.toml\"; s=$?; " ++
     "cat \"$d/app.toml\"; rm -rf \"$d\"; exit $s)";
 
-const choose_abc = "\"$SNEK\" tui choose a b c";
+const choose_abc = "\"$TERMANCY\" ui choose a b c";
 
 const accessible = [_][2][]const u8{.{ "ACCESSIBLE", "1" }};
 
@@ -398,91 +398,91 @@ const pty_cases = [_]PtyCase{
     .{ .name = "choose: Ctrl-C", .command = choose_abc, .keys = "\\003", .status = 130 },
     .{
         .name = "choose: items piped in, NO_COLOR",
-        .command = "printf 'x\\ny\\n' | \"$SNEK\" tui choose --selected y",
+        .command = "printf 'x\\ny\\n' | \"$TERMANCY\" ui choose --selected y",
         .keys = "\\r",
         .env = &no_color,
         .stdout = "y\n",
     },
     .{
         .name = "choose --limit 2: space chooses",
-        .command = "\"$SNEK\" tui choose --limit 2 a b c",
+        .command = "\"$TERMANCY\" ui choose --limit 2 a b c",
         .keys = " jj \\r",
         .stdout = "a\nc\n",
     },
-    .{ .name = "confirm: y", .command = "\"$SNEK\" tui confirm Sure?", .keys = "y" },
-    .{ .name = "confirm: n", .command = "\"$SNEK\" tui confirm", .keys = "n", .status = 1 },
+    .{ .name = "confirm: y", .command = "\"$TERMANCY\" ui confirm Sure?", .keys = "y" },
+    .{ .name = "confirm: n", .command = "\"$TERMANCY\" ui confirm", .keys = "n", .status = 1 },
     .{
         .name = "confirm: enter takes --default no",
-        .command = "\"$SNEK\" tui confirm --default no",
+        .command = "\"$TERMANCY\" ui confirm --default no",
         .keys = "\\r",
         .status = 1,
     },
     .{
         .name = "input: typed text",
-        .command = "\"$SNEK\" tui input --value 'hi '",
+        .command = "\"$TERMANCY\" ui input --value 'hi '",
         .keys = "there\\r",
         .stdout = "hi there\n",
     },
     .{
         .name = "input --password",
-        .command = "\"$SNEK\" tui input --password",
+        .command = "\"$TERMANCY\" ui input --password",
         .keys = "s3cret\\r",
         .stdout = "s3cret\n",
     },
-    .{ .name = "input: esc", .command = "\"$SNEK\" tui input", .keys = "abc\\033", .status = 1 },
+    .{ .name = "input: esc", .command = "\"$TERMANCY\" ui input", .keys = "abc\\033", .status = 1 },
     .{
         .name = "write: lines until Ctrl-D",
-        .command = "\"$SNEK\" tui write",
+        .command = "\"$TERMANCY\" ui write",
         .keys = "one\\rtwo\\004",
         .stdout = "one\ntwo\n",
     },
     .{
         .name = "filter: fuzzy query",
-        .command = "printf 'apple\\nbanana\\ncherry\\n' | \"$SNEK\" tui filter",
+        .command = "printf 'apple\\nbanana\\ncherry\\n' | \"$TERMANCY\" ui filter",
         .keys = "bna\\r",
         .stdout = "banana\n",
     },
     .{
         .name = "filter --no-limit: tab chooses",
-        .command = "printf 'apple\\nbanana\\ncherry\\n' | \"$SNEK\" tui filter --no-limit",
+        .command = "printf 'apple\\nbanana\\ncherry\\n' | \"$TERMANCY\" ui filter --no-limit",
         .keys = "\\t\\t\\r",
         .stdout = "apple\nbanana\n",
     },
     .{
         .name = "table: choose a row",
-        .command = "printf 'n,v\\nx,1\\n\"y,z\",2\\n' | \"$SNEK\" tui table",
+        .command = "printf 'n,v\\nx,1\\n\"y,z\",2\\n' | \"$TERMANCY\" ui table",
         .keys = "j\\r",
         .stdout = "\"y,z\",2\n",
     },
-    .{ .name = "pager: q", .command = "\"$SNEK\" tui pager notes.txt", .keys = "jG/a\\rq" },
+    .{ .name = "pager: q", .command = "\"$TERMANCY\" ui pager notes.txt", .keys = "jG/a\\rq" },
     .{
         .name = "pager from standard input: esc",
-        .command = "printf 'text\\n' | \"$SNEK\" tui pager",
+        .command = "printf 'text\\n' | \"$TERMANCY\" ui pager",
         .keys = "\\033",
         .status = 1,
     },
     .{
         .name = "spin on a terminal",
-        .command = "\"$SNEK\" tui spin --title wait -- sh -c 'sleep 0.3; echo done'",
+        .command = "\"$TERMANCY\" ui spin --title wait -- sh -c 'sleep 0.3; echo done'",
         .keys = "",
         .stdout = "done\n",
     },
     .{
         .name = "spin: Ctrl-C stops the command",
-        .command = "\"$SNEK\" tui spin -- sh -c 'sleep 20; echo late'",
+        .command = "\"$TERMANCY\" ui spin -- sh -c 'sleep 20; echo late'",
         .keys = "\\003",
         .status = 130,
     },
     .{
         // Directories first, then notes.txt, the one .txt file; G goes to it.
         .name = "file: choose with --ext",
-        .command = "\"$SNEK\" tui file --ext .txt | sed \"s|^$PWD/||\"",
+        .command = "\"$TERMANCY\" ui file --ext .txt | sed \"s|^$PWD/||\"",
         .keys = "G\\r",
         .stdout = "notes.txt\n",
     },
     .{
         .name = "file: into a directory and back up, esc",
-        .command = "\"$SNEK\" tui file",
+        .command = "\"$TERMANCY\" ui file",
         .keys = "l\\177\\033",
         .status = 1,
     },
@@ -490,19 +490,19 @@ const pty_cases = [_]PtyCase{
         // A form, then a question only an app is asked: keys typed ahead reach the next
         // program.
         .name = "flow: a form, then a question that depends on it, asked with components",
-        .command = "\"$SNEK\" tui demo flow",
+        .command = "\"$TERMANCY\" ui demo flow",
         .keys = "ada\\r\\033[C\\ry",
         .stdout = "created ada (app, with tests)\n",
     },
     .{
         .name = "flow: a library skips the tests question",
-        .command = "\"$SNEK\" tui demo flow",
+        .command = "\"$TERMANCY\" ui demo flow",
         .keys = "lib\\r\\r",
         .stdout = "created lib (library)\n",
     },
     .{
         .name = "ACCESSIBLE: choose by number",
-        .command = "\"$SNEK\" tui choose a b c",
+        .command = "\"$TERMANCY\" ui choose a b c",
         .keys = "9\\r2\\r",
         .env = &accessible,
         .wait_for = "Number (1-3)",
@@ -510,7 +510,7 @@ const pty_cases = [_]PtyCase{
     },
     .{
         .name = "ACCESSIBLE: choose several",
-        .command = "\"$SNEK\" tui choose --no-limit a b c",
+        .command = "\"$TERMANCY\" ui choose --no-limit a b c",
         .keys = "1, 3\\r",
         .env = &accessible,
         .wait_for = "Numbers (1-3",
@@ -518,7 +518,7 @@ const pty_cases = [_]PtyCase{
     },
     .{
         .name = "ACCESSIBLE: confirm, default no",
-        .command = "\"$SNEK\" tui confirm --default no Sure?",
+        .command = "\"$TERMANCY\" ui confirm --default no Sure?",
         .keys = "\\r",
         .env = &accessible,
         .wait_for = "Sure? (y/N)",
@@ -526,7 +526,7 @@ const pty_cases = [_]PtyCase{
     },
     .{
         .name = "ACCESSIBLE: input",
-        .command = "\"$SNEK\" tui input --header Name",
+        .command = "\"$TERMANCY\" ui input --header Name",
         .keys = "Ada\\r",
         .env = &accessible,
         .wait_for = "Name: ",
@@ -535,7 +535,7 @@ const pty_cases = [_]PtyCase{
     .{
         .name = "pager: v edits the file, and the pager shows it again",
         .command = "(d=$(mktemp -d); printf 'one\\n' > \"$d/n.txt\"; " ++
-            "EDITOR=\"sh $PWD/append.sh\" \"$SNEK\" tui pager \"$d/n.txt\"; s=$?; " ++
+            "EDITOR=\"sh $PWD/append.sh\" \"$TERMANCY\" ui pager \"$d/n.txt\"; s=$?; " ++
             "cat \"$d/n.txt\"; rm -rf \"$d\"; exit $s)",
         .keys = "v",
         .then_wait_for = "appended-line",
@@ -546,7 +546,7 @@ const pty_cases = [_]PtyCase{
         // Ctrl-Z stops the process group; the shell's `fg` continues it, and it redraws
         // (the third frame) before enter chooses.
         .name = "choose: Ctrl-Z suspends, fg resumes",
-        .command = "bash -c 'set -m; \"$SNEK\" tui choose a b c; fg > /dev/null'",
+        .command = "bash -c 'set -m; \"$TERMANCY\" ui choose a b c; fg > /dev/null'",
         .keys = "j\\032",
         .then_wait_for = "2026l",
         .then_count = 3,
@@ -557,7 +557,7 @@ const pty_cases = [_]PtyCase{
     .{
         .name = "help taller than the terminal goes through $PAGER",
         .command = "(stty rows 10 cols 80; echo ready > /dev/tty; " ++
-            "PAGER=\"sh -c 'head -n 1 >&3'\" \"$SNEK\" cfg --help 3>&1 > /dev/tty)",
+            "PAGER=\"sh -c 'head -n 1 >&3'\" \"$TERMANCY\" cfg --help 3>&1 > /dev/tty)",
         .keys = "",
         .wait_for = "ready",
         .stdout = "Read configuration from TOML, YAML, JSON (with or without comments), ZON, " ++
@@ -580,7 +580,7 @@ const pty_cases = [_]PtyCase{
     },
 };
 
-/// Runs `$3` (a shell command) in a pseudo-terminal with `SNEK=$1`, types `$2` once the
+/// Runs `$3` (a shell command) in a pseudo-terminal with `TERMANCY=$1`, types `$2` once the
 /// terminal shows `$4` (for a `tui` command, the end of its first frame: synchronized
 /// output ends with `2026l`), then `$6` once it has shown `$5` `$7` times (when `$5` is
 /// set), and prints what the command wrote to standard output. Exits with the command's
@@ -588,7 +588,7 @@ const pty_cases = [_]PtyCase{
 /// Works with util-linux `script` (`-qfc command log`) and BSD `script`, as macOS has it
 /// (`-qF log command...`); the status goes through a file, since only util-linux has `-e`.
 const pty_driver =
-    \\snek=$1 keys=$2 command=$3 wait=$4 then_wait=$5 then_keys=$6 then_count=$7
+    \\termancy=$1 keys=$2 command=$3 wait=$4 then_wait=$5 then_keys=$6 then_count=$7
     \\dir=$(mktemp -d) || exit 99
     \\trap 'rm -f "$dir/log" "$dir/out" "$dir/status"; rmdir "$dir"' EXIT
     \\limit=
@@ -613,7 +613,7 @@ const pty_driver =
     \\# A handler (not `trap '' INT`, which children would inherit) keeps this shell alive
     \\# to record the status when Ctrl-C interrupts the command.
     \\inner="trap : INT; $command > \"$dir/out\"; echo \$? > \"$dir/status\""
-    \\export SNEK="$snek"
+    \\export TERMANCY="$termancy"
     \\if script --version > /dev/null 2>&1; then
     \\  feed | $limit script -qfc "$inner" "$dir/log" > /dev/null
     \\else
@@ -626,12 +626,12 @@ const pty_driver =
 ;
 
 pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.Step) void {
-    for (cases) |case| addCase(b, step, runSnek(b, exe, null), case);
+    for (cases) |case| addCase(b, step, runTermancy(b, exe, null), case);
     // setsid as util-linux has it; script(1) from util-linux or the BSDs (macOS).
     const os = builtin.os.tag;
     if (os != .linux and !os.isDarwin()) return;
     if (os == .linux) if (b.findProgram(.{ .names = &.{"setsid"} })) |setsid| {
-        for (detached_cases) |case| addCase(b, step, runSnek(b, exe, setsid), case);
+        for (detached_cases) |case| addCase(b, step, runTermancy(b, exe, setsid), case);
     };
     const sh = b.findProgram(.{ .names = &.{"sh"} }) orelse return;
     _ = b.findProgram(.{ .names = &.{"script"} }) orelse return;
@@ -639,10 +639,10 @@ pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
     for (pty_cases) |case| if (bash or !case.bash) addPtyCase(b, exe, step, sh, case);
 }
 
-/// A run of snek, under `setsid` when given.
-fn runSnek(b: *std.Build, exe: *std.Build.Step.Compile, setsid: ?[]const u8) *std.Build.Step.Run {
+/// A run of termancy, under `setsid` when given.
+fn runTermancy(b: *std.Build, exe: *std.Build.Step.Compile, setsid: ?[]const u8) *std.Build.Step.Run {
     const path = setsid orelse return b.addRunArtifact(exe);
-    const run = std.Build.Step.Run.create(b, "setsid snek");
+    const run = std.Build.Step.Run.create(b, "setsid termancy");
     run.addArgs(&.{ path, "--wait" });
     run.addArtifactArg(exe);
     return run;

@@ -3,7 +3,7 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
-const platform = @import("platform");
+const sys = @import("sys");
 const load = @import("load.zig");
 const files = @import("files.zig");
 
@@ -20,7 +20,7 @@ pub const merge = cli.command(.{
     .group = group,
     .args = .{ .min = 1, .max = null, .usage = "<file>...", .complete = load.completeConfigFiles },
     .examples =
-    \\snek cfg merge base.toml prod.yaml -o toml > merged.toml
+    \\termancy cfg merge base.toml prod.yaml -o toml > merged.toml
     ,
     .run = runMerge,
 });
@@ -49,7 +49,7 @@ pub const init = cli.command(.{
     .name = "init",
     .summary = "Write a starter config file",
     .description =
-    \\Write [file] (default: snek.toml), in the format its extension names: a short example,
+    \\Write [file] (default: termancy.toml), in the format its extension names: a short example,
     \\or with --schema, every property the schema declares, set to its default (or to an
     \\empty value of its type). Refuses to replace a file unless --force.
     ,
@@ -57,15 +57,15 @@ pub const init = cli.command(.{
     .flags = InitFlags,
     .args = .{ .max = 1, .usage = "[file]" },
     .examples =
-    \\snek cfg init
-    \\snek cfg init app.yaml --schema schema.json
+    \\termancy cfg init
+    \\termancy cfg init app.yaml --schema schema.json
     ,
     .run = runInit,
 });
 
-/// What `snek cfg init` writes as TOML without a schema; other formats get the same keys.
+/// What `termancy cfg init` writes as TOML without a schema; other formats get the same keys.
 const starter_toml =
-    \\# Configuration for snek: `snek cfg show` prints it, `snek cfg explain` says where each
+    \\# Configuration for termancy: `termancy cfg show` prints it, `termancy cfg explain` says where each
     \\# value comes from. Environment variables override it with --env-prefix.
     \\name = "app"
     \\
@@ -76,7 +76,7 @@ const starter_toml =
 ;
 
 fn runInit(ctx: *cli.Context, flags: InitFlags) !void {
-    const file = if (ctx.args.len > 0) ctx.args[0] else "snek.toml";
+    const file = if (ctx.args.len > 0) ctx.args[0] else "termancy.toml";
     const format = cfg.Format.fromPath(file) orelse
         return ctx.fail("{s}: " ++ load.unknown_format, .{file});
     const exists = if (std.Io.Dir.cwd().access(ctx.io, file, .{})) true else |_| false;
@@ -138,11 +138,11 @@ const infer = cli.command(.{
     .description =
     \\Print a JSON Schema (draft-07) describing <file>: its keys and their types, every key
     \\required. A starting point to edit: loosen what may vary, add bounds and enums, then
-    \\check files with "snek cfg schema check".
+    \\check files with "termancy cfg schema check".
     ,
     .args = .{ .min = 1, .max = 1, .usage = "<file>", .complete = load.completeConfigFiles },
     .examples =
-    \\snek cfg schema infer snek.toml > schema.json
+    \\termancy cfg schema infer termancy.toml > schema.json
     ,
     .run = runInfer,
 });
@@ -156,7 +156,7 @@ const check = cli.command(.{
     .name = "check",
     .summary = "Check files against a JSON Schema",
     .description =
-    \\The same as "snek cfg validate --schema <schema> <file>...".
+    \\The same as "termancy cfg validate --schema <schema> <file>...".
     ,
     .args = .{
         .min = 2,
@@ -176,7 +176,7 @@ pub const edit = cli.command(.{
     .name = "edit",
     .summary = "Open the config file in your editor, and check it before saving",
     .description =
-    \\Open a copy of [file] (default: the first --config, or the discovered snek.* file) in
+    \\Open a copy of [file] (default: the first --config, or the discovered termancy.* file) in
     \\$VISUAL or $EDITOR. When the editor exits, the copy must parse: if it does, it replaces
     \\the file at once; if not, the error is shown and you choose to edit again or give up,
     \\leaving the file as it was, as visudo does. Needs a terminal.
@@ -189,7 +189,7 @@ pub const edit = cli.command(.{
 fn runEdit(ctx: *cli.Context) !void {
     const stdin = std.Io.File.stdin();
     if (!(stdin.isTty(ctx.io) catch false)) {
-        return ctx.usageError("edit needs a terminal; use \"snek cfg set\" in scripts", .{});
+        return ctx.usageError("edit needs a terminal; use \"termancy cfg set\" in scripts", .{});
     }
     const global = try ctx.flags(load.Global);
     const file = if (ctx.args.len > 0) ctx.args[0] else try load.targetFile(ctx, global);
@@ -199,7 +199,7 @@ fn runEdit(ctx: *cli.Context) !void {
     const dir = std.fs.path.dirname(file) orelse ".";
     const copy = try std.fs.path.join(ctx.arena, &.{ dir, try std.fmt.allocPrint(
         ctx.arena,
-        ".{s}.snek-edit{s}",
+        ".{s}.termancy-edit{s}",
         .{ std.fs.path.stem(file), std.fs.path.extension(file) },
     ) });
     try load.writeFileAtomic(ctx, copy, original);
@@ -208,10 +208,10 @@ fn runEdit(ctx: *cli.Context) !void {
     var buffer: [256]u8 = undefined;
     var answers = stdin.readerStreaming(ctx.io, &buffer);
     while (true) {
-        const term = platform.process.edit(ctx.gpa, ctx.io, ctx.environ, copy) catch |err| {
+        const term = sys.process.edit(ctx.gpa, ctx.io, ctx.environ, copy) catch |err| {
             return ctx.fail("cannot start the editor: {s}", .{@errorName(err)});
         };
-        const status = platform.process.exitStatus(term);
+        const status = sys.process.exitStatus(term);
         if (status != 0) {
             const message = "the editor exited with status {d}; {s} is unchanged";
             return ctx.fail(message, .{ status, file });
@@ -247,7 +247,7 @@ fn readTmp(tmp: testing.TmpDir, name: []const u8) ![]u8 {
     return tmp.dir.readFileAlloc(testing.io, name, testing.allocator, .unlimited);
 }
 
-fn snek(args: []const []const u8) !cli.testing.Run {
+fn termancy(args: []const []const u8) !cli.testing.Run {
     const app: cli.App = .{ .root = &@import("../../main.zig").root, .completion_command = false };
     return cli.testing.run(app, args, .{});
 }
@@ -260,14 +260,14 @@ test "init writes a starter file, from a schema too, and will not replace one" {
     const toml = try std.fs.path.join(testing.allocator, &.{ dir, "app.toml" });
     defer testing.allocator.free(toml);
 
-    const first = try snek(&.{ "cfg", "init", toml });
+    const first = try termancy(&.{ "cfg", "init", toml });
     defer first.deinit();
     try first.expect(0, "", "");
     const written = try readTmp(tmp, "app.toml");
     defer testing.allocator.free(written);
     try testing.expectEqualStrings(starter_toml, written);
 
-    const again = try snek(&.{ "cfg", "init", toml });
+    const again = try termancy(&.{ "cfg", "init", toml });
     defer again.deinit();
     try testing.expectEqual(1, again.status);
     const refused = "app.toml: exists; pass --force to replace it\n";
@@ -282,7 +282,7 @@ test "init writes a starter file, from a schema too, and will not replace one" {
     defer testing.allocator.free(schema_path);
     const yaml = try std.fs.path.join(testing.allocator, &.{ dir, "app.yaml" });
     defer testing.allocator.free(yaml);
-    const from_schema = try snek(&.{ "cfg", "init", yaml, "--schema", schema_path });
+    const from_schema = try termancy(&.{ "cfg", "init", yaml, "--schema", schema_path });
     defer from_schema.deinit();
     try from_schema.expect(0, "", "");
     const generated = try readTmp(tmp, "app.yaml");
@@ -302,11 +302,11 @@ test "merge and schema infer" {
     const b_path = try std.fs.path.join(testing.allocator, &.{ dir, "b.json" });
     defer testing.allocator.free(b_path);
 
-    const merged = try snek(&.{ "cfg", "merge", a_path, b_path, "-o", "toml" });
+    const merged = try termancy(&.{ "cfg", "merge", a_path, b_path, "-o", "toml" });
     defer merged.deinit();
     try merged.expect(0, "a = 1\n\n[t]\nx = 1\ny = true\n", "");
 
-    const inferred = try snek(&.{ "cfg", "schema", "infer", b_path });
+    const inferred = try termancy(&.{ "cfg", "schema", "infer", b_path });
     defer inferred.deinit();
     try testing.expectEqual(0, inferred.status);
     try testing.expect(std.mem.indexOf(u8, inferred.out, "\"type\": \"boolean\"") != null);

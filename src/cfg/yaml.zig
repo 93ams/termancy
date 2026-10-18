@@ -1423,13 +1423,13 @@ test "block mappings nest by indentation" {
         \\  port: 8080
         \\  tls:
         \\    enabled: true
-        \\name: snek
+        \\name: termancy
         \\empty:
     , null);
     try testing.expectEqualStrings("localhost", v.lookup("server.host").?.string);
     try testing.expectEqual(8080, v.lookup("server.port").?.int);
     try testing.expectEqual(true, v.lookup("server.tls.enabled").?.bool);
-    try testing.expectEqualStrings("snek", v.lookup("name").?.string);
+    try testing.expectEqualStrings("termancy", v.lookup("name").?.string);
     try testing.expectEqual(Value.null, v.lookup("empty").?);
     try testing.expectEqualStrings("server", v.table.keys()[0]);
     try testing.expectEqualStrings("empty", v.table.keys()[2]);
@@ -1997,13 +1997,13 @@ test "write a representative document" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const v = try parse(arena.allocator(),
-        \\{name: snek, version: 1.0, debug: false, port: 8080, none: null,
+        \\{name: termancy, version: 1.0, debug: false, port: 8080, none: null,
         \\ server: {host: "0.0.0.0", tags: [a, "b c"]},
         \\ users: [{name: ann, roles: [admin]}, {name: bob}],
         \\ matrix: [[1, 2], [3]], empty_t: {}, empty_a: [], msg: "line\nbreak"}
     , null);
     try expectWrite(v, .{},
-        \\name: snek
+        \\name: termancy
         \\version: 1.0
         \\debug: false
         \\port: 8080

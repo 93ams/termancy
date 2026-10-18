@@ -26,7 +26,7 @@ pub const set = cli.command(.{
     .name = "set",
     .summary = "Set a value in the config file",
     .description =
-    \\Set a key in the file named by the first --config, or the discovered snek.* file.
+    \\Set a key in the file named by the first --config, or the discovered termancy.* file.
     \\The value's type is inferred: true/false, integers, and decimals are typed, null is
     \\null, anything else is a string. --string keeps it a string. A missing file is
     \\created.
@@ -40,8 +40,8 @@ pub const set = cli.command(.{
         .complete = load.completeFileKeys,
     },
     .examples =
-    \\snek cfg set server.port 9090 -c app.toml
-    \\snek cfg set version 1.10 --string -c app.yaml
+    \\termancy cfg set server.port 9090 -c app.toml
+    \\termancy cfg set version 1.10 --string -c app.yaml
     ,
     .run = runSet,
 });

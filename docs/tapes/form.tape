@@ -2,7 +2,7 @@
 Set FontSize 16
 Set Width 760
 Set Height 360
-Type "snek tui demo form"
+Type "termancy ui demo form"
 Enter
 Sleep 1s
 Type@100ms "Ada"

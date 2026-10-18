@@ -4,7 +4,7 @@
 //!
 //! `open` uses standard input and output when they are terminals and otherwise opens the
 //! controlling terminal (`/dev/tty`; `CONIN$` and `CONOUT$` on Windows), so a program run
-//! as `x=$(snek tui choose a b)` draws on the terminal while its result goes to the pipe.
+//! as `x=$(termancy ui choose a b)` draws on the terminal while its result goes to the pipe.
 //!
 //! ```zig
 //! var buffer: [4096]u8 = undefined;

@@ -1,5 +1,5 @@
-//! `snek cli init <name>`: a new application on the `cli` and `cfg` modules, laid out as
-//! snek itself is: `build.zig`, `build.zig.zon`, `src/main.zig` holding `main` and the
+//! `termancy cli init <name>`: a new application on the `cli` and `cfg` modules, laid out as
+//! termancy itself is: `build.zig`, `build.zig.zon`, `src/main.zig` holding `main` and the
 //! command tree, and an example command in `src/cmd/hello.zig`.
 
 const std = @import("std");
@@ -15,11 +15,11 @@ const InitFlags = struct {
     pub const meta = .{
         .dir = .{ .help = "Directory to create (default: the name)", .value_name = "path" },
         .module_path = .{
-            .help = "Depend on a snek checkout at this path (for offline or local work)",
+            .help = "Depend on a termancy checkout at this path (for offline or local work)",
             .value_name = "path",
         },
         .fetch = .{
-            .help = "Depend on snek at this URL, recorded by zig fetch --save=snek",
+            .help = "Depend on termancy at this URL, recorded by zig fetch --save=termancy",
             .value_name = "url",
         },
         .force = .{ .help = "Write into a non-empty directory, replacing files" },
@@ -31,17 +31,17 @@ pub const command = cli.command(.{
     .summary = "Create a new application on the cli and cfg modules",
     .description =
     \\Write build.zig, build.zig.zon, src/main.zig, an example command in src/cmd/hello.zig,
-    \\README.md, and .gitignore for a new application called <name>. The snek dependency is
+    \\README.md, and .gitignore for a new application called <name>. The termancy dependency is
     \\a path with --module-path, or is fetched with --fetch (which runs zig fetch
-    \\--save=snek <url>); with neither, add it yourself before building. Refuses to write
+    \\--save=termancy <url>); with neither, add it yourself before building. Refuses to write
     \\into a non-empty directory without --force.
     ,
     .flags = InitFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<name>" },
     .exclusive = &.{&.{ "module-path", "fetch" }},
     .examples =
-    \\snek cli init demo --module-path ../snek
-    \\snek cli init demo --fetch git+https://github.com/93ams/snek
+    \\termancy cli init demo --module-path ../termancy
+    \\termancy cli init demo --fetch git+https://github.com/93ams/termancy
     ,
     .run = run,
 });
@@ -87,7 +87,7 @@ fn run(ctx: *cli.Context, flags: InitFlags) !void {
     for (files) |file| try writeFile(ctx, dir, dir_path, file[0], file[1], flags.force);
     if (flags.fetch) |url| try fetch(ctx, dir_path, url);
     if (flags.module_path == null and flags.fetch == null) {
-        try ctx.out.print("next: cd {s}" ++ then ++ "zig fetch --save=snek <url of snek>\n", .{dir_path});
+        try ctx.out.print("next: cd {s}" ++ then ++ "zig fetch --save=termancy <url of termancy>\n", .{dir_path});
     } else {
         try ctx.out.print("next: cd {s}" ++ then ++ "zig build run -- --help\n", .{dir_path});
     }
@@ -131,7 +131,7 @@ fn checkEmpty(ctx: *cli.Context, path: []const u8, force: bool) !void {
     }
 }
 
-/// The real path of `module_path`, after checking that it is a snek checkout.
+/// The real path of `module_path`, after checking that it is a termancy checkout.
 fn checkModule(ctx: *cli.Context, module_path: []const u8) ![]const u8 {
     const cwd = std.Io.Dir.cwd();
     const real = cwd.realPathFileAlloc(ctx.io, module_path, ctx.arena) catch |err| {
@@ -142,7 +142,7 @@ fn checkModule(ctx: *cli.Context, module_path: []const u8) ![]const u8 {
     };
     defer module.close(ctx.io);
     module.access(ctx.io, "src/cli/root.zig", .{}) catch {
-        return ctx.fail("{s}: not a snek checkout (no src/cli/root.zig)", .{module_path});
+        return ctx.fail("{s}: not a termancy checkout (no src/cli/root.zig)", .{module_path});
     };
     return real;
 }
@@ -185,12 +185,12 @@ fn writeFile(
     try ctx.out.print("created {s}/{s}\n", .{ dir_path, path });
 }
 
-/// Runs `zig fetch --save=snek <url>` in the new project, which records the URL and the
+/// Runs `zig fetch --save=termancy <url>` in the new project, which records the URL and the
 /// package hash in `build.zig.zon`.
 pub fn fetch(ctx: *cli.Context, dir_path: []const u8, url: []const u8) !void {
-    const argv = [_][]const u8{ "zig", "fetch", "--save=snek", url };
+    const argv = [_][]const u8{ "zig", "fetch", "--save=termancy", url };
     var spinner: term.live.Spinner = .{
-        .title = try std.fmt.allocPrint(ctx.arena, "fetching snek from {s}", .{url}),
+        .title = try std.fmt.allocPrint(ctx.arena, "fetching termancy from {s}", .{url}),
     };
     const items = [_]term.live.Item{.{ .spinner = &spinner }};
     var display = ctx.live(&items);
@@ -206,7 +206,7 @@ pub fn fetch(ctx: *cli.Context, dir_path: []const u8, url: []const u8) !void {
     defer ctx.gpa.free(result.stderr);
     if (!result.term.success()) {
         try ctx.err.writeAll(result.stderr);
-        return ctx.fail("zig fetch --save=snek {s} failed", .{url});
+        return ctx.fail("zig fetch --save=termancy {s} failed", .{url});
     }
-    try ctx.out.print("fetched snek from {s}\n", .{url});
+    try ctx.out.print("fetched termancy from {s}\n", .{url});
 }

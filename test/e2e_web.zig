@@ -1,9 +1,9 @@
-//! End-to-end test for `snek tui serve --web`: it listens on a free port, prints a link
-//! with a token, and a WebSocket client (`platform.web.Client`) opens it like the page
+//! End-to-end test for `termancy serve --web`: it listens on a free port, prints a link
+//! with a token, and a WebSocket client (`sys.web.Client`) opens it like the page
 //! would, sends its size, and sees the command's output and exit status. Also checks that
 //! the link without its token is refused. Skipped on systems without pseudo-terminals.
 //!
-//! The build runs this file's `main` with the path to `snek`.
+//! The build runs this file's `main` with the path to `termancy`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -12,7 +12,7 @@ const Io = std.Io;
 pub fn addCases(
     b: *std.Build,
     exe: *std.Build.Step.Compile,
-    platform: *std.Build.Module,
+    sys: *std.Build.Module,
     step: *std.Build.Step,
 ) void {
     const os = builtin.os.tag;
@@ -22,11 +22,11 @@ pub fn addCases(
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/e2e_web.zig"),
             .target = b.graph.host,
-            .imports = &.{.{ .name = "platform", .module = platform }},
+            .imports = &.{.{ .name = "sys", .module = sys }},
         }),
     });
     const run = b.addRunArtifact(client);
-    run.setName("e2e: a browser's socket into snek tui serve --web");
+    run.setName("e2e: a browser's socket into termancy serve --web");
     run.addArtifactArg(exe);
     run.expectStdOutEqual("401\n101\nhi\nexit 3\n");
     run.expectExitCode(0);
@@ -34,13 +34,13 @@ pub fn addCases(
 }
 
 pub fn main(init: std.process.Init) !void {
-    const web = @import("platform").web;
+    const web = @import("sys").web;
     const io = init.io;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var child = try std.process.spawn(io, .{
         .argv = &.{
-            args[1], "tui", "serve",           "--web", "-l", "127.0.0.1:0", "--",
-            "sh",    "-c",  "echo hi; exit 3",
+            args[1], "serve", "--web",           "-l", "127.0.0.1:0", "--",
+            "sh",    "-c",    "echo hi; exit 3",
         },
         .stdin = .ignore,
         .stdout = .ignore,

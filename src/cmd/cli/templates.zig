@@ -1,8 +1,8 @@
-//! The files `snek cli init` and `snek cli add` write. Each template writes text that is
+//! The files `termancy cli init` and `termancy cli add` write. Each template writes text that is
 //! already formatted as `zig fmt` would leave it, so no formatter needs to run.
 //!
 //! A file with subcommands carries two marker lines that `add` inserts before:
-//! `// snek:subcommands` inside `.subcommands = .{ ... }`, and `// snek:tests` inside a
+//! `// termancy:subcommands` inside `.subcommands = .{ ... }`, and `// termancy:tests` inside a
 //! `test { ... }` block, which references each child file so its tests run.
 
 const std = @import("std");
@@ -11,8 +11,8 @@ const Writer = std.Io.Writer;
 const flagspec = @import("flagspec.zig");
 const Spec = flagspec.Spec;
 
-pub const subcommands_marker = "// snek:subcommands";
-pub const tests_marker = "// snek:tests";
+pub const subcommands_marker = "// termancy:subcommands";
+pub const tests_marker = "// termancy:tests";
 
 /// Calls a template with an allocating writer and returns what it wrote.
 pub fn render(
@@ -34,7 +34,7 @@ pub const gitignore =
 ;
 
 /// `build.zig`: the executable `name` from `src/main.zig`, with `cli` and `cfg` imported from
-/// the `snek` dependency; `run`, `test`, and `schema` steps.
+/// the `termancy` dependency; `run`, `test`, and `schema` steps.
 pub fn buildZig(w: *Writer, name: []const u8) Writer.Error!void {
     try w.print(
         \\const std = @import("std");
@@ -42,15 +42,15 @@ pub fn buildZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\pub fn build(b: *std.Build) void {{
         \\    const target = b.standardTargetOptions(.{{}});
         \\    const optimize = b.standardOptimizeOption(.{{}});
-        \\    const snek = b.dependency("snek", .{{ .target = target, .optimize = optimize }});
+        \\    const termancy = b.dependency("termancy", .{{ .target = target, .optimize = optimize }});
         \\
         \\    const root_module = b.createModule(.{{
         \\        .root_source_file = b.path("src/main.zig"),
         \\        .target = target,
         \\        .optimize = optimize,
         \\        .imports = &.{{
-        \\            .{{ .name = "cli", .module = snek.module("cli") }},
-        \\            .{{ .name = "cfg", .module = snek.module("cfg") }},
+        \\            .{{ .name = "cli", .module = termancy.module("cli") }},
+        \\            .{{ .name = "cfg", .module = termancy.module("cfg") }},
         \\        }},
         \\    }});
         \\    const exe = b.addExecutable(.{{ .name = "{s}", .root_module = root_module }});
@@ -65,13 +65,13 @@ pub fn buildZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\    b.step("test", "Run the unit tests").dependOn(&b.addRunArtifact(tests).step);
         \\
         \\    // The settings' JSON Schema, built for this machine whatever the target.
-        \\    const host_snek = b.dependency("snek", .{{ .target = b.graph.host }});
+        \\    const host_termancy = b.dependency("termancy", .{{ .target = b.graph.host }});
         \\    const schema = b.addExecutable(.{{
         \\        .name = "schema",
         \\        .root_module = b.createModule(.{{
         \\            .root_source_file = b.path("src/settings.zig"),
         \\            .target = b.graph.host,
-        \\            .imports = &.{{.{{ .name = "cfg", .module = host_snek.module("cfg") }}}},
+        \\            .imports = &.{{.{{ .name = "cfg", .module = host_termancy.module("cfg") }}}},
         \\        }}),
         \\    }});
         \\    const schema_json = b.addRunArtifact(schema).captureStdOut(.{{}});
@@ -82,9 +82,9 @@ pub fn buildZig(w: *Writer, name: []const u8) Writer.Error!void {
     , .{ name, name });
 }
 
-/// Where `build.zig.zon` gets `snek` from.
+/// Where `build.zig.zon` gets `termancy` from.
 pub const Dependency = union(enum) {
-    /// No entry yet; `zig fetch --save=snek <url>` adds one.
+    /// No entry yet; `zig fetch --save=termancy <url>` adds one.
     none,
     /// A checkout, relative to the project.
     path: []const u8,
@@ -111,7 +111,7 @@ pub fn buildZon(
         .none => try w.writeAll("    .dependencies = .{},\n"),
         .path => |path| try w.print(
             \\    .dependencies = .{{
-            \\        .snek = .{{ .path = "{f}" }},
+            \\        .termancy = .{{ .path = "{f}" }},
             \\    }},
             \\
         , .{std.zig.fmtString(path)}),
@@ -135,13 +135,13 @@ pub fn fingerprint(random: std.Random, package: []const u8) u64 {
 }
 
 /// `src/main.zig`: `main` and the root command, listing `hello` (`src/cmd/hello.zig`) at the
-/// markers as `snek cli add` would.
+/// markers as `termancy cli add` would.
 pub fn mainZig(w: *Writer, name: []const u8) Writer.Error!void {
     try w.print(
         \\//! `{s}`: the entry point and the command tree.
         \\//!
-        \\//! Each command lives in `src/cmd/`. `snek cli add <path...>` writes one and lists it
-        \\//! at the `snek:subcommands` marker below.
+        \\//! Each command lives in `src/cmd/`. `termancy cli add <path...>` writes one and lists it
+        \\//! at the `termancy:subcommands` marker below.
         \\
         \\const std = @import("std");
         \\const cli = @import("cli");
@@ -150,7 +150,7 @@ pub fn mainZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\
         \\pub const root = cli.command(.{{
         \\    .name = "{s}",
-        \\    .summary = "A command-line application built with snek",
+        \\    .summary = "A command-line application built with termancy",
         \\    .subcommands = .{{
         \\        @import("cmd/hello.zig").command,
         \\        {s}
@@ -177,8 +177,8 @@ pub fn settingsZig(w: *Writer, name: []const u8) Writer.Error!void {
     try w.print(
         \\//! What `{s}`'s configuration file holds. `zig build schema` writes the JSON Schema of
         \\//! `Settings` to `zig-out/schema.json`, from which
-        \\//! `snek cfg init {s}.toml --schema zig-out/schema.json` writes a starter file and
-        \\//! `snek cfg schema check` validates one.
+        \\//! `termancy cfg init {s}.toml --schema zig-out/schema.json` writes a starter file and
+        \\//! `termancy cfg schema check` validates one.
         \\
         \\const std = @import("std");
         \\const cfg = @import("cfg");
@@ -217,12 +217,12 @@ pub fn readme(w: *Writer, name: []const u8) Writer.Error!void {
     try w.print(
         \\# {s}
         \\
-        \\A command-line application built on the `cli` and `cfg` modules of snek.
+        \\A command-line application built on the `cli` and `cfg` modules of termancy.
         \\
         \\```sh
         \\zig build run -- --help
         \\zig build test
-        \\snek cli add greet --flag name:string=world --summary "Greet someone"
+        \\termancy cli add greet --flag name:string=world --summary "Greet someone"
         \\```
         \\
         \\The command tree starts in `src/main.zig`; each command is a file under `src/cmd/`.
@@ -231,7 +231,7 @@ pub fn readme(w: *Writer, name: []const u8) Writer.Error!void {
         \\
         \\```sh
         \\zig build schema
-        \\snek cfg init {s}.toml --schema zig-out/schema.json
+        \\termancy cfg init {s}.toml --schema zig-out/schema.json
         \\```
         \\
     , .{ name, name });
@@ -279,7 +279,7 @@ pub const Leaf = struct {
     args_max: ?usize = 0,
 };
 
-/// The command `snek cli init` starts a project with, in `src/cmd/hello.zig`.
+/// The command `termancy cli init` starts a project with, in `src/cmd/hello.zig`.
 pub const hello: Leaf = .{
     .path = &.{"hello"},
     .summary = "Say hello",
@@ -452,7 +452,7 @@ fn askable(s: Spec) bool {
     return !s.list and !s.count;
 }
 
-/// A command that is a flow (`snek cli add --flow`): its flags are the flow's state, each
+/// A command that is a flow (`termancy cli add --flow`): its flags are the flow's state, each
 /// one it can ask for is a question (skipped when given as a flag), and a last step does
 /// the work. The test answers the questions with a script.
 pub fn flowLeaf(w: *Writer, l: Leaf) Writer.Error!void {
@@ -841,12 +841,12 @@ test group {
         \\    .name = "config",
         \\    .summary = "The config commands",
         \\    .subcommands = .{
-        \\        // snek:subcommands
+        \\        // termancy:subcommands
         \\    },
         \\});
         \\
         \\test {
-        \\    // snek:tests
+        \\    // termancy:tests
         \\}
         \\
     , text);
@@ -858,7 +858,7 @@ test buildZon {
     const arena = arena_state.allocator();
     const fingerprint_value: u64 = 0x1234_5678_9abc_def0;
     const local = try render(arena, buildZon, .{ "my_app", fingerprint_value, Dependency{
-        .path = "../snek",
+        .path = "../termancy",
     } });
     try testing.expectEqualStrings(
         \\.{
@@ -867,7 +867,7 @@ test buildZon {
         \\    .fingerprint = 0x123456789abcdef0,
         \\    .minimum_zig_version = "0.17.0",
         \\    .dependencies = .{
-        \\        .snek = .{ .path = "../snek" },
+        \\        .termancy = .{ .path = "../termancy" },
         \\    },
         \\    .paths = .{
         \\        "build.zig",
@@ -897,19 +897,19 @@ test "init templates" {
     try testing.expect(std.mem.indexOf(u8, main, "    .name = \"demo\",\n") != null);
     try testing.expect(std.mem.indexOf(u8, main,
         \\        @import("cmd/hello.zig").command,
-        \\        // snek:subcommands
+        \\        // termancy:subcommands
     ) != null);
     const tests =
         \\test {
         \\    _ = @import("settings.zig");
         \\    _ = @import("cmd/hello.zig");
-        \\    // snek:tests
+        \\    // termancy:tests
         \\}
     ;
     try testing.expect(std.mem.indexOf(u8, main, tests) != null);
     const build = try render(arena, buildZig, .{"demo"});
     try testing.expect(std.mem.indexOf(u8, build, ".name = \"demo\", .root_module") != null);
-    try testing.expect(std.mem.indexOf(u8, build, "b.dependency(\"snek\"") != null);
+    try testing.expect(std.mem.indexOf(u8, build, "b.dependency(\"termancy\"") != null);
     const readme_text = try render(arena, readme, .{"demo"});
     try testing.expect(std.mem.startsWith(u8, readme_text, "# demo\n"));
 }

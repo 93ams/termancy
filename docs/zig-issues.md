@@ -1,6 +1,6 @@
-# Zig issues found while porting snek to Windows
+# Zig issues found while porting termancy to Windows
 
-Six problems in Zig 0.17.0's standard library, met while making snek run on Windows. Each
+Six problems in Zig 0.17.0's standard library, met while making termancy run on Windows. Each
 is written up as an issue for [Zig's tracker](https://codeberg.org/ziglang/zig/issues), ready
 to file. None is filed yet.
 
@@ -124,7 +124,7 @@ reported.
   [#36047](https://codeberg.org/ziglang/zig/issues/36047) runs into this.
 - Even code that never retries the batch loses the operation silently.
 - Any portable code that reads console input through a batch with a timeout is affected.
-  snek works around it on Windows by waiting on the console handle itself instead of
+  termancy works around it on Windows by waiting on the console handle itself instead of
   through `Io.Batch`.
 
 ### Suggested fix
@@ -199,7 +199,7 @@ shutdown case fails.
 
 Shutting a connection down and then draining it is the normal way to end a session.
 Callers that treat `error.Unexpected` as a real failure log an error for every connection
-that closes cleanly. snek's SSH transport has to treat this one `Unexpected` as a hang-up on
+that closes cleanly. termancy's SSH transport has to treat this one `Unexpected` as a hang-up on
 Windows.
 
 ### Suggested fix
@@ -288,7 +288,7 @@ In `netWriteWindows`, map `.LOCAL_DISCONNECT` to `error.ConnectionResetByPeer`, 
 proposed for reads in #31956.
 
 **Possibly related:** `netAcceptWindows` and `netShutdownWindows` send every status except
-`INSUFFICIENT_RESOURCES` to `unexpectedStatus`. Once, in snek's tests, a
+`INSUFFICIENT_RESOURCES` to `unexpectedStatus`. Once, in termancy's tests, a
 `CONNECTION_RESET` stack trace appeared from one of these paths. It could not be reproduced
 on purpose, so it is only mentioned here.
 
@@ -357,7 +357,7 @@ fail (see issue 2).
 
 `shutdown` is the usual way to stop a reader task portably: a server shutting down, or a
 connection handler giving up on an unresponsive peer. On Windows that task never ends, and
-whoever awaits it hangs. snek's web server uses `shutdown` this way to stop a WebSocket
+whoever awaits it hangs. termancy's web server uses `shutdown` this way to stop a WebSocket
 reader whose browser never answers the close frame, and on Windows that reader stays
 blocked.
 
@@ -413,7 +413,7 @@ dir_set_timestamps.zig:9:29: in main
 ### Impact
 
 Portable code (archive extraction, build tools, tests that age files) crashes on Windows,
-and the panic cannot be caught. snek's tests open the file and use `File.setTimestamps`
+and the panic cannot be caught. termancy's tests open the file and use `File.setTimestamps`
 instead.
 
 ### Suggested fix
@@ -480,7 +480,7 @@ its comment describes and retries with growing sleeps before giving up. The rena
 
 A self-updater cannot replace its own executable on Windows through `std.Io`: the usual
 approach, moving the running image aside and putting the new file in its place, fails at
-the first step. snek's `platform update` works around it by calling `MoveFileExW`.
+the first step. termancy's `update` works around it by calling `MoveFileExW`.
 
 ### Suggested fix
 

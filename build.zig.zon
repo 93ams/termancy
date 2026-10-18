@@ -1,8 +1,8 @@
 .{
-    .name = .snek,
-    // The one place snek's version is written: build.zig passes it to the binary.
+    .name = .termancy,
+    // The one place termancy's version is written: build.zig passes it to the binary.
     .version = "0.1.0",
-    .fingerprint = 0xd86d1176a17ffc5c, // Changing this has security and trust implications.
+    .fingerprint = 0x1524bbc7e6f3abf0, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0",
     .dependencies = .{},
     // What `zig fetch` keeps: the sources, and the case lists build.zig imports.

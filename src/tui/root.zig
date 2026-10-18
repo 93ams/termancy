@@ -2,7 +2,7 @@
 //! focus, and headless testing, on top of `term` (terminal control, styles, layout, input
 //! events), whose names are re-exported here so a program needs one import. Ready-made
 //! components are not here: they are source files an application copies and owns
-//! (`snek tui add <component>`), each built on this module.
+//! (`termancy tui add <component>`), each built on this module.
 //!
 //! | name | |
 //! |---|---|

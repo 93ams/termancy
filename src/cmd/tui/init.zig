@@ -1,4 +1,4 @@
-//! `snek tui init`: prepares a project for components: `tui.zon` at its root, the
+//! `termancy tui init`: prepares a project for components: `tui.zon` at its root, the
 //! component directory, and the `tui` module in the nearest `build.zig` at or above it.
 
 const std = @import("std");
@@ -19,9 +19,9 @@ const InitFlags = struct {
             .value_name = "path",
         },
         .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-        .wire = .{ .help = "Add the tui module to a build.zig made by snek cli init" },
+        .wire = .{ .help = "Add the tui module to a build.zig made by termancy cli init" },
         .dependency = .{
-            .help = "Add snek as a dependency (zig fetch --save=snek) and wire build.zig",
+            .help = "Add termancy as a dependency (zig fetch --save=termancy) and wire build.zig",
             .value_name = "url",
         },
     };
@@ -32,13 +32,13 @@ pub const command = cli.command(.{
     .summary = "Prepare a Zig project for components",
     .description =
     \\Write tui.zon in the project directory (-C) and create the component directory.
-    \\tui.zon records where components go and the SHA-256 of every file snek tui add writes:
+    \\tui.zon records where components go and the SHA-256 of every file termancy tui add writes:
     \\
     \\  .{ .dir = "src/ui", .components = .{} }
     \\
-    \\Components import the tui module of snek. When build.zig does not import it yet,
-    \\init prints the line to add; for a build.zig made by snek cli init, --wire adds it.
-    \\For any other project, --dependency <url> adds snek to build.zig.zon with zig fetch
+    \\Components import the tui module of termancy. When build.zig does not import it yet,
+    \\init prints the line to add; for a build.zig made by termancy cli init, --wire adds it.
+    \\For any other project, --dependency <url> adds termancy to build.zig.zon with zig fetch
     \\(a local path works too) and, for a build.zig shaped like zig init's, adds the
     \\dependency and the import before b.installArtifact(exe). Run again on an initialized
     \\project, init changes only what is missing. The build.zig is the nearest one in the
@@ -47,18 +47,18 @@ pub const command = cli.command(.{
     .group = group,
     .flags = InitFlags,
     .examples =
-    \\snek tui init
-    \\snek tui init --dir src/components -C demo --wire
-    \\snek tui init --dependency git+https://github.com/93ams/snek
+    \\termancy tui init
+    \\termancy tui init --dir src/components -C demo --wire
+    \\termancy tui init --dependency git+https://github.com/93ams/termancy
     ,
     .run = run,
 });
 
 pub const group = "Component Commands";
 
-/// The import a `snek cli init` build.zig gets, inserted before its `cfg` import.
-pub const wired_import = ".{ .name = \"tui\", .module = snek.module(\"tui\") },";
-const cfg_import = ".{ .name = \"cfg\", .module = snek.module(\"cfg\") },";
+/// The import a `termancy cli init` build.zig gets, inserted before its `cfg` import.
+pub const wired_import = ".{ .name = \"tui\", .module = termancy.module(\"tui\") },";
+const cfg_import = ".{ .name = \"cfg\", .module = termancy.module(\"cfg\") },";
 
 fn run(ctx: *cli.Context, flags: InitFlags) !void {
     const dir = std.mem.trimEnd(u8, flags.dir, "/");
@@ -85,7 +85,7 @@ fn run(ctx: *cli.Context, flags: InitFlags) !void {
     if (flags.dependency) |url| {
         const zon = try root.read(ctx, "build.zig.zon") orelse
             return ctx.fail("{s}build.zig.zon: not found", .{root.prefix});
-        if (std.mem.indexOf(u8, zon, ".snek = .{") == null) {
+        if (std.mem.indexOf(u8, zon, ".termancy = .{") == null) {
             try cli_init.fetch(ctx, root_path, url);
         }
     }
@@ -104,7 +104,7 @@ fn run(ctx: *cli.Context, flags: InitFlags) !void {
     if (flags.wire) switch (state) {
         .wired => {},
         .wirable => try root.put("build.zig", try wire(ctx.arena, build)),
-        .unknown => return ctx.fail("{s}build.zig: --wire needs a build.zig made by snek cli " ++
+        .unknown => return ctx.fail("{s}build.zig: --wire needs a build.zig made by termancy cli " ++
             "init (with the line {s}); add the module yourself:\n{s}", .{
             root.prefix, cfg_import, generic_hint,
         }),
@@ -151,8 +151,8 @@ fn findBuildRoot(ctx: *cli.Context, path: []const u8) !?[]const u8 {
 }
 
 const generic_hint =
-    \\    root_module.addImport("tui", snek.module("tui"));
-    \\where snek is b.dependency("snek", .{ .target = target, .optimize = optimize })
+    \\    root_module.addImport("tui", termancy.module("tui"));
+    \\where termancy is b.dependency("termancy", .{ .target = target, .optimize = optimize })
 ;
 
 fn verb(existed: bool) []const u8 {
@@ -189,13 +189,13 @@ fn makeDir(ctx: *cli.Context, ws: *Workspace, dir: []const u8) !void {
 pub const Wiring = enum {
     /// `build.zig` already uses the `tui` module.
     wired,
-    /// Made by `snek cli init`: `--wire` can add the import.
+    /// Made by `termancy cli init`: `--wire` can add the import.
     wirable,
     /// Anything else: the user adds the import.
     unknown,
 };
 
-/// `build`, a `build.zig` made by `zig init`, with the `snek` dependency declared after the
+/// `build`, a `build.zig` made by `zig init`, with the `termancy` dependency declared after the
 /// optimize option and the `tui` import added before `b.installArtifact(exe);`.
 pub fn wireGeneric(
     arena: std.mem.Allocator,
@@ -205,20 +205,20 @@ pub fn wireGeneric(
     const optimize = "const optimize = b.standardOptimizeOption(.{});";
     const at_install = std.mem.indexOf(u8, build, install) orelse return error.Unrecognized;
     var out: std.ArrayList(u8) = .empty;
-    const has_dependency = std.mem.indexOf(u8, build, "b.dependency(\"snek\"") != null;
+    const has_dependency = std.mem.indexOf(u8, build, "b.dependency(\"termancy\"") != null;
     const at_optimize = std.mem.indexOf(u8, build, optimize);
     if (!has_dependency and at_optimize == null) return error.Unrecognized;
     const indent = lineIndent(build, at_install);
     if (!has_dependency) {
         const end = at_optimize.? + optimize.len;
         try out.appendSlice(arena, build[0..end]);
-        try out.print(arena, "\n{s}const snek = b.dependency(\"snek\", " ++
+        try out.print(arena, "\n{s}const termancy = b.dependency(\"termancy\", " ++
             ".{{ .target = target, .optimize = optimize }});", .{lineIndent(build, at_optimize.?)});
         try out.appendSlice(arena, build[end..at_install]);
     } else {
         try out.appendSlice(arena, build[0..at_install]);
     }
-    const import = "exe.root_module.addImport(\"tui\", snek.module(\"tui\"));";
+    const import = "exe.root_module.addImport(\"tui\", termancy.module(\"tui\"));";
     try out.print(arena, "{s}\n{s}", .{ import, indent });
     try out.appendSlice(arena, build[at_install..]);
     return out.items;
@@ -251,7 +251,7 @@ pub fn wire(arena: std.mem.Allocator, build: []const u8) std.mem.Allocator.Error
 const testing = std.testing;
 const templates = @import("../cli/templates.zig");
 
-test "wiring a build.zig made by snek cli init" {
+test "wiring a build.zig made by termancy cli init" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -260,9 +260,9 @@ test "wiring a build.zig made by snek cli init" {
     const wired = try wire(arena, build);
     try testing.expectEqual(.wired, wiring(wired));
     try testing.expect(std.mem.indexOf(u8, wired,
-        \\            .{ .name = "cli", .module = snek.module("cli") },
-        \\            .{ .name = "tui", .module = snek.module("tui") },
-        \\            .{ .name = "cfg", .module = snek.module("cfg") },
+        \\            .{ .name = "cli", .module = termancy.module("cli") },
+        \\            .{ .name = "tui", .module = termancy.module("tui") },
+        \\            .{ .name = "cfg", .module = termancy.module("cfg") },
     ) != null);
     try testing.expectEqual(.unknown, wiring("const std = @import(\"std\");\n"));
 }
@@ -286,9 +286,9 @@ test "wiring a build.zig made by zig init" {
         \\pub fn build(b: *std.Build) void {
         \\    const target = b.standardTargetOptions(.{});
         \\    const optimize = b.standardOptimizeOption(.{});
-        \\    const snek = b.dependency("snek", .{ .target = target, .optimize = optimize });
+        \\    const termancy = b.dependency("termancy", .{ .target = target, .optimize = optimize });
         \\    const exe = b.addExecutable(.{ .name = "x", .root_module = b.createModule(.{}) });
-        \\    exe.root_module.addImport("tui", snek.module("tui"));
+        \\    exe.root_module.addImport("tui", termancy.module("tui"));
         \\    b.installArtifact(exe);
         \\}
         \\

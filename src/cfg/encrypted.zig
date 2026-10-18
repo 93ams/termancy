@@ -5,7 +5,7 @@
 //! any file:
 //!
 //! ```text
-//! snek-encrypted v1 argon2id t=3 m=65536 p=1 format=toml
+//! termancy-encrypted v1 argon2id t=3 m=65536 p=1 format=toml
 //! <base64 of: 16-byte salt, 24-byte nonce, ciphertext, 16-byte tag; 64 columns a line>
 //! ```
 //!
@@ -31,7 +31,7 @@ const argon2 = std.crypto.pwhash.argon2;
 const base64 = std.base64.standard;
 
 /// The first word of every envelope.
-pub const magic = "snek-encrypted";
+pub const magic = "termancy-encrypted";
 
 /// Argon2id costs. The defaults follow the RFC 9106 second recommendation: 64 MiB, three
 /// passes, which takes a fraction of a second.
@@ -215,7 +215,7 @@ test "encrypt then decrypt" {
     const plaintext = "token = \"s3cret\"\n";
     const envelope = try encrypt(a, testing.io, plaintext, "correct horse", .toml, test_params);
     try testing.expect(isEncrypted(envelope));
-    const header = "snek-encrypted v1 argon2id t=1 m=64 p=1 format=toml\n";
+    const header = "termancy-encrypted v1 argon2id t=1 m=64 p=1 format=toml\n";
     try testing.expect(std.mem.startsWith(u8, envelope, header));
     try testing.expect(std.mem.indexOf(u8, envelope, "s3cret") == null);
     const back = try decrypt(a, testing.io, envelope, "correct horse");
@@ -227,10 +227,10 @@ test "encrypt then decrypt" {
     const edited = try std.mem.replaceOwned(u8, a, envelope, "format=toml", "format=json");
     try testing.expectError(error.WrongPassphrase, decrypt(a, testing.io, edited, "correct horse"));
     try testing.expectError(error.NotEncrypted, decrypt(a, testing.io, plaintext, "x"));
-    const garbled = "snek-encrypted v1 argon2id format=toml\n!!";
+    const garbled = "termancy-encrypted v1 argon2id format=toml\n!!";
     try testing.expectError(error.Corrupt, decrypt(a, testing.io, garbled, "x"));
     // Valid base64, but shorter than a salt, a nonce, and a tag.
-    const short = "snek-encrypted v1 argon2id format=toml\nAAAAAAAAAAAAAAAAAAAAAAAA\n";
+    const short = "termancy-encrypted v1 argon2id format=toml\nAAAAAAAAAAAAAAAAAAAAAAAA\n";
     try testing.expectError(error.Corrupt, decrypt(a, testing.io, short, "x"));
 }
 

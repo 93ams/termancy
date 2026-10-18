@@ -1,6 +1,6 @@
 //! A program running on a pseudo-terminal: it sees a real terminal (`isatty`, a size,
 //! raw mode, job control), and its output can be read and its input written here. How
-//! `snek cli record` records sessions, `snek cli explain` and `freeze` capture programs as
+//! `termancy record` records sessions, `termancy explain` and `freeze` capture programs as
 //! they draw for people, and end-to-end tests drive interactive programs.
 //!
 //! ```zig

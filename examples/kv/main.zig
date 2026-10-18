@@ -10,7 +10,7 @@
 //! - plugins: any `kv-<name>` program on `PATH` runs as `kv <name>`, as git runs `git-*`;
 //! - `kv docs`: the reference as Markdown, man, HTML, or JSON for tools and LLMs;
 //! - long help through the pager, `-o json` for `list`, a confirmation for `del`;
-//! - `platform`: the data directory (`$XDG_DATA_HOME/kv`, `~/Library/Application Support/kv`,
+//! - `sys`: the data directory (`$XDG_DATA_HOME/kv`, `~/Library/Application Support/kv`,
 //!   `%LOCALAPPDATA%\kv`), and a private store whose writes are atomic.
 //!
 //!     zig build examples
@@ -22,7 +22,7 @@
 const std = @import("std");
 const cli = @import("cli");
 const tui = @import("tui");
-const platform = @import("platform");
+const sys = @import("sys");
 const components = @import("components");
 
 const Global = struct {
@@ -32,13 +32,13 @@ const Global = struct {
     };
 };
 
-const Store = platform.files.Store;
+const Store = sys.files.Store;
 
 /// The store's directory: `--store`, else the platform's data directory for `kv`.
 fn storePath(ctx: *cli.Context) ![]const u8 {
     const global = try ctx.flags(Global);
     if (global.store) |dir| return dir;
-    return platform.dirs.nativePath(ctx.arena, ctx.environ, .data, "kv") catch |err|
+    return sys.dirs.nativePath(ctx.arena, ctx.environ, .data, "kv") catch |err|
         ctx.fail("no data directory ({t}); pass --store", .{err});
 }
 

@@ -50,8 +50,8 @@ pub const convert = cli.command(.{
     .flags = ConvertFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<file|->", .complete = load.completeConfigFiles },
     .examples =
-    \\snek cfg convert app.toml --to yaml
-    \\cat app.json | snek cfg convert - --from json --to toml
+    \\termancy cfg convert app.toml --to yaml
+    \\cat app.json | termancy cfg convert - --from json --to toml
     ,
     .run = runConvert,
 });
@@ -91,7 +91,7 @@ pub const validate = cli.command(.{
     \\Exits with status 1 if any file is invalid.
     \\
     \\With no files, check the effective configuration instead, as every other command
-    \\reads it: the files --config names (or the snek.* file found), with the profile,
+    \\reads it: the files --config names (or the termancy.* file found), with the profile,
     \\the environment (--env-prefix), and --set applied. Every problem is reported, at
     \\the file and line that set the key, or naming the variable or flag that did. Nothing
     \\is written.
@@ -114,8 +114,8 @@ pub const validate = cli.command(.{
         .complete = load.completeConfigFiles,
     },
     .examples =
-    \\snek cfg validate app.toml prod.yaml --schema schema.json
-    \\snek cfg validate --schema schema.json -c app.toml --profile prod --set port=0
+    \\termancy cfg validate app.toml prod.yaml --schema schema.json
+    \\termancy cfg validate --schema schema.json -c app.toml --profile prod --set port=0
     ,
     .run = runValidate,
 });
@@ -331,7 +331,7 @@ pub const fmt = cli.command(.{
     .description =
     \\Rewrite each file in canonical form: consistent indentation, quoting, and spacing.
     \\TOML, ZON, and dotenv files keep their comments and key order; other formats are
-    \\written as snek writes them, and lose their comments (with a warning). With --check,
+    \\written as termancy writes them, and lose their comments (with a warning). With --check,
     \\list the files that would change and exit with status 1 if there are any.
     \\
     \\--sort sorts keys and tables by name. In TOML, keys are sorted within each group
@@ -400,20 +400,20 @@ pub const redact = cli.command(.{
     \\Print <file> with the value of every key that looks secret replaced by
     \\"<redacted>", keeping its keys, comments, and layout: for a bug report. A key looks
     \\secret when its name holds password, passwd, secret, token, api_key, apikey, or
-    \\private_key, the names "snek cfg validate" warns about; everything under such a
+    \\private_key, the names "termancy cfg validate" warns about; everything under such a
     \\table is secret too. --secret names more keys. Empty values and ${...} references
     \\give nothing away and are kept. The file itself is not changed.
     \\
     \\Where a value cannot be replaced in place (an item of a JSON array, say), the whole
-    \\file is written as snek writes it, losing its comments, with a warning.
+    \\file is written as termancy writes it, losing its comments, with a warning.
     ,
     .group = group,
     .flags = RedactFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<file|->", .complete = load.completeConfigFiles },
     .examples =
-    \\snek cfg redact app.toml > app-redacted.toml
-    \\snek cfg redact app.yaml --secret db.url
-    \\cat .env | snek cfg redact - --from env
+    \\termancy cfg redact app.toml > app-redacted.toml
+    \\termancy cfg redact app.yaml --secret db.url
+    \\cat .env | termancy cfg redact - --from env
     ,
     .run = runRedact,
 });
@@ -531,9 +531,9 @@ pub const diff = cli.command(.{
     .flags = DiffFlags,
     .args = .{ .max = 2, .usage = "<old> <new>", .complete = load.completeConfigFiles },
     .examples =
-    \\snek cfg diff base.toml prod.yaml
-    \\snek cfg diff old.json new.json -o json
-    \\snek cfg diff --layer file --layer env --env-prefix APP
+    \\termancy cfg diff base.toml prod.yaml
+    \\termancy cfg diff old.json new.json -o json
+    \\termancy cfg diff --layer file --layer env --env-prefix APP
     ,
     .run = runDiff,
 });
@@ -581,7 +581,7 @@ const SecretFlags = struct {
     pub const meta = .{
         .passphrase = .{
             .help = "The passphrase; better given through the environment than here",
-            .env = "SNEK_PASSPHRASE",
+            .env = "TERMANCY_PASSPHRASE",
             .prompt = "Passphrase",
             .secret = true,
             .hidden = true,
@@ -594,16 +594,16 @@ pub const encrypt = cli.command(.{
     .summary = "Encrypt a file for keeping secrets in a repository",
     .description =
     \\Write <file>.enc: the file encrypted with XChaCha20-Poly1305 under a key derived
-    \\from the passphrase (Argon2id). The passphrase comes from $SNEK_PASSPHRASE, or is
-    \\asked for at a terminal. Every snek command reads the .enc file with -c when
-    \\$SNEK_PASSPHRASE is set, treating all of its values as secret.
+    \\from the passphrase (Argon2id). The passphrase comes from $TERMANCY_PASSPHRASE, or is
+    \\asked for at a terminal. Every termancy command reads the .enc file with -c when
+    \\$TERMANCY_PASSPHRASE is set, treating all of its values as secret.
     ,
     .group = group,
     .flags = SecretFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<file>", .complete = load.completeConfigFiles },
     .examples =
-    \\SNEK_PASSPHRASE=... snek cfg encrypt secrets.toml
-    \\snek cfg -c secrets.toml.enc get db.password
+    \\TERMANCY_PASSPHRASE=... termancy cfg encrypt secrets.toml
+    \\termancy cfg -c secrets.toml.enc get db.password
     ,
     .run = runEncrypt,
 });
@@ -630,14 +630,14 @@ pub const decrypt = cli.command(.{
     .name = "decrypt",
     .summary = "Print an encrypted file's contents",
     .description =
-    \\Print what <file> (made by "snek cfg encrypt") holds. The passphrase comes from
-    \\$SNEK_PASSPHRASE, or is asked for at a terminal.
+    \\Print what <file> (made by "termancy cfg encrypt") holds. The passphrase comes from
+    \\$TERMANCY_PASSPHRASE, or is asked for at a terminal.
     ,
     .group = group,
     .flags = SecretFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<file>" },
     .examples =
-    \\snek cfg decrypt secrets.toml.enc > secrets.toml
+    \\termancy cfg decrypt secrets.toml.enc > secrets.toml
     ,
     .run = runDecrypt,
 });

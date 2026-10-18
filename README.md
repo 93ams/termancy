@@ -1,4 +1,4 @@
-# snek
+# termancy
 
 Five Zig libraries and a program built from them:
 
@@ -8,13 +8,13 @@ Five Zig libraries and a program built from them:
 | **`cli`** | Command-line applications from typed declarations: command trees, flags decoded into structs, help, typo suggestions, shell completion, generated docs. The role [cobra] plays in Go. |
 | **`cfg`** | Layered configuration: TOML, YAML, JSON, ZON, dotenv; defaults, files, profiles, environment, flags, overrides; decoding into structs; provenance. The role [viper] plays in Go. |
 | **`tui`** | Terminal user interfaces: an Elm-architecture runner that redraws only the cells that changed, springs for animation, input decoding, a headless test driver with golden files, and programs served over SSH. Ready-made components are source you copy and own, as with [shadcn/ui]. The roles of Bubble Tea, Bubbles, huh, harmonica, and teatest. |
-| **`platform`** | The operating system as a CLI needs it: standard directories, processes, signals, atomic and lock files, daemons, secure memory, logging, crash reports, tracing, opt-in telemetry, self-update, package manifests, SSH keys and an SSH server (wish), secrets as words (melt). |
-| **`snek`** | A program built only from the libraries' public surfaces: configuration tooling, project and command generators, gum-style shell widgets, a Markdown reader (glow), terminal recordings as GIFs (vhs), images of code (freeze), and system information. |
+| **`sys`** | The operating system as a CLI needs it: standard directories, processes, signals, atomic and lock files, daemons, secure memory, logging, crash reports, tracing, opt-in telemetry, self-update, package manifests, SSH keys and an SSH server (wish), secrets as words (melt). |
+| **`termancy`** | A program built only from the libraries' public surfaces: configuration tooling, project and command generators, gum-style shell widgets, a Markdown reader (glow), terminal recordings as GIFs (vhs), images of code (freeze), and system information. |
 
 Zig **0.17.0**, standard library only. `cli` and `tui` build on `term`; otherwise no library imports
 another. What comes next is in [ROADMAP.md](ROADMAP.md), what changed in
 [CHANGELOG.md](CHANGELOG.md), and what stays stable in [docs/stability.md](docs/stability.md); what
-`snek` prints for scripts is specified in [docs/machine-output.md](docs/machine-output.md). New
+`termancy` prints for scripts is specified in [docs/machine-output.md](docs/machine-output.md). New
 here? Start with [Your first app in 10 minutes](docs/guide.md). To help, see
 [CONTRIBUTING.md](CONTRIBUTING.md); to report a vulnerability, [SECURITY.md](SECURITY.md).
 
@@ -24,32 +24,32 @@ here? Start with [Your first app in 10 minutes](docs/guide.md). To help, see
 
 ## Install
 
-**snek**, the program: each [release](https://github.com/93ams/snek/releases) has an archive
-per system (`snek-<os>-<cpu>.tar.gz`, `.zip` on Windows; `linux`, `macos`, `windows` on
+**termancy**, the program: each [release](https://github.com/93ams/termancy/releases) has an archive
+per system (`termancy-<os>-<cpu>.tar.gz`, `.zip` on Windows; `linux`, `macos`, `windows` on
 `x86_64` and `aarch64`), each with an Ed25519 signature beside it and all in `SHA256SUMS`.
 
 ```sh
-curl -fsSL https://github.com/93ams/snek/releases/latest/download/snek-linux-x86_64.tar.gz \
-  | tar -xz -C ~/.local/bin snek
-scoop install https://github.com/93ams/snek/releases/latest/download/snek.json  # Windows
-snek platform update                                # later: checks the signature, then swaps
+curl -fsSL https://github.com/93ams/termancy/releases/latest/download/termancy-linux-x86_64.tar.gz \
+  | tar -xz -C ~/.local/bin termancy
+scoop install https://github.com/93ams/termancy/releases/latest/download/termancy.json  # Windows
+termancy update  # later: checks the signature, then swaps
 ```
 
-The release also carries Homebrew (`snek.rb`) and winget (`snek.yaml`; `winget install
---manifest snek.yaml`) manifests. To build it instead: `zig build -Doptimize=ReleaseSafe`
+The release also carries Homebrew (`termancy.rb`) and winget (`termancy.yaml`; `winget install
+--manifest termancy.yaml`) manifests. To build it instead: `zig build -Doptimize=ReleaseSafe`
 with Zig 0.17.0.
 
-On Windows, `snek.exe` is not code-signed yet, so the first run of a downloaded copy may
+On Windows, `termancy.exe` is not code-signed yet, so the first run of a downloaded copy may
 stop at a SmartScreen warning ("Windows protected your PC"): check it against
 `SHA256SUMS`, then choose **More info**, **Run anyway**.
 
 **The libraries**, in a Zig project:
 
 ```sh
-zig fetch --save git+https://github.com/93ams/snek#v0.1.0
+zig fetch --save git+https://github.com/93ams/termancy#v0.1.0
 ```
 
-then import the modules you use in `build.zig` (below), or let `snek cli init` set a project
+then import the modules you use in `build.zig` (below), or let `termancy cli init` set a project
 up.
 
 ## A complete example
@@ -100,19 +100,19 @@ pub fn main(init: std.process.Init) u8 {
 }
 ```
 
-The fastest start is to let `snek` write the project:
+The fastest start is to let `termancy` write the project:
 
 ```sh
-snek cli init demo --module-path /path/to/snek   # or --fetch <url> to add it with zig fetch
+termancy cli init demo --module-path /path/to/termancy   # or --fetch <url> to add it with zig fetch
 cd demo
-snek cli add serve --flag 'port:u16=8080,short=p' --summary "Start serving"
-snek cli add config get --flag 'key:string,required'
+termancy cli add serve --flag 'port:u16=8080,short=p' --summary "Start serving"
+termancy cli add config get --flag 'key:string,required'
 zig build run -- serve -p 9000
 ```
 
 `init` writes `build.zig`, `build.zig.zon`, `src/main.zig` (the entry point and the command tree),
 an example `hello` command in `src/cmd/hello.zig`, and `src/settings.zig`, whose `Settings` struct
-is what the configuration file holds: `zig build schema` writes its JSON Schema, from which `snek
+is what the configuration file holds: `zig build schema` writes its JSON Schema, from which `termancy
 cfg init demo.toml --schema zig-out/schema.json` writes a starter file. `add` writes one file per
 command with a typed flags struct, a handler, and a test, and wires it into its parent. A path like
 `config get` creates the `config` group (`src/cmd/config/main.zig`) when it is missing. The
@@ -121,11 +121,11 @@ generated project builds and its tests pass with no edits.
 To add the libraries by hand, depend on this package and import the modules you use:
 
 ```zig
-const snek = b.dependency("snek", .{ .target = target, .optimize = optimize });
-exe.root_module.addImport("cli", snek.module("cli"));
-exe.root_module.addImport("cfg", snek.module("cfg"));
-exe.root_module.addImport("tui", snek.module("tui"));
-exe.root_module.addImport("platform", snek.module("platform"));
+const termancy = b.dependency("termancy", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("cli", termancy.module("cli"));
+exe.root_module.addImport("cfg", termancy.module("cfg"));
+exe.root_module.addImport("tui", termancy.module("tui"));
+exe.root_module.addImport("sys", termancy.module("sys"));
 ```
 
 ## `cli`
@@ -183,7 +183,7 @@ for checks across fields.
 where the shell loads it by itself. Completion scripts call back into the binary, so they never
 drift from the tree. A completer, `fn (*cli.Context, prefix: []const u8) ![]const cli.Candidate` in
 `.complete`, offers values computed at run time; it receives the flags and arguments typed so far,
-so `snek cfg -c prod.toml get <TAB>` completes the keys of `prod.toml`. Help wraps to the terminal's
+so `termancy cfg -c prod.toml get <TAB>` completes the keys of `prod.toml`. Help wraps to the terminal's
 width, bolds headings on a color terminal, and lists help topics and plugins; `App.help_sections`
 replaces its header, usage, or footer. `cli.docs.write` renders Markdown, a man page, HTML, or JSON
 (the whole tree, shaped for tool schemas); `cli.docs.writeManTree` writes one man page per command,
@@ -203,7 +203,7 @@ auto|always|never` over the environment's choice), and `defaults = .from(&config
 defaults from a `cfg.Config` or anything with `flagText(key)`). Under CI nothing prompts, even at a
 terminal. `cli.version.string(.{ .version, .commit, .date })` formats `--version` from `build.zig`
 options. `cli.repl.run(app, env, .{})` runs the tree as an interactive shell; the `shell` component
-(`snek tui add shell`) gives it history and tab completion.
+(`termancy tui add shell`) gives it history and tab completion.
 
 **Per command** (spec fields, each adding only what it names): `.confirm = "Delete it?"` asks first
 (`.confirm = true` adds only `-y`/`--yes`, and the handler asks with `ctx.confirm(fmt, args)`, for a
@@ -236,7 +236,7 @@ ones before it, latest first; `-o json` reports each step as an object. The grap
 compiled, and `cli.flow.writeMermaid` draws it. Questions are asked in plain lines, or with the
 `prompts` component (`App.asker`) for menus, inputs, and forms; `cli.flow.Script` answers them in
 tests; `runFrom` starts at a given step, to resume a flow whose state was saved.
-`snek cli add <name> --flow` writes one.
+`termancy cli add <name> --flow` writes one.
 
 ```zig
 const deploy: cli.Flow(Deploy, Step) = .{ .start = .where, .steps = .{
@@ -322,8 +322,8 @@ documents through a list of versioned migrations. `view("db")` hands a component
 (`getString("host")` reads `db.host`, and `decode` decodes just that part). `addResolver("name",
 ...)` makes `${name:arg}` in a file call your function (`${env:HOME}`, `${git:branch}`), as
 `addSecretProvider` does for secrets. `findFile(.{ .upward = true })` searches the working directory
-and its parents, as git and cosmiconfig do. `platform.remote.get` fetches a file over HTTP with an
-ETag cache that serves the last copy offline; `loadSource` it, as `snek cfg -c https://...` does.
+and its parents, as git and cosmiconfig do. `sys.remote.get` fetches a file over HTTP with an
+ETag cache that serves the last copy offline; `loadSource` it, as `termancy cfg -c https://...` does.
 `Duration` (`1h30m`) and `ByteSize` (`10MiB`) work as config fields and as flag types.
 
 **Writing**: `write(writer, format, .{ .layer, .redact })` with secrets redacted by default.
@@ -335,7 +335,7 @@ reads back as intended, and returns null rather than a wrong document. `cfg.diff
 new)` lists the leaves that differ.
 `cfg.schema.write(T, arena, writer)` emits JSON Schema (draft-07), and
 `cfg.schema.validate` checks an untyped tree against one. To keep secrets out of
-swap and core dumps, give the `Config` `platform.secure`'s allocator: memory is page-locked
+swap and core dumps, give the `Config` `sys.secure`'s allocator: memory is page-locked
 and zeroed on free.
 
 ## `term`
@@ -352,7 +352,7 @@ What every terminal program needs, below any framework; `cli` uses it for colore
 | emulation | `vt.Screen`: a terminal emulator with scrollback, modes, queries, OSC titles, links, and clipboard, written out as text, ANSI, or SVG; `Pty` runs a program on a pseudo-terminal (ConPTY on Windows); `Buffer` and `Renderer` draw frames by cell |
 | content | `highlight` (30 languages, themes), `markdown` (CommonMark and GFM, style sheets, as glamour), `Regex` |
 | pixels | `TrueType` and `fonts` (the machine's fonts, with fallbacks), `raster` (a screen in a window with a bar, rounded corners, and a shadow), `image` (PNG read and written, JPEG read (baseline and progressive, any subsampling, CMYK, EXIF orientation), GIF animated and read, resizing, quantizing), `graphics` (images in the terminal: kitty, iTerm2, sixel, or half blocks; support found from the environment or by asking the terminal) |
-| tests | `golden.expect`: output against files kept with the tests, escapes shown as text, rewritten with `SNEK_UPDATE_GOLDEN=1` |
+| tests | `golden.expect`: output against files kept with the tests, escapes shown as text, rewritten with `TERMANCY_UPDATE_GOLDEN=1` |
 | diff | `diff`: line diffs written as unified diffs, colored like git when asked |
 | progress | `live`: spinners (frame sets, styles, final symbols, elapsed time), progress bars (eighth-cell fill, gradients, counts, bytes/s, ETA), live text, and step checklists, without `tui.Program`: redrawn in place at a terminal, a line per change in logs and CI |
 
@@ -429,14 +429,14 @@ dashed, and double underlines, and underline colors. `tui.motion` has springs an
 (harmonica) for animation. Frames are drawn by cell: only the cells that changed are written, at
 most `Options.max_fps` times a second. A model can place the terminal's cursor, set the window
 title, filter messages, and copy to the clipboard. `Program.runSession` runs a program over a remote
-terminal: an SSH session from `platform.ssh.Server`, so one binary serves a TUI to everyone who
-connects, as wish does, or a browser's socket from `platform.web.Server`, which has the same session
+terminal: an SSH session from `sys.ssh.Server`, so one binary serves a TUI to everyone who
+connects, as wish does, or a browser's socket from `sys.web.Server`, which has the same session
 surface. `testing.Driver` compares screens and output with golden files and moves the clock until
 something shows (`advanceUntil`), as teatest does.
 
-Components are not part of the module. `snek tui add select` copies `select.zig` (and `list.zig`,
-which it needs) into your project. From then on the file is yours to change, and `snek tui diff` and
-`snek tui add` (which refuses to overwrite your edits) keep you in touch with upstream. Available:
+Components are not part of the module. `termancy tui add select` copies `select.zig` (and `list.zig`,
+which it needs) into your project. From then on the file is yours to change, and `termancy tui diff` and
+`termancy tui add` (which refuses to overwrite your edits) keep you in touch with upstream. Available:
 `confirm`, `input` (with suggestions), `textarea` (with line numbers), `list`, `select`,
 `multiselect`, `filter`, `spinner`, `progress` (gradients and spring animation), `multiprogress`,
 `table`, `pager`, `paginator`, `stopwatch`, `timer`, `help`, `form` (huh: inputs, texts, selects
@@ -444,13 +444,13 @@ with filtering, multi-selects, confirms, files, notes, pages, conditions, and th
 `viewport` (a scrolling area to embed, both ways), `tree`, `filepicker`, `chart` (sparklines and
 bars), `markdown` (a scrolling reader), `prompts`
 (questions for a `cli.Flow`, asked with the components), and `shell` (a line editor with history and
-tab completion, for `cli.repl`). `snek tui demo <component>` runs one on sample data, and `--svg`
+tab completion, for `cli.repl`). `termancy ui demo <component>` runs one on sample data, and `--svg`
 draws it. The list components take mouse clicks and the wheel. `Program.Options.kitty_keyboard` asks
 the terminal for the kitty keyboard protocol, for unambiguous modifiers.
 
-## `platform`
+## `sys`
 
-Grouped by concern, every file also reachable by a flat name (`platform.dirs`):
+Grouped by concern, every file also reachable by a flat name (`sys.dirs`):
 
 | | |
 |---|---|
@@ -463,30 +463,30 @@ Grouped by concern, every file also reachable by a flat name (`platform.dirs`):
 
 Nothing starts a thread or touches the network unless the function called says so.
 
-## `snek`
+## `termancy`
 
 ```sh
-snek cfg get server.port                       # from ./snek.toml (or .yaml, .json, .zon, .env)
-snek cfg -c base.toml -c local.yaml show -o json
-snek cfg --env-prefix APP explain              # where every value comes from
-snek cfg --profile prod get server.host
-snek cfg set server.port 9090 -c app.toml
-snek cfg convert app.toml --to yaml
-snek cfg diff base.toml prod.yaml              # exit 1 when they differ, as diff(1)
-eval "$(snek cfg env --prefix APP)"            # export APP_SERVER_PORT=... and the rest
-snek cfg validate *.toml
-snek cfg keys -0 | xargs -0 -n1 echo           # NUL-separated for odd keys
-snek cli docs --format man > snek.1
-source <(snek cli completion bash)
-color=$(snek tui choose red green blue)          # the menu draws on the terminal
-snek tui confirm "Deploy?" && make deploy
-git log --oneline | snek tui filter
-snek tui spin --title "Building" -- zig build
-snek tui md README.md                          # read Markdown in a reader (glow)
-snek cli record demo.tape                      # a terminal session as a GIF (vhs)
-snek cli freeze main.zig --window -o main.png  # an image of code (freeze)
-snek tui serve -- snek tui demo                # a TUI for everyone who connects with ssh (wish)
-snek platform dirs                             # where config, cache, and state live
+termancy cfg get server.port                   # from ./termancy.toml (or .yaml, .json, .zon, .env)
+termancy cfg -c base.toml -c local.yaml show -o json
+termancy cfg --env-prefix APP explain          # where every value comes from
+termancy cfg --profile prod get server.host
+termancy cfg set server.port 9090 -c app.toml
+termancy cfg convert app.toml --to yaml
+termancy cfg diff base.toml prod.yaml          # exit 1 when they differ, as diff(1)
+eval "$(termancy cfg env --prefix APP)"        # export APP_SERVER_PORT=... and the rest
+termancy cfg validate *.toml
+termancy cfg keys -0 | xargs -0 -n1 echo       # NUL-separated for odd keys
+termancy cli docs --format man > termancy.1
+source <(termancy cli completion bash)
+color=$(termancy ui choose red green blue)     # the menu draws on the terminal
+termancy ui confirm "Deploy?" && make deploy
+git log --oneline | termancy ui filter
+termancy ui spin --title "Building" -- zig build
+termancy md README.md                          # read Markdown in a reader (glow)
+termancy record demo.tape                      # a terminal session as a GIF (vhs)
+termancy freeze main.zig --window -o main.png  # an image of code (freeze)
+termancy serve -- termancy ui demo             # a TUI for everyone who connects with ssh (wish)
+termancy dirs                                  # where config, cache, and state live
 ```
 
 | command | |
@@ -497,22 +497,22 @@ snek platform dirs                             # where config, cache, and state 
 | `cfg set <key> <value>`, `unset <key>` | edit a file in place, atomically, keeping comments |
 | `cfg edit [file]` | open it in `$EDITOR`; saved only when it parses, as visudo does |
 | `cfg convert <file\|->`, `validate <file>...` (`--schema`, which without files checks the effective configuration; warns about plain-text secrets and deprecated keys), `fmt <file>...` (`--sort`, keeping comments), `diff <old> <new>`, `redact <file\|->` (secret-looking values replaced, layout kept, for bug reports) | work on files directly |
-| `cfg encrypt <file>`, `decrypt <file.enc>` | keep secrets in a repository; `-c x.enc` reads them with `$SNEK_PASSPHRASE` |
+| `cfg encrypt <file>`, `decrypt <file.enc>` | keep secrets in a repository; `-c x.enc` reads them with `$TERMANCY_PASSPHRASE` |
 | `cfg merge <file>...`, `init [file]` (`--schema`), `schema infer <file>`, `schema check <schema> <file>...` | combine, start, and describe files |
 | `cli init <name>`, `cli add <path...>` (`--flow`) | generate a project, and commands (or flows) in it |
 | `cli docs` (`--format markdown\|man\|html\|json`, `--dir`, `--stylesheet`), `cli completion <shell>` | documentation and shell completion |
-| `cli repl` | snek's commands as an interactive shell, or a script on stdin |
-| `cli record <tape>` (`-o`), `record new`, `validate`, `capture`, `themes` | terminal sessions from scripts, as [vhs](https://github.com/charmbracelet/vhs) tapes: GIF, PNG, frames, text for golden tests, animated SVG, MP4 and WebM (with ffmpeg); `capture` writes a tape from what you type |
-| `cli freeze [file]` (`-x command`, `--window`, `--shadow`, `-n`, `--lines`) | images of code or of a command's output, PNG or SVG, as [freeze](https://github.com/charmbracelet/freeze) |
-| `cli explain [file...] [-- command]` | what each escape sequence in some output does, as [sequin](https://github.com/charmbracelet/sequin) |
-| `tui choose`, `confirm`, `input`, `write`, `filter`, `spin`, `table`, `pager`, `file`, `style`, `format`, `join`, `log` | shell-script widgets, in the spirit of [gum](https://github.com/charmbracelet/gum); `ACCESSIBLE=1` asks with plain lines |
-| `tui md [source]` | Markdown from a file, a URL, or a repository's README, in a reader, as [glow](https://github.com/charmbracelet/glow) |
-| `tui image <file>` | a PNG, JPEG, or GIF in the terminal (kitty, iTerm2, sixel, or half blocks) |
-| `tui serve -- command` | a terminal program over SSH, as [wish](https://github.com/charmbracelet/wish), or with `--web` in the browser, as [ttyd](https://github.com/tsl0922/ttyd) (a token link swapped for a cookie, loopback by default, at most 32 sessions) |
+| `cli repl` | termancy's commands as an interactive shell, or a script on stdin |
+| `record <tape>` (`-o`), `record new`, `validate`, `capture`, `themes` | terminal sessions from scripts, as [vhs](https://github.com/charmbracelet/vhs) tapes: GIF, PNG, frames, text for golden tests, animated SVG, MP4 and WebM (with ffmpeg); `capture` writes a tape from what you type |
+| `freeze [file]` (`-x command`, `--window`, `--shadow`, `-n`, `--lines`) | images of code or of a command's output, PNG or SVG, as [freeze](https://github.com/charmbracelet/freeze) |
+| `explain [file...] [-- command]` | what each escape sequence in some output does, as [sequin](https://github.com/charmbracelet/sequin) |
+| `ui choose`, `confirm`, `input`, `write`, `filter`, `spin`, `table`, `pager`, `file`, `style`, `format`, `join`, `log` | shell-script widgets, in the spirit of [gum](https://github.com/charmbracelet/gum); `ACCESSIBLE=1` asks with plain lines |
+| `md [source]` | Markdown from a file, a URL, or a repository's README, in a reader, as [glow](https://github.com/charmbracelet/glow) |
+| `image <file>` | a PNG, JPEG, or GIF in the terminal (kitty, iTerm2, sixel, or half blocks) |
+| `serve -- command` | a terminal program over SSH, as [wish](https://github.com/charmbracelet/wish), or with `--web` in the browser, as [ttyd](https://github.com/tsl0922/ttyd) (a token link swapped for a cookie, loopback by default, at most 32 sessions) |
 | `tui init`, `add <component>...`, `list`, `diff <component>`, `demo [component]` | copy components into a project (any subdirectory of it; `init` wires the nearest `build.zig`), keep them current, and try them first |
-| `platform dirs`, `info`, `update` | standard directories, system facts, self-update |
-| `platform release keygen`, `sign`, `verify`, `manifest` | publish releases `platform.update` installs: Ed25519 signatures and package manifests |
-| `platform ssh keygen`, `fingerprint`, `melt`, `restore`, `sign`, `verify`, `run` | SSH keys as `ssh-keygen` makes them, backed up as 24 words ([melt](https://github.com/charmbracelet/melt)), and files signed as `ssh-keygen -Y` signs them |
+| `dirs`, `info`, `update` | standard directories, system facts, self-update |
+| `release keygen`, `sign`, `verify`, `manifest` | publish releases `sys.update` installs: Ed25519 signatures and package manifests |
+| `ssh keygen`, `fingerprint`, `melt`, `restore`, `sign`, `verify`, `run` | SSH keys as `ssh-keygen` makes them, backed up as 24 words ([melt](https://github.com/charmbracelet/melt)), and files signed as `ssh-keygen -Y` signs them |
 | `version`, `help [command...]`, `help --search <words>` | |
 
 Unix conventions throughout:
@@ -524,9 +524,9 @@ Unix conventions throughout:
 - **Color:** `NO_COLOR` is honored everywhere.
 - **Closed pipe:** a closed stdout exits 141 without an error message.
 
-`cfg` flags: `-c/--config` (repeatable, `SNEK_CONFIG`), `--profile` (`SNEK_PROFILE`),
+`cfg` flags: `-c/--config` (repeatable, `TERMANCY_CONFIG`), `--profile` (`TERMANCY_PROFILE`),
 `--env-prefix`, `--set key=value`, `-o/--output text|json|yaml|toml|zon|env|ini|systemd`. Without
-`--config`, the first `snek.*` in `.`, `$XDG_CONFIG_HOME/snek`, or `~/.config/snek` is
+`--config`, the first `termancy.*` in `.`, `$XDG_CONFIG_HOME/termancy`, or `~/.config/termancy` is
 loaded. `set` and `unset` keep a file's comments and layout, changing only the edited
 lines, and `fmt` keeps the comments of TOML, ZON, dotenv, and YAML; what cannot be done in
 place (an array element in JSON, say) is rewritten whole, losing its comments, with a
@@ -542,25 +542,25 @@ Charm's open-source terminal libraries and tools, and where each one's work is d
 | ultraviolet, x/ansi, x/vt, x/term | `term.Buffer`, `term.Renderer`, `term.ansi`, `term.Parser`, `term.vt`, `term.Terminal` |
 | colorprofile | `term.capability`, `term.ansi.Downsampler` |
 | x/xpty, x/conpty | `term.Pty` |
-| x/mosaic, sixel, kitty graphics | `term.graphics`, `snek tui image` |
-| x/editor | `platform.process.editAt` |
+| x/mosaic, sixel, kitty graphics | `term.graphics`, `termancy image` |
+| x/editor | `sys.process.editAt` |
 | x/exp/golden, x/exp/teatest | `term.golden`, `tui.testing.Driver` |
 | bubbletea | `tui.Program` |
-| bubbles | the component registry (`snek tui add`) |
+| bubbles | the component registry (`termancy tui add`) |
 | huh | the `form` and `prompts` components, `cli.Flow` |
 | harmonica | `tui.motion` |
 | glamour | `term.markdown`, `term.highlight` |
-| glow | `snek tui md` |
-| gum | `snek tui choose`, `input`, `write`, `filter`, `confirm`, `file`, `pager`, `spin`, `table`, `style`, `format`, `join`, `log` |
+| glow | `termancy md` |
+| gum | `termancy ui choose`, `input`, `write`, `filter`, `confirm`, `file`, `pager`, `spin`, `table`, `style`, `format`, `join`, `log` |
 | fang | `cli` with `cli.Theme` |
-| log | `platform.log` |
-| sequin | `term.explain`, `snek cli explain` |
-| vhs | `snek cli record` (GIF without a browser or ffmpeg) |
-| freeze | `snek cli freeze` |
-| wish, ssh | `platform.ssh.Server` and `Client`, `tui.Program.runSession`, `snek tui serve` |
-| ttyd, gotty (not Charm) | `platform.web.Server`, `snek tui serve --web` |
-| keygen | `platform.ssh.keys`, `snek platform ssh keygen` |
-| melt | `platform.mnemonic`, `snek platform ssh melt` and `restore` |
+| log | `sys.log` |
+| sequin | `term.explain`, `termancy explain` |
+| vhs | `termancy record` (GIF without a browser or ffmpeg) |
+| freeze | `termancy freeze` |
+| wish, ssh | `sys.ssh.Server` and `Client`, `tui.Program.runSession`, `termancy serve` |
+| ttyd, gotty (not Charm) | `sys.web.Server`, `termancy serve --web` |
+| keygen | `sys.ssh.keys`, `termancy ssh keygen` |
+| melt | `sys.mnemonic`, `termancy ssh melt` and `restore` |
 
 Charm's products (crush, mods, soft-serve, pop, and its cloud) are applications, not
 libraries, and have no counterpart here.
@@ -582,29 +582,29 @@ the top of each `main.zig` lists what it shows and how to try it.
 | `conf-d` | a `conf.d` directory merged across formats |
 | `settings` | `cfg` tooling: variants, profiles, encrypted secrets, every problem located with a caret, JSON Schema, comment-preserving edits, diffs, migrations |
 | `monitor` | a full-screen `tui` program from components (tabs, table, chart, spinner, progress), keymaps, timers, the mouse, and headless tests |
-| `lobby` | a guestbook served over SSH: `platform.ssh.Server`, `Program.runSession`, state shared between sessions, border titles and gradients, golden-file and scripted-session tests |
-| `repos` | a real tool end to end: a config file under `REPOS_*` overrides, a first-run `cli.Flow` that keeps the file's comments, `list -o text\|json\|jsonl`, concurrent `git fetch` under `ctx.live`, a filterable TUI from components copied with `snek tui add` (its `ui/` and `tui.zon`), served with `--web` |
+| `lobby` | a guestbook served over SSH: `sys.ssh.Server`, `Program.runSession`, state shared between sessions, border titles and gradients, golden-file and scripted-session tests |
+| `repos` | a real tool end to end: a config file under `REPOS_*` overrides, a first-run `cli.Flow` that keeps the file's comments, `list -o text\|json\|jsonl`, concurrent `git fetch` under `ctx.live`, a filterable TUI from components copied with `termancy tui add` (its `ui/` and `tui.zon`), served with `--web` |
 | `first-app` | the code of [the guide](docs/guide.md), checked word for word against it |
-| `doctor` | `platform`: per-OS directories, CI detection, versions, path sandboxing, redacted logs, trace context, phase profiling |
+| `doctor` | `sys`: per-OS directories, CI detection, versions, path sandboxing, redacted logs, trace context, phase profiling |
 
 The examples import the component registry as a module; a project copies the components
-in with `snek tui add <name>` instead, as `repos` did for its `ui/`.
+in with `termancy tui add <name>` instead, as `repos` did for its `ui/`.
 
 ## Building and testing
 
 | command | |
 |---|---|
-| `zig build` | builds `zig-out/bin/snek` |
+| `zig build` | builds `zig-out/bin/termancy` |
 | `zig build test` | everything below except `check` |
-| `zig build unit` | unit tests of every library and of `snek`, leak-checked |
-| `zig build e2e` | runs the `snek` binary and compares its output, including live bash, zsh, fish, and PowerShell completion, `tui` widgets driven through a pseudo-terminal, and generated projects built with `zig build` |
+| `zig build unit` | unit tests of every library and of `termancy`, leak-checked |
+| `zig build e2e` | runs the `termancy` binary and compares its output, including live bash, zsh, fish, and PowerShell completion, `tui` widgets driven through a pseudo-terminal, and generated projects built with `zig build` |
 | `zig build compile-errors` | checks that misuse of `cli.command` and bad `.zon` defaults are compile errors with the promised message |
 | `zig build examples` | builds, tests, and runs the apps in `examples/` (part of `test`) |
 | `zig build check` | compiles everything for Linux, macOS, and Windows, and `cli`/`cfg` for WASI |
 | `zig build coverage` | line coverage of the unit tests with kcov, into `zig-out/coverage` |
 | `zig build fuzz --fuzz` | coverage-guided fuzzing of every parser of untrusted input: `cfg`'s formats, SSH keys, signatures, and transport, CBOR, escape sequences and the input decoder, Markdown, PNG, GIF, and JPEG, TrueType, highlighting, regexes, and tapes (`--fuzz=200K` stops) |
 | `zig build budget` | the smallest `cli`, `cfg`, and `tui` apps (ReleaseSmall, stripped) against size budgets, and `--help`'s startup time |
-| `zig build docs` | the libraries' API reference and snek's command reference, into `zig-out/docs` |
+| `zig build docs` | the libraries' API reference and termancy's command reference, into `zig-out/docs` |
 | `zig build site` | the documentation site, into `zig-out/site`: the guide, a page per library, the component gallery, the command and API reference (`zig build site-gifs` also records each component's GIF from `docs/tapes`) |
 | `zig build console` | `cli`'s Windows console code under a pseudo console (on Windows, or WSL) |
 | `zig build bench` | times `cfg` parsing, writing, merging, and decoding |
@@ -614,19 +614,19 @@ Parsers are fuzzed with seeded generators: random trees must round-trip through 
 `cfg` format, and random or mutated input must parse or fail with a positioned error, never
 crash (`src/cfg/fuzz.zig`); in-place edits of random documents must decline or read back
 exactly as intended. The same holds for `tui`'s input decoder, `cli`'s shell-style
-tokenizer, and everything in `src/term/fuzz.zig` and `src/platform/fuzz.zig`. Each parser is
+tokenizer, and everything in `src/term/fuzz.zig` and `src/sys/fuzz.zig`. Each parser is
 also a target for Zig's coverage-guided fuzzer; its seed corpus, and every input that once
 broke a parser, run with the unit tests.
 
 On WSL with the repository on a Windows drive (`/mnt/c/...`), Zig cannot rename files in
 its local cache there (`AccessDenied`). Keep the cache on the Linux filesystem:
-`zig build test --cache-dir ~/.cache/zig-snek` (or set `ZIG_LOCAL_CACHE_DIR`).
+`zig build test --cache-dir ~/.cache/zig-termancy` (or set `ZIG_LOCAL_CACHE_DIR`).
 
 ```text
-src/cli/  src/cfg/  src/tui/  src/platform/   the libraries (each a module with root.zig)
-src/main.zig                                  snek: main and the top-level command tree
-src/cmd/<group>/main.zig                      one directory per snek command group
-src/cmd/tui/registry/                         the tui components snek copies into projects
+src/cli/  src/cfg/  src/tui/  src/sys/   the libraries (each a module with root.zig)
+src/main.zig                                  termancy: main and the top-level command tree
+src/cmd/<group>/main.zig                      one directory per termancy command group
+src/cmd/tui/registry/                         the tui components termancy copies into projects
 test/                                         end-to-end and compile-error cases, fixtures
 examples/                                     small runnable apps, run by zig build test
 docs/machine-output.md                        the output contract for scripts

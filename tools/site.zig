@@ -6,7 +6,7 @@
 //!
 //!     site <out> <src> <registry> <components.json> <commands.html> <guide.md> [name=gif]...
 //!
-//! `components.json` is `snek tui list -o json`, `commands.html` is `snek cli docs -f html
+//! `components.json` is `termancy tui list -o json`, `commands.html` is `termancy cli docs -f html
 //! --stylesheet style.css`, and each `name=gif` is a component's recording, copied to
 //! `gifs/<name>.gif`. A component without one says how to record it.
 
@@ -15,8 +15,8 @@ const Io = std.Io;
 const Writer = Io.Writer;
 const Allocator = std.mem.Allocator;
 
-const libraries = [_][]const u8{ "term", "cli", "cfg", "tui", "platform" };
-const repository = "https://github.com/93ams/snek";
+const libraries = [_][]const u8{ "term", "cli", "cfg", "tui", "sys" };
+const repository = "https://github.com/93ams/termancy";
 
 const Component = struct {
     name: []const u8,
@@ -58,17 +58,17 @@ pub fn main(init: std.process.Init) !void {
     const w = &page.writer;
 
     // The front page.
-    try header(w, "snek", "");
+    try header(w, "termancy", "");
     try w.writeAll(
-        \\<h1>snek</h1>
+        \\<h1>termancy</h1>
         \\<p>Zig libraries for command-line and terminal programs: commands and flags,
         \\layered configuration, terminal user interfaces, and the operating system around
-        \\them, with a <code>snek</code> program that scaffolds, records, and inspects.</p>
+        \\them, with a <code>termancy</code> program that scaffolds, records, and inspects.</p>
         \\<ul>
         \\<li><a href="guide.html">Your first app in 10 minutes</a></li>
         \\<li><a href="components/index.html">Components</a>: copy them in with
-        \\<code>snek tui add</code></li>
-        \\<li><a href="commands.html">The snek command reference</a></li>
+        \\<code>termancy tui add</code></li>
+        \\<li><a href="commands.html">The termancy command reference</a></li>
         \\</ul>
         \\<h2>Libraries</h2>
         \\<table>
@@ -110,9 +110,9 @@ pub fn main(init: std.process.Init) !void {
     try header(w, "Components", "../");
     try w.writeAll(
         \\<h1>Components</h1>
-        \\<p>Each component is a source file that <code>snek tui add</code> copies into your
+        \\<p>Each component is a source file that <code>termancy tui add</code> copies into your
         \\project, with the components it requires, where it is yours to change.
-        \\<code>snek tui demo &lt;name&gt;</code> runs one on sample data first.</p>
+        \\<code>termancy ui demo &lt;name&gt;</code> runs one on sample data first.</p>
         \\<div class="gallery">
         \\
     );
@@ -121,7 +121,7 @@ pub fn main(init: std.process.Init) !void {
         try recording(w, c.name, gifs.items, "../");
         try w.writeAll("<p>");
         try inline_(w, c.summary);
-        try w.print("</p>\n<pre><code>snek tui add {s}</code></pre>\n</article>\n", .{c.name});
+        try w.print("</p>\n<pre><code>termancy tui add {s}</code></pre>\n</article>\n", .{c.name});
     }
     try w.writeAll("</div>\n");
     try footer(w);
@@ -130,7 +130,7 @@ pub fn main(init: std.process.Init) !void {
         try header(w, c.name, "../");
         try w.print("<h1>{s}</h1>\n<p>", .{c.name});
         try inline_(w, c.summary);
-        try w.print("</p>\n<pre><code>snek tui add {s}</code></pre>\n", .{c.name});
+        try w.print("</p>\n<pre><code>termancy tui add {s}</code></pre>\n", .{c.name});
         if (c.requires.len > 0) {
             try w.writeAll("<p>Also copies what it requires:");
             for (c.requires) |r| try w.print(" <a href=\"{s}.html\">{s}</a>", .{ r, r });
@@ -188,7 +188,7 @@ fn header(w: *Writer, title: []const u8, root: []const u8) Writer.Error!void {
     );
     try escape(w, title);
     try w.print(
-        \\ - snek</title>
+        \\ - termancy</title>
         \\<link rel="stylesheet" href="{s}style.css">
         \\</head>
         \\<body>
@@ -200,7 +200,7 @@ fn header(w: *Writer, title: []const u8, root: []const u8) Writer.Error!void {
 
 fn nav(w: *Writer, root: []const u8) Writer.Error!void {
     try w.print(
-        \\<header><a href="{0s}index.html"><b>snek</b></a>
+        \\<header><a href="{0s}index.html"><b>termancy</b></a>
         \\<a href="{0s}guide.html">Guide</a>
         \\<a href="{0s}components/index.html">Components</a>
         \\<a href="{0s}commands.html">Commands</a>
@@ -217,12 +217,12 @@ fn footer(w: *Writer) Writer.Error!void {
 /// The component's GIF, or how to record one.
 fn recording(w: *Writer, name: []const u8, gifs: []const Gif, root: []const u8) !void {
     for (gifs) |gif| if (std.mem.eql(u8, gif.name, name)) {
-        return w.print("<img src=\"{s}gifs/{s}.gif\" alt=\"snek tui demo {s}, recorded\" " ++
+        return w.print("<img src=\"{s}gifs/{s}.gif\" alt=\"termancy ui demo {s}, recorded\" " ++
             "loading=\"lazy\">\n", .{ root, name, name });
     };
     try w.print("<p class=\"note\">No recording here. <code>zig build site-gifs</code> " ++
         "records one from <code>docs/tapes/{s}.tape</code> when there is one; " ++
-        "<code>snek tui demo {s}</code> runs it, if it has a demo.</p>\n", .{ name, name });
+        "<code>termancy ui demo {s}</code> runs it, if it has a demo.</p>\n", .{ name, name });
 }
 
 /// The `//!` lines at the top of a Zig file, without the `//!`.

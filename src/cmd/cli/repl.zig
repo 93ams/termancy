@@ -1,4 +1,4 @@
-//! `snek cli repl`: snek's own commands as an interactive shell.
+//! `termancy cli repl`: termancy's own commands as an interactive shell.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -6,18 +6,18 @@ const tree = @import("../../main.zig");
 
 pub const command = cli.command(.{
     .name = "repl",
-    .summary = "Run snek commands from an interactive shell",
+    .summary = "Run termancy commands from an interactive shell",
     .description =
-    \\Read command lines and run each as snek would, without the leading "snek":
+    \\Read command lines and run each as termancy would, without the leading "termancy":
     \\"cfg get server.port", then "cfg keys", and so on. Words are split as a shell splits
     \\them, without expansions. "exit", "quit", or the end of input ends the shell, with
     \\the status of the last line run.
     \\
-    \\Standard input may be a script: printf 'cfg keys\ncfg get name\n' | snek cli repl.
+    \\Standard input may be a script: printf 'cfg keys\ncfg get name\n' | termancy cli repl.
     ,
     .examples =
-    \\snek cli repl
-    \\snek cli repl < commands.txt
+    \\termancy cli repl
+    \\termancy cli repl < commands.txt
     ,
     .run = run,
 });
@@ -41,6 +41,6 @@ fn run(ctx: *cli.Context) !void {
         .in = &in.interface,
         .interactive = interactive,
         .terminal = if (interactive) stdin else null,
-    }, .{ .prompt = "snek> " });
+    }, .{ .prompt = "termancy> " });
     if (status != 0) return ctx.exit(status);
 }
