@@ -404,8 +404,9 @@ From a review before the repository went public:
 - `tui.testing.Driver`: a model `deinit` of any other signature is a compile error, not
   silently skipped.
 - Usage errors are JSON when the arguments ask for `-o json` or `-o jsonl`, as other errors
-  were; `snek tui add -q --dry-run` prints nothing; `snek tui add` no longer crashes when the
-  components resolve to exactly one.
+  were; `snek tui add -q --dry-run` prints only the files it would change, without the
+  steps or the "dry run" note; `snek tui add` no longer crashes when the components resolve
+  to exactly one.
 - `build.zig.zon` said `0.0.0` while snek said `0.1.0`: the version is now written once, in
   `build.zig.zon`, and passed to snek by `build.zig`.
 - `snek cli record` prints its failures once, after the progress; `tui serve --web`'s
