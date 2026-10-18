@@ -355,6 +355,7 @@ pub fn build(b: *std.Build) void {
     // What `snek --version` reports beyond the version. Given, not detected, so that a build
     // is reproducible: a release passes `-Dcommit=$(git rev-parse HEAD) -Ddate=...`.
     const options = b.addOptions();
+    options.addOption([]const u8, "version", @import("build.zig.zon").version);
     options.addOption(?[]const u8, "commit", b.option([]const u8, "commit", "Git commit"));
     options.addOption(?[]const u8, "date", b.option([]const u8, "date", "Build date"));
     const build_options = options.createModule();

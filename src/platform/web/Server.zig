@@ -51,7 +51,9 @@ pub const Config = struct {
     /// What every request must carry, as `?token=` or its cookie (see `newToken`); cookie-safe
     /// characters only, as hex is.
     token: []const u8,
-    /// Let anyone in without the token: for demos on a trusted network only.
+    /// Let anyone in without the token: for demos on a trusted network only. On a loopback
+    /// listener, `Host` must then be `localhost` or an address, so a site whose name resolves
+    /// here (DNS rebinding) cannot open sessions: a proxy in front must keep such a `Host`.
     anyone: bool = false,
     /// The page served at `/`.
     page: []const u8 = page,
@@ -65,6 +67,8 @@ pub const Config = struct {
     idle_timeout: Io.Duration = .fromSeconds(120),
     /// The most sessions open at once; more sockets are refused with 503.
     max_sessions: u32 = 32,
+    /// How long a connection may take to send its request, before it is hung up on.
+    head_timeout: Io.Duration = .fromSeconds(10),
 };
 
 /// What `Config.handler` is: it gets `Config.context` and the session.
@@ -379,6 +383,7 @@ fn serveConnection(
     remote: Io.net.IpAddress,
     config: *const Config,
     sessions: *std.atomic.Value(u32),
+    local: bool,
 ) void {
     defer stream.close(io);
     var in_buffer: [max_message]u8 = undefined;
@@ -386,8 +391,15 @@ fn serveConnection(
     var reader = stream.reader(io, &in_buffer);
     var writer = stream.writer(io, &out_buffer);
     var server: http.Server = .init(&reader.interface, &writer.interface);
-    var request = server.receiveHead() catch return;
-    const ws = (accept(&request, config, sessions) catch return) orelse return;
+    // Slow (or no) requests must not hold a task each forever. The read is canceled, not
+    // cut off with `shutdown`: on Windows that does not wake a pending read
+    // (docs/zig-issues.md, issue 4).
+    var head: Head = .{ .server = &server };
+    var reading = io.concurrent(Head.receive, .{ &head, io }) catch return;
+    head.done.waitTimeout(io, .{ .duration = .{ .raw = config.head_timeout, .clock = .awake } }) catch {};
+    reading.cancel(io);
+    var request = (head.request orelse return) catch return;
+    const ws = (accept(&request, config, sessions, local) catch return) orelse return;
     defer _ = sessions.fetchSub(1, .release);
     var conn: Connection = .{
         .gpa = gpa,
@@ -424,12 +436,26 @@ fn serveConnection(
     handler.await(io);
 }
 
+/// A request head read in a task of its own, so that it can be given up on.
+const Head = struct {
+    server: *http.Server,
+    /// Null until the read ends.
+    request: ?(http.Server.ReceiveHeadError!http.Server.Request) = null,
+    done: Io.Event = .unset,
+
+    fn receive(h: *Head, io: Io) void {
+        h.request = h.server.receiveHead();
+        h.done.set(io);
+    }
+};
+
 /// Answers a request for the page (or a refused one) and returns null, or accepts the
-/// socket, holding one of `sessions` for it.
+/// socket, holding one of `sessions` for it. `local`: the listener is on the loopback.
 fn accept(
     request: *http.Server.Request,
     config: *const Config,
     sessions: *std.atomic.Value(u32),
+    local: bool,
 ) !?WebSocket {
     const target = request.head.target;
     const q = std.mem.indexOfScalar(u8, target, '?');
@@ -438,6 +464,8 @@ fn accept(
     const socket = std.mem.eql(u8, path, "/ws");
     if (!socket and !std.mem.eql(u8, path, "/"))
         return refuse(request, .not_found, "not found\n");
+    if (config.anyone and local and !hostIsLiteral(request))
+        return refuse(request, .misdirected_request, "open it as localhost or by address\n");
     const name = cookieName(config.token);
     const from_link = queryValue(query, "token");
     const given = from_link orelse headerCookie(request, &name);
@@ -473,6 +501,8 @@ fn accept(
                 .{ .name = "referrer-policy", .value = "no-referrer" },
                 .{ .name = "x-frame-options", .value = "DENY" },
                 .{ .name = "x-content-type-options", .value = "nosniff" },
+                // What holds for any `Config.page`; scripts and styles are the page's own.
+                .{ .name = "content-security-policy", .value = csp },
             },
         });
         return null;
@@ -489,6 +519,8 @@ fn accept(
     try ws.flush();
     return ws;
 }
+
+const csp = "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'";
 
 /// `html` with `title` in place of its `<title>terminal</title>`, written to `buffer`; `html`
 /// itself when there is no title, no such tag, or no room.
@@ -626,9 +658,24 @@ fn sameOrigin(request: *const http.Server.Request) bool {
     return false;
 }
 
+/// Whether `Host` is `localhost` or an address, port or not: no name DNS could rebind.
+fn hostIsLiteral(request: *const http.Server.Request) bool {
+    var it = request.iterateHeaders();
+    const value = while (it.next()) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "host")) break h.value;
+    } else return false;
+    var host = value;
+    if (std.mem.startsWith(u8, value, "[")) {
+        host = value[1 .. std.mem.indexOfScalar(u8, value, ']') orelse return false];
+    } else if (std.mem.indexOfScalar(u8, value, ':')) |colon| host = value[0..colon];
+    return std.ascii.eqlIgnoreCase(host, "localhost") or
+        if (Io.net.IpAddress.parse(host, 0)) |_| true else |_| false;
+}
+
 /// Serves every connection `server` accepts, each on its own task, until canceled.
 pub fn serve(gpa: Allocator, io: Io, server: *Io.net.Server, config: *const Config) !void {
     var sessions: std.atomic.Value(u32) = .init(0);
+    const local = isLoopback(server.socket.address);
     var group: Io.Group = .init;
     defer group.cancel(io);
     while (true) {
@@ -640,6 +687,7 @@ pub fn serve(gpa: Allocator, io: Io, server: *Io.net.Server, config: *const Conf
             stream.socket.address,
             config,
             &sessions,
+            local,
         }) catch {
             stream.close(io);
         };
@@ -968,4 +1016,51 @@ test "a typed handler gets its context, and the page carries the title" {
     defer client.close();
     try client.send(.text, "{\"type\":\"resize\",\"cols\":80,\"rows\":24}");
     try expectMessage(&client, .binary, "hello");
+}
+
+/// Sends `head` (a whole request head) and returns the response, in `out`.
+fn raw(io: Io, address: Io.net.IpAddress, head: []const u8, out: []u8) ![]u8 {
+    const stream = try address.connect(io, .{ .mode = .stream });
+    defer stream.close(io);
+    var w = stream.writer(io, &.{});
+    try w.interface.writeAll(head);
+    var r_buffer: [1024]u8 = undefined;
+    var r = stream.reader(io, &r_buffer);
+    return out[0..try r.interface.readSliceShort(out)];
+}
+
+test "without a token on the loopback, a Host DNS could rebind is refused" {
+    const io = testing.io;
+    var listener = try (try Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io, .{});
+    defer listener.deinit(io);
+    const address = listener.socket.address;
+    const config: Config = .{ .handler = echo, .token = "", .anyone = true };
+    var serving = try io.concurrent(serve, .{ testing.allocator, io, &listener, &config });
+    defer serving.cancel(io) catch {};
+
+    var out: [8192]u8 = undefined;
+    const rebound = "GET /ws HTTP/1.1\r\nhost: evil.example:7681\r\n" ++
+        "origin: http://evil.example:7681\r\nupgrade: websocket\r\nconnection: upgrade\r\n" ++
+        "sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\r\n";
+    try expectHas(try raw(io, address, rebound, &out), "HTTP/1.1 421 ");
+    for ([_][]const u8{ "localhost:7681", "[::1]:7681", "127.0.0.1" }) |host| {
+        var head: [128]u8 = undefined;
+        const request = try std.fmt.bufPrint(&head, "GET / HTTP/1.1\r\nhost: {s}\r\n\r\n", .{host});
+        const response = try raw(io, address, request, &out);
+        try expectHas(response, "HTTP/1.1 200 ");
+        try expectHas(response, "content-security-policy: frame-ancestors 'none';");
+    }
+}
+
+test "a connection that never sends its request is hung up on" {
+    const io = testing.io;
+    var listener = try (try Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io, .{});
+    defer listener.deinit(io);
+    const address = listener.socket.address;
+    const quick: Io.Duration = .fromMilliseconds(50);
+    const config: Config = .{ .handler = echo, .token = "x", .head_timeout = quick };
+    var serving = try io.concurrent(serve, .{ testing.allocator, io, &listener, &config });
+    defer serving.cancel(io) catch {};
+    var out: [64]u8 = undefined;
+    try testing.expectEqual(0, (try raw(io, address, "GET / HTTP/1.1\r\n", &out)).len);
 }

@@ -3041,6 +3041,27 @@ test "includes load first, relative to the including file, and cycles are errors
     try testing.expectEqual(null, try config.get("from_d"));
 }
 
+test "decode with warn_unknown points at an unknown key and suggests a field" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = testing.io;
+    try tmp.dir.writeFile(io, .{ .sub_path = "app.toml", .data = "port = 1\nprot = 8080\n" });
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    try config.loadFile(io, tmp.dir, "app.toml", null, null);
+    var warnings: std.ArrayList(Diagnostic) = .empty;
+    const options: decoding.Options = .{ .warnings = &warnings, .warn_unknown = true };
+    _ = try config.decode(struct { port: u16 }, options, null);
+    try testing.expectEqual(1, warnings.items.len);
+    var buffer: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    try w.print("{f}", .{warnings.items[0]});
+    try testing.expectEqualStrings(
+        "app.toml:2:8: prot: unknown key; did you mean 'port'?",
+        w.buffered(),
+    );
+}
+
 test "decode errors and warnings point at the file and line that set the key" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

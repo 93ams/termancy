@@ -196,6 +196,18 @@ const Served = struct {
     future: ?Io.Future(void) = null,
     /// A forwarded connection, whose task is canceled rather than awaited at the end.
     forward: bool = false,
+    /// What its requests keep (terminal type, variables, command); freed with it.
+    arena: std.heap.ArenaAllocator,
+};
+
+/// The most variables (`env` requests) a session keeps, and the longest one.
+const max_env = 64;
+const max_env_len = 4096;
+
+/// The signals a client may send (RFC 4254 section 6.10); names outside are refused.
+const signal_names = [_][]const u8{
+    "ABRT", "ALRM", "FPE", "HUP", "ILL", "INT", "KILL", "PIPE", "QUIT", "SEGV", "TERM", "USR1",
+    "USR2",
 };
 
 /// A listener `ssh -R` asked for.
@@ -221,10 +233,36 @@ const Connection = struct {
     forwards: [max_forwards]?*Forward = @splat(null),
 
     fn run(conn: *Connection) !void {
-        try conn.transport.handshake();
-        try conn.authenticate();
+        // A connection that has not logged in by the timeout is given up on. The login is
+        // canceled, not cut off with `shutdown`: on Windows that does not wake a pending
+        // read (docs/zig-issues.md, issue 4).
+        const io = conn.io;
+        var login: Login = .{ .conn = conn };
+        var logging_in = try io.concurrent(Login.run, .{&login});
+        const deadline: Io.Timeout = .{ .duration = .{ .raw = conn.config.login_timeout, .clock = .awake } };
+        login.done.waitTimeout(io, deadline) catch {};
+        logging_in.cancel(io);
+        try (login.result orelse return error.Timeout);
         try conn.serve();
     }
+
+    /// The handshake and the login, in a task of their own so that they can be given up on.
+    const Login = struct {
+        conn: *Connection,
+        /// Null until they end.
+        result: ?anyerror!void = null,
+        done: Io.Event = .unset,
+
+        fn run(l: *Login) void {
+            l.result = l.go();
+            l.done.set(l.conn.io);
+        }
+
+        fn go(l: *Login) !void {
+            try l.conn.transport.handshake();
+            try l.conn.authenticate();
+        }
+    };
 
     fn authenticate(conn: *Connection) !void {
         const t = &conn.transport;
@@ -397,6 +435,7 @@ const Connection = struct {
                 .channel = undefined,
             },
             .forward = forward,
+            .arena = .init(conn.gpa),
         };
         s.session.channel = &s.channel;
         return s;
@@ -429,7 +468,6 @@ const Connection = struct {
             if (asked > 65535 or !check(conn.config.context, conn.user, host, @intCast(asked)))
                 return conn.refuse(sender, 1, "not allowed");
             port = @intCast(asked);
-            host = try conn.arena.dupe(u8, host);
         } else if (!session) return conn.refuse(sender, 3, "only sessions and direct-tcpip");
         conn.sweep();
         const s = try conn.newServed(!session);
@@ -441,6 +479,7 @@ const Connection = struct {
             return conn.refuse(sender, 4, "too many channels");
         };
         if (session) return conn.confirm(&s.channel);
+        host = try s.arena.allocator().dupe(u8, host);
         // Connecting may take long: the forwarding task does, and answers the open.
         s.future = conn.io.concurrent(connectForward, .{ conn, s, host, port }) catch {
             s.channel.refused = true;
@@ -499,18 +538,22 @@ const Connection = struct {
         const kind = try r.string();
         const want_reply = try r.boolean();
         var ok = true;
+        // Kept with the channel, and bounded: a client cannot grow it without end.
+        const arena = s.arena.allocator();
         if (s.forward) {
             ok = false;
-        } else if (std.mem.eql(u8, kind, "pty-req")) {
-            const term_name = try conn.arena.dupe(u8, try r.string());
+        } else if (std.mem.eql(u8, kind, "pty-req") and s.session.pty == null) {
+            const term_name = try arena.dupe(u8, try r.string());
             const width = try r.int();
             const height = try r.int();
             s.session.pty = .{ .term = term_name, .size = sizeOf(width, height) };
         } else if (std.mem.eql(u8, kind, "env")) {
             const name = try r.string();
             const value = try r.string();
-            const pair = try std.fmt.allocPrint(conn.arena, "{s}={s}", .{ name, value });
-            try s.session.env.append(conn.arena, pair);
+            if (s.session.env.items.len < max_env and name.len + value.len < max_env_len) {
+                const pair = try std.fmt.allocPrint(arena, "{s}={s}", .{ name, value });
+                try s.session.env.append(arena, pair);
+            } else ok = false;
         } else if (std.mem.eql(u8, kind, "window-change")) {
             const size = sizeOf(try r.int(), try r.int());
             try conn.mux.lock.lock(conn.io);
@@ -519,16 +562,20 @@ const Connection = struct {
             c.resize = size;
             conn.mux.changed.broadcast(conn.io);
         } else if (std.mem.eql(u8, kind, "signal")) {
-            const name = try conn.arena.dupe(u8, try r.string());
-            try conn.mux.lock.lock(conn.io);
-            defer conn.mux.lock.unlock(conn.io);
-            c.signal = name;
-            conn.mux.changed.broadcast(conn.io);
+            const asked = try r.string();
+            for (signal_names) |name| {
+                if (!std.mem.eql(u8, name, asked)) continue;
+                try conn.mux.lock.lock(conn.io);
+                defer conn.mux.lock.unlock(conn.io);
+                c.signal = name;
+                conn.mux.changed.broadcast(conn.io);
+                break;
+            } else ok = false;
         } else if ((std.mem.eql(u8, kind, "shell") or std.mem.eql(u8, kind, "exec")) and
             !s.started)
         {
             if (std.mem.eql(u8, kind, "exec"))
-                s.session.command = try conn.arena.dupe(u8, try r.string());
+                s.session.command = try arena.dupe(u8, try r.string());
             s.started = true;
             if (want_reply) try conn.reply(c, true);
             // The handler waits on input this task reads, so it needs a task of its own.
@@ -568,6 +615,7 @@ const Connection = struct {
             if (s.forward) f.cancel(conn.io) else f.await(conn.io);
         }
         s.channel.deinit();
+        s.arena.deinit();
         conn.gpa.destroy(s);
     }
 
@@ -758,16 +806,28 @@ pub fn listen(gpa: Allocator, io: Io, address: Io.net.IpAddress, config: Config)
 pub fn serve(gpa: Allocator, io: Io, server: *Io.net.Server, config: *const Config) !void {
     var group: Io.Group = .init;
     defer group.cancel(io);
+    var active: std.atomic.Value(usize) = .init(0);
     while (true) {
         const stream = try server.accept(io);
-        group.concurrent(io, serveConnection, .{
-            gpa,
-            io,
-            stream,
-            stream.socket.address,
-            config,
-        }) catch {
+        if (active.fetchAdd(1, .monotonic) >= config.max_connections) {
+            _ = active.fetchSub(1, .monotonic);
+            stream.close(io);
+            continue;
+        }
+        group.concurrent(io, serveCounted, .{ gpa, io, stream, config, &active }) catch {
+            _ = active.fetchSub(1, .monotonic);
             stream.close(io);
         };
     }
+}
+
+fn serveCounted(
+    gpa: Allocator,
+    io: Io,
+    stream: Io.net.Stream,
+    config: *const Config,
+    active: *std.atomic.Value(usize),
+) void {
+    defer _ = active.fetchSub(1, .monotonic);
+    serveConnection(gpa, io, stream, stream.socket.address, config);
 }

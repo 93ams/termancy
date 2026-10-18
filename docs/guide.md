@@ -22,11 +22,13 @@ snek tui add select
 ```
 
 `snek cli init` writes `build.zig`, `build.zig.zon`, and `src/main.zig` wired to the `cli`
-and `cfg` modules. `snek tui init --wire` adds the `tui` module, and `snek tui add select`
+and `cfg` modules, with an example command in `src/cmd/hello.zig` (`zig build run -- hello`)
+and its test. `snek tui init --wire` adds the `tui` module, and `snek tui add select`
 copies the `select` component, and `list` which it requires, into `src/ui/`. They are your
 files now: change them as you like, and `snek tui diff select` shows what changed upstream.
 
-Replace `src/main.zig` with the snippets below, in order. It starts with the imports:
+Replace `src/main.zig` with the snippets below, in order (brew does without `hello`, so
+delete `src/cmd/hello.zig` or keep it to crib from). It starts with the imports:
 
 ```zig
 const std = @import("std");

@@ -4,6 +4,7 @@ const cli = @import("cli");
 
 const Flags = struct {
     port: u16 = 0,
+    host: []const u8 = "",
     pub const meta = .{ .prot = .{ .short = 'p' } };
 };
 

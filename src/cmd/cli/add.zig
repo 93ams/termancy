@@ -49,7 +49,7 @@ pub const command = cli.command(.{
     .flags = AddFlags,
     .args = .{ .min = 1, .max = null, .usage = "<command>..." },
     .examples =
-    \\snek cli add hello --flag name:string=world --summary "Say hello"
+    \\snek cli add greet --flag name:string=world --summary "Greet someone"
     \\snek cli add config get --flag key:string,required --flag verbose:count,short=v
     \\snek cli add files copy --args 2: --flag mode:enum(fast|safe)=safe
     \\snek cli add deploy --flow --flag env:enum(staging|production) --flag version:string,required

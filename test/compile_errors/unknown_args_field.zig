@@ -2,7 +2,7 @@
 
 const cli = @import("cli");
 
-const bad = cli.command(.{ .name = "app", .args = .{ .maximum = 1 } });
+const bad = cli.command(.{ .name = "app", .args = .{ .maxx = 1 } });
 
 comptime {
     _ = bad;

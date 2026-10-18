@@ -114,7 +114,13 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
             "{s}: {s} (give --authorized-keys, or --anyone)",
             .{ path, @errorName(err) },
         );
-        allowed = try ssh.keys.parseAuthorizedKeys(ctx.arena, text);
+        const all = try ssh.keys.parseAuthorizedKeys(ctx.arena, text);
+        allowed = try withoutOptions(ctx.arena, all);
+        if (allowed.len < all.len) ctx.warn(
+            "{s}: {d} keys with options (from=, command=, restrict...) left out: " ++
+                "this server does not enforce them",
+            .{ path, all.len - allowed.len },
+        );
         if (allowed.len == 0) return ctx.fail("{s}: no keys this server can check", .{path});
     }
 
@@ -169,7 +175,11 @@ fn serveWeb(ctx: *cli.Context, flags: Flags, argv: []const []const u8) !void {
         return ctx.fail("{s}: {s}", .{ listen, @errorName(err) });
     defer listener.deinit(ctx.io);
     const bound = listener.socket.address;
-    if (!web.Server.isLoopback(bound)) ctx.warn(
+    if (!web.Server.isLoopback(bound)) if (flags.anyone) ctx.warn(
+        "{f} is reachable from other machines, with no token: anyone who reaches it, or " ++
+            "a web page they visit, runs the command as you.",
+        .{bound},
+    ) else ctx.warn(
         "{f} is reachable from other machines over plain HTTP: anyone on the way " ++
             "can read the token and the session. Put a TLS reverse proxy in front.",
         .{bound},
@@ -229,6 +239,17 @@ pub fn loadOrCreateKey(ctx: *cli.Context, path: []const u8) !ssh.keys.KeyPair {
     return key;
 }
 
+/// The keys without options: options restrict a key (to an address, a command), and a
+/// key whose restrictions are not enforced must not get in.
+fn withoutOptions(
+    arena: Allocator,
+    all: []const ssh.keys.Authorized,
+) Allocator.Error![]const ssh.keys.Authorized {
+    var kept: std.ArrayList(ssh.keys.Authorized) = .empty;
+    for (all) |a| if (a.options.len == 0) try kept.append(arena, a);
+    return kept.items;
+}
+
 fn allow(context: ?*anyopaque, _: []const u8, key: ssh.keys.PublicKey) bool {
     const served: *Served = @ptrCast(@alignCast(context.?));
     for (served.allowed) |a| if (a.key.eql(key)) return true;
@@ -264,13 +285,18 @@ fn handle(context: ?*anyopaque, session: *ssh.Session) anyerror!void {
             std.mem.eql(u8, name, "COLORTERM"))
             try env.put(name, entry[eq + 1 ..]);
     }
-    served.log("{s} connected from {f}", .{ session.user, session.remote });
+    // The client picks the name: escaped, so it cannot drive the terminal.
+    served.log("{f} connected from {f}", .{ std.zig.fmtString(session.user), session.remote });
 
     const status = if (session.pty != null)
         try runOnPty(served, session, &env, pty.size)
     else
         try runPiped(served, session, &env);
-    served.log("{s} from {f} left (exit status {d})", .{ session.user, session.remote, status });
+    served.log("{f} from {f} left (exit status {d})", .{
+        std.zig.fmtString(session.user),
+        session.remote,
+        status,
+    });
     session.exit(status);
 }
 
@@ -401,4 +427,19 @@ test parseAddress {
     try std.testing.expect(parseAddress("[::1]:22") != null);
     try std.testing.expect(parseAddress(":2222") != null);
     try std.testing.expectEqual(null, parseAddress("localhost"));
+}
+
+test withoutOptions {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const blob = ssh.keys.KeyPair.fromSeed(@splat(1)).publicBlob();
+    var line: Io.Writer.Allocating = .init(arena.allocator());
+    try (try ssh.keys.PublicKey.parse(&blob)).writeLine(&line.writer, "");
+    const text = try std.fmt.allocPrint(arena.allocator(), "{s} plain\n" ++
+        "from=\"10.0.0.1\" {s} limited\n", .{ line.written(), line.written() });
+    const all = try ssh.keys.parseAuthorizedKeys(arena.allocator(), text);
+    try std.testing.expectEqual(2, all.len);
+    const kept = try withoutOptions(arena.allocator(), all);
+    try std.testing.expectEqual(1, kept.len);
+    try std.testing.expectEqualStrings("plain", kept[0].comment);
 }

@@ -512,7 +512,15 @@ const Validator = struct {
             };
             const extra = additional orelse continue;
             if (extra == .bool and !extra.bool) {
-                try v.problem(child_key, "unknown key", .{});
+                const near = if (properties) |props|
+                    path.suggest(entry.key_ptr.*, props.keys())
+                else
+                    null;
+                if (near) |name| {
+                    try v.problem(child_key, "unknown key; did you mean '{s}'?", .{name});
+                } else {
+                    try v.problem(child_key, "unknown key", .{});
+                }
             } else {
                 try v.check(extra, entry.value_ptr.*, child_key);
             }
@@ -833,7 +841,8 @@ test "validate: types, required, bounds, enum, and unknown keys" {
     try testing.expect(try validate(a, schema, good, .{}, &problems));
 
     const bad = try json.parse(a,
-        \\{"port": 0, "name": "x", "mode": "slow", "tags": ["a", 2, "c"], "ratio": 1, "extra": 1}
+        \\{"port": 0, "name": "x", "mode": "slow", "tags": ["a", 2, "c"], "ratio": 1, "extra": 1,
+        \\ "nmae": "app-y"}
     , null);
     try testing.expect(!try validate(a, schema, bad, .{}, &problems));
     const expected = [_][2][]const u8{
@@ -845,6 +854,7 @@ test "validate: types, required, bounds, enum, and unknown keys" {
         .{ "tags.1", "expected string, found an integer" },
         .{ "ratio", "must be less than 1" },
         .{ "extra", "unknown key" },
+        .{ "nmae", "unknown key; did you mean 'name'?" },
     };
     try testing.expectEqual(expected.len, problems.items.len);
     for (expected, problems.items) |want, got| {

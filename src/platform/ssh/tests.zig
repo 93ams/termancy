@@ -489,3 +489,80 @@ test "the agent over a Windows named pipe, as OpenSSH's agent listens" {
     const missing = "\\\\.\\pipe\\snek-no-agent";
     try testing.expectError(error.FileNotFound, Agent.connect(testing.allocator, testing.io, missing));
 }
+
+/// Everything the server sends on a raw connection until it hangs up.
+fn untilHangUp(stream: Io.net.Stream) ![]u8 {
+    var buffer: [256]u8 = undefined;
+    var r = stream.reader(testing.io, &buffer);
+    return r.interface.allocRemaining(testing.allocator, .limited(4096));
+}
+
+test "a connection that does not log in in time is cut off" {
+    var f: Fixture = .{
+        .config = .{
+            .host_key = hostKey(),
+            .handler = handler,
+            .anyone = true,
+            .login_timeout = .fromMilliseconds(200),
+        },
+        .listener = undefined,
+    };
+    try f.start();
+    defer f.stop();
+    const address = try Io.net.IpAddress.parse("127.0.0.1", f.port());
+    const stream = try address.connect(testing.io, .{ .mode = .stream });
+    defer stream.close(testing.io);
+    // Says nothing: the server's version line, then the end.
+    const got = try untilHangUp(stream);
+    defer testing.allocator.free(got);
+    try testing.expect(std.mem.startsWith(u8, got, "SSH-2.0-snek\r\n"));
+}
+
+test "connections past max_connections are turned away" {
+    var f: Fixture = .{
+        .config = .{
+            .host_key = hostKey(),
+            .handler = handler,
+            .anyone = true,
+            .max_connections = 1,
+        },
+        .listener = undefined,
+    };
+    try f.start();
+    defer f.stop();
+    const address = try Io.net.IpAddress.parse("127.0.0.1", f.port());
+    const first = try address.connect(testing.io, .{ .mode = .stream });
+    defer first.close(testing.io);
+    var buffer: [256]u8 = undefined;
+    var r = first.reader(testing.io, &buffer);
+    _ = try r.interface.takeDelimiterInclusive('\n');
+    const second = try address.connect(testing.io, .{ .mode = .stream });
+    defer second.close(testing.io);
+    const got = try untilHangUp(second);
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("", got);
+}
+
+test "session requests are bounded: variables, terminals, signals" {
+    var f: Fixture = .{
+        .config = .{ .host_key = hostKey(), .handler = handler, .anyone = true },
+        .listener = undefined,
+    };
+    try f.start();
+    defer f.stop();
+    const client = try f.connect(.{ .user = "gus", .verify_host_key = trust });
+    defer client.close();
+    const s = try client.session();
+    defer s.close();
+    var b: wire.Builder = .init(testing.allocator);
+    defer b.deinit();
+    try b.string("NAME");
+    try b.string("value");
+    for (0..64) |_| try testing.expect(try s.channel.request("env", true, b.bytes()));
+    try testing.expect(!try s.channel.request("env", true, b.bytes()));
+    try s.pty("xterm", .{ .width = 80, .height = 24 });
+    try testing.expectError(error.Refused, s.pty("xterm", .{ .width = 80, .height = 24 }));
+    b.list.clearRetainingCapacity();
+    try b.string("NOT-A-SIGNAL");
+    try testing.expect(!try s.channel.request("signal", true, b.bytes()));
+}

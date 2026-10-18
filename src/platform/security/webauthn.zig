@@ -100,7 +100,7 @@ pub const RequestOptions = struct {
             .challenge = try object.bytes(arena, "challenge"),
             .timeout_ms = try object.optionalUnsigned("timeout"),
             .rp_id = try object.optionalString("rpId"),
-            .allow_credentials = try parseDescriptors(arena, object),
+            .allow_credentials = try parseDescriptors(arena, object, "allowCredentials"),
             .user_verification = std.meta.stringToEnum(UserVerification, verification) orelse
                 return error.InvalidField,
         };
@@ -122,8 +122,12 @@ fn writeDescriptor(jw: *std.json.Stringify, credential: CredentialDescriptor) Io
     try jw.endObject();
 }
 
-fn parseDescriptors(arena: Allocator, object: JsonObject) JsonObject.Error![]CredentialDescriptor {
-    const value = object.get("allowCredentials") orelse return &.{};
+fn parseDescriptors(
+    arena: Allocator,
+    object: JsonObject,
+    field: []const u8,
+) JsonObject.Error![]CredentialDescriptor {
+    const value = object.get(field) orelse return &.{};
     if (value != .array) return error.InvalidField;
     const items = value.array.items;
     const out = try arena.alloc(CredentialDescriptor, items.len);
@@ -351,7 +355,7 @@ pub const AuthenticatorData = struct {
     /// The length of the fixed part.
     pub const min_len = Sha256.digest_length + 1 + 4;
 
-    /// Reads the fixed part; attested credential data and extensions are not decoded.
+    /// Reads the fixed part; see `attestedCredential` for what a registration adds.
     pub fn parse(bytes: []const u8) error{InvalidAuthenticatorData}!AuthenticatorData {
         if (bytes.len < min_len) return error.InvalidAuthenticatorData;
         return .{
@@ -497,6 +501,157 @@ pub const Credential = struct {
     public_key: PublicKey,
     /// The last signature count seen.
     sign_count: u32 = 0,
+};
+
+/// The relying party a credential is created for (`PublicKeyCredentialRpEntity`).
+pub const RelyingParty = struct {
+    /// Null for the host of the caller's origin.
+    id: ?[]const u8 = null,
+    name: []const u8,
+};
+
+/// The account a credential is created for (`PublicKeyCredentialUserEntity`).
+pub const User = struct {
+    /// The user handle: opaque bytes, at most 64, with no personal information.
+    id: []const u8,
+    name: []const u8,
+    display_name: []const u8,
+};
+
+/// COSE algorithm numbers `PublicKey` reads.
+pub const cose_es256 = -7;
+pub const cose_eddsa = -8;
+
+/// `PublicKeyCredentialCreationOptions`: what the relying party asks the client to create.
+/// Attestation is not asked for.
+pub const CreationOptions = struct {
+    /// Raw bytes, at least 16 of them, fresh for each ceremony.
+    challenge: []const u8,
+    rp: RelyingParty,
+    user: User,
+    /// In order of preference; the default is what `PublicKey` can verify.
+    algorithms: []const i32 = &.{ cose_es256, cose_eddsa },
+    timeout_ms: ?u32 = null,
+    /// Credentials the account already has, so the same authenticator is not added twice.
+    exclude_credentials: []const CredentialDescriptor = &.{},
+    user_verification: UserVerification = .preferred,
+    /// Whether the credential must be discoverable (a passkey found without its ID).
+    resident_key: bool = false,
+
+    /// Parses the JSON form (`PublicKeyCredentialCreationOptionsJSON`) into `arena`.
+    /// `attestation` and `extensions` are ignored: attestation is never asked for.
+    pub fn parseJson(arena: Allocator, json: []const u8) JsonObject.Error!CreationOptions {
+        const object: JsonObject = try .parse(arena, json);
+        const rp = try object.optionalObject("rp") orelse return error.MissingField;
+        const user = try object.optionalObject("user") orelse return error.MissingField;
+        var options: CreationOptions = .{
+            .challenge = try object.bytes(arena, "challenge"),
+            .rp = .{ .id = try rp.optionalString("id"), .name = try rp.string("name") },
+            .user = .{
+                .id = try user.bytes(arena, "id"),
+                .name = try user.string("name"),
+                .display_name = try user.string("displayName"),
+            },
+            .algorithms = try parseAlgorithms(arena, object),
+            .timeout_ms = try object.optionalUnsigned("timeout"),
+            .exclude_credentials = try parseDescriptors(arena, object, "excludeCredentials"),
+        };
+        if (try object.optionalObject("authenticatorSelection")) |selection| {
+            const verification = try selection.optionalString("userVerification") orelse "preferred";
+            options.user_verification = std.meta.stringToEnum(UserVerification, verification) orelse
+                return error.InvalidField;
+            const resident = try selection.optionalString("residentKey");
+            options.resident_key = if (resident) |r|
+                std.mem.eql(u8, r, "required")
+            else
+                try selection.optionalBool("requireResidentKey") orelse false;
+        }
+        return options;
+    }
+};
+
+/// `pubKeyCredParams`: the COSE algorithms of its public-key entries, in order.
+fn parseAlgorithms(arena: Allocator, object: JsonObject) JsonObject.Error![]const i32 {
+    const value = object.get("pubKeyCredParams") orelse return error.MissingField;
+    if (value != .array) return error.InvalidField;
+    var list: std.ArrayList(i32) = .empty;
+    for (value.array.items) |item| {
+        if (item != .object) return error.InvalidField;
+        const entry: JsonObject = .{ .map = item.object };
+        if (!std.mem.eql(u8, try entry.string("type"), "public-key")) continue;
+        const alg = entry.get("alg") orelse return error.MissingField;
+        if (alg != .integer) return error.InvalidField;
+        try list.append(arena, std.math.cast(i32, alg.integer) orelse return error.InvalidField);
+    }
+    return list.items;
+}
+
+/// The credential in a registration's authenticator data.
+pub const AttestedCredential = struct {
+    aaguid: [16]u8,
+    id: []const u8,
+    /// The COSE_Key, for `PublicKey.fromCose`.
+    public_key: []const u8,
+};
+
+/// Reads the attested credential data that follows the fixed part of `bytes`.
+pub fn attestedCredential(bytes: []const u8) error{InvalidAuthenticatorData}!AttestedCredential {
+    const data: AuthenticatorData = try .parse(bytes);
+    if (!data.flags.attested_credential_data) return error.InvalidAuthenticatorData;
+    const rest = bytes[AuthenticatorData.min_len..];
+    if (rest.len < 18) return error.InvalidAuthenticatorData;
+    const id_len = std.mem.readInt(u16, rest[16..18], .big);
+    if (rest.len - 18 < id_len) return error.InvalidAuthenticatorData;
+    const key = rest[18 + id_len ..];
+    var reader: cbor.Reader = .{ .bytes = key };
+    reader.skip() catch return error.InvalidAuthenticatorData;
+    return .{ .aaguid = rest[0..16].*, .id = rest[18..][0..id_len], .public_key = key[0..reader.pos] };
+}
+
+/// A `PublicKeyCredential` carrying an `AuthenticatorAttestationResponse`.
+pub const Registration = struct {
+    /// The raw credential ID.
+    raw_id: []const u8,
+    client_data_json: []const u8,
+    /// Holds the credential: see `attestedCredential`.
+    authenticator_data: []const u8,
+    /// The CBOR attestation object, for a relying party that checks attestation.
+    attestation_object: []const u8,
+
+    /// What the relying party keeps: the public key and the first signature count. The
+    /// caller still checks clientDataJSON (type `webauthn.create`, challenge, origin).
+    pub fn credential(r: Registration) (PublicKey.Error || error{InvalidAuthenticatorData})!Credential {
+        const attested = try attestedCredential(r.authenticator_data);
+        if (!std.mem.eql(u8, attested.id, r.raw_id)) return error.InvalidAuthenticatorData;
+        const data: AuthenticatorData = try .parse(r.authenticator_data);
+        return .{ .public_key = try .fromCose(attested.public_key), .sign_count = data.sign_count };
+    }
+
+    /// Writes the JSON form (`RegistrationResponseJSON`), without `publicKey`, which a
+    /// relying party can read from the authenticator data instead.
+    pub fn writeJson(r: Registration, writer: *Io.Writer) Io.Writer.Error!void {
+        var jw: std.json.Stringify = .{ .writer = writer };
+        try jw.beginObject();
+        try jw.objectField("id");
+        try writeBase64(&jw, r.raw_id);
+        try jw.objectField("rawId");
+        try writeBase64(&jw, r.raw_id);
+        try jw.objectField("type");
+        try jw.write("public-key");
+        try jw.objectField("response");
+        try jw.beginObject();
+        try jw.objectField("clientDataJSON");
+        try writeBase64(&jw, r.client_data_json);
+        try jw.objectField("attestationObject");
+        try writeBase64(&jw, r.attestation_object);
+        try jw.objectField("authenticatorData");
+        try writeBase64(&jw, r.authenticator_data);
+        try jw.endObject();
+        try jw.objectField("clientExtensionResults");
+        try jw.beginObject();
+        try jw.endObject();
+        try jw.endObject();
+    }
 };
 
 /// Every check of WebAuthn §7.2: `verifyAssertion`, the signature against the
@@ -721,6 +876,103 @@ test "AuthenticatorData.parse" {
     try std.testing.expect(data.flags.attested_credential_data);
     try std.testing.expect(!data.flags.backed_up);
     try std.testing.expectEqual(7, data.sign_count);
+}
+
+test "a registration's credential: ID, COSE key, and first count" {
+    const point = EcdsaP256.KeyPair.generate(std.testing.io).public_key.toUncompressedSec1();
+    const cose = testCoseEs256(point);
+    const id = "credential-7";
+    var bytes: [AuthenticatorData.min_len + 18 + id.len + cose.len + 2]u8 = @splat(0);
+    bytes[32] = 0x45; // user present and verified, attested credential data
+    std.mem.writeInt(u32, bytes[33..37], 3, .big);
+    bytes[37] = 0xaa; // first byte of the AAGUID
+    std.mem.writeInt(u16, bytes[53..55], id.len, .big);
+    @memcpy(bytes[55..][0..id.len], id);
+    @memcpy(bytes[55 + id.len ..][0..cose.len], &cose);
+    bytes[bytes.len - 2] = 0xa0; // an extensions map after the key: not part of it
+    const attested = try attestedCredential(&bytes);
+    try std.testing.expectEqual(0xaa, attested.aaguid[0]);
+    try std.testing.expectEqualStrings(id, attested.id);
+    try std.testing.expectEqualSlices(u8, &cose, attested.public_key);
+
+    const registration: Registration = .{
+        .raw_id = id,
+        .client_data_json = "{}",
+        .authenticator_data = &bytes,
+        .attestation_object = &.{},
+    };
+    const credential = try registration.credential();
+    try std.testing.expectEqualSlices(u8, &point, &credential.public_key.es256);
+    try std.testing.expectEqual(3, credential.sign_count);
+
+    var other = registration;
+    other.raw_id = "another";
+    try std.testing.expectError(error.InvalidAuthenticatorData, other.credential());
+    bytes[32] = 0x05; // no attested credential data
+    try std.testing.expectError(error.InvalidAuthenticatorData, attestedCredential(&bytes));
+    bytes[32] = 0x45;
+    try std.testing.expectError(error.InvalidAuthenticatorData, attestedCredential(bytes[0..60]));
+}
+
+test "CreationOptions.parseJson: what a relying party sends" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const options: CreationOptions = try .parseJson(a,
+        \\{"rp":{"id":"example.com","name":"Example"},
+        \\ "user":{"id":"dTE","name":"ana","displayName":"Ana"},
+        \\ "challenge":"AAECAwQFBgcICQoLDA0ODw",
+        \\ "pubKeyCredParams":[{"type":"public-key","alg":-8},{"type":"other","alg":1},
+        \\   {"type":"public-key","alg":-7}],
+        \\ "timeout":60000,
+        \\ "excludeCredentials":[{"type":"public-key","id":"_w"}],
+        \\ "authenticatorSelection":{"residentKey":"required","userVerification":"required"},
+        \\ "attestation":"direct"}
+    );
+    try std.testing.expectEqualStrings("example.com", options.rp.id.?);
+    try std.testing.expectEqualStrings("Example", options.rp.name);
+    try std.testing.expectEqualStrings("u1", options.user.id);
+    try std.testing.expectEqualStrings("Ana", options.user.display_name);
+    try std.testing.expectEqual(16, options.challenge.len);
+    try std.testing.expectEqualSlices(i32, &.{ cose_eddsa, cose_es256 }, options.algorithms);
+    try std.testing.expectEqual(60000, options.timeout_ms.?);
+    try std.testing.expectEqualSlices(u8, &.{0xff}, options.exclude_credentials[0].id);
+    try std.testing.expect(options.resident_key);
+    try std.testing.expectEqual(.required, options.user_verification);
+
+    const plain: CreationOptions = try .parseJson(a,
+        \\{"rp":{"name":"x"},"user":{"id":"AA","name":"n","displayName":"d"},
+        \\ "challenge":"AA","pubKeyCredParams":[{"type":"public-key","alg":-7}],
+        \\ "authenticatorSelection":{"requireResidentKey":true}}
+    );
+    try std.testing.expectEqual(null, plain.rp.id);
+    try std.testing.expect(plain.resident_key);
+    try std.testing.expectEqual(.preferred, plain.user_verification);
+
+    const e = std.testing.expectError;
+    try e(error.MissingField, CreationOptions.parseJson(a, "{\"challenge\":\"AA\"}"));
+    try e(error.MissingField, CreationOptions.parseJson(a,
+        \\{"rp":{"name":"x"},"user":{"id":"AA","name":"n","displayName":"d"},"challenge":"AA"}
+    ));
+    try e(error.InvalidField, CreationOptions.parseJson(a,
+        \\{"rp":{"name":"x"},"user":{"id":"AA","name":"n","displayName":"d"},"challenge":"AA",
+        \\ "pubKeyCredParams":[{"type":"public-key","alg":"ES256"}]}
+    ));
+}
+
+test "Registration.writeJson" {
+    var buffer: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    const registration: Registration = .{
+        .raw_id = &.{0xff},
+        .client_data_json = "{}",
+        .authenticator_data = &.{ 1, 2 },
+        .attestation_object = &.{0xa0},
+    };
+    try registration.writeJson(&w);
+    try std.testing.expectEqualStrings(
+        \\{"id":"_w","rawId":"_w","type":"public-key","response":{"clientDataJSON":"e30","attestationObject":"oA","authenticatorData":"AQI"},"clientExtensionResults":{}}
+    , w.buffered());
 }
 
 /// The COSE key of an ES256 credential, as an authenticator encodes it.

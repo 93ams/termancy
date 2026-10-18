@@ -98,8 +98,9 @@ pub const validate = cli.command(.{
     \\
     \\A file is also checked (with a warning, not a failure; -q silences it) for what
     \\parses but is likely a mistake: a value that looks like a secret written in plain
-    \\text (a key such as password or token, not a ${secret:...} reference), and a key
-    \\the schema marks deprecated.
+    \\text (a key such as password or token, not a ${secret:...} reference), a key the
+    \\schema marks deprecated, and a key the schema does not declare but that is close to
+    \\one it does (as prot is to port).
     ,
     .group = group,
     .exit_statuses = &.{
@@ -210,8 +211,9 @@ const secret_words = [_][]const u8{
     "password", "passwd", "secret", "token", "api_key", "apikey", "private_key",
 };
 
-/// Collects what parses but is likely a mistake: plain-text secrets, and keys `schema`
-/// marks deprecated. `prefix` is the dotted path of `tree`.
+/// Collects what parses but is likely a mistake: plain-text secrets, keys `schema` marks
+/// deprecated, and keys it does not declare that are close to ones it does. `prefix` is
+/// the dotted path of `tree`.
 fn lint(
     arena: std.mem.Allocator,
     tree: cfg.Value,
@@ -224,6 +226,10 @@ fn lint(
         .table => |t| if (t.get("properties")) |p| if (p == .table) p.table else null else null,
         else => null,
     } else null;
+    // Where the schema rejects other keys, validating reports them; elsewhere they are
+    // allowed, so only one close to a declared key (a typo) is worth a warning.
+    const open = properties != null and schema.?.table.get("additionalProperties") == null and
+        schema.?.table.get("patternProperties") == null;
     var it = tree.table.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
@@ -232,6 +238,15 @@ fn lint(
         else
             try std.mem.concat(arena, u8, &.{ prefix, ".", name });
         const property: ?cfg.Value = if (properties) |p| p.get(name) else null;
+        if (property == null and open) {
+            if (cli.internal.text.suggest(name, properties.?.keys())) |near| {
+                try out.append(arena, .{ .key = key, .message = try std.fmt.allocPrint(
+                    arena,
+                    "unknown key; did you mean '{s}'?",
+                    .{near},
+                ) });
+            }
+        }
         if (property) |prop| if (prop == .table) {
             if (prop.table.get("deprecated")) |d| if (d == .bool and d.bool) {
                 const reason = if (prop.table.get("deprecationMessage")) |m|

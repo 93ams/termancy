@@ -1,11 +1,13 @@
 //! Package-manager manifests generated from one `Package` description: a Homebrew formula
-//! (Ruby), a Scoop manifest (JSON), an Arch Linux `PKGBUILD` (bash), and a Debian `control`
-//! file. Output is deterministic, so it can be committed and compared byte for byte.
+//! (Ruby), a Scoop manifest (JSON), a winget manifest (YAML), an Arch Linux `PKGBUILD`
+//! (bash), and a Debian `control` file. Output is deterministic, so it can be committed and
+//! compared byte for byte.
 //!
 //! Every text field is escaped for the format it lands in: Ruby double-quoted strings
-//! (`\`, `"`, `#`), JSON strings, bash single-quoted words (`'\''`), and Debian folded
-//! fields (continuation lines, ` .` for blank ones). Fields a format cannot represent at
-//! all, such as a line break in a Debian `Maintainer`, are errors rather than mangled.
+//! (`\`, `"`, `#`), JSON strings (which are also YAML double-quoted strings), bash
+//! single-quoted words (`'\''`), and Debian folded fields (continuation lines, ` .` for
+//! blank ones). Fields a format cannot represent at all, such as a line break in a Debian
+//! `Maintainer`, are errors rather than mangled.
 //!
 //! Each `Asset` names where the executable is once the download is unpacked (`path`): an
 //! archive member, or the downloaded file itself for a bare binary. When that path's base
@@ -64,6 +66,9 @@ pub const Package = struct {
     license: []const u8,
     /// `Name <email>`; only the Debian control file uses it, and requires it.
     maintainer: []const u8 = "",
+    /// Who publishes the package, one word: `93ams`. Only winget uses it, and requires
+    /// it: the package identifier is `<publisher>.<name>`.
+    publisher: []const u8 = "",
     /// The Arch package release and the Debian revision.
     release: u32 = 1,
     assets: []const Asset,
@@ -114,6 +119,31 @@ pub fn writeScoop(writer: *Writer, package: Package) WriteError!void {
     if (x64) |asset| try scoopArch(writer, package, "64bit", asset, arm != null);
     if (arm) |asset| try scoopArch(writer, package, "arm64", asset, false);
     try writer.writeAll("    }\n}\n");
+}
+
+/// Writes a winget manifest covering the Windows assets, in the single-file form
+/// (`ManifestType: singleton`) that `winget install --manifest` and `winget validate` read.
+/// The winget-pkgs repository takes the multi-file form, which `wingetcreate` makes from
+/// the same fields.
+pub fn writeWinget(writer: *Writer, package: Package) WriteError!void {
+    try validate(package);
+    try validatePublisher(package.publisher);
+    const x64 = package.find(.windows, .x86_64);
+    const arm = package.find(.windows, .aarch64);
+    if (x64 == null and arm == null) return error.NoAssets;
+    try writer.writeAll("# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json\n");
+    try writer.print("PackageIdentifier: {s}.{s}\n", .{ package.publisher, package.name });
+    try yamlField(writer, "PackageVersion", package.version);
+    try writer.writeAll("PackageLocale: en-US\n");
+    try yamlField(writer, "Publisher", package.publisher);
+    try yamlField(writer, "PackageName", package.name);
+    try yamlField(writer, "License", package.license);
+    try yamlField(writer, "ShortDescription", package.description);
+    try yamlField(writer, "PackageUrl", package.homepage);
+    try writer.writeAll("Installers:\n");
+    if (x64) |asset| try wingetInstaller(writer, package, "x64", asset);
+    if (arm) |asset| try wingetInstaller(writer, package, "arm64", asset);
+    try writer.writeAll("ManifestType: singleton\nManifestVersion: 1.6.0\n");
 }
 
 /// Writes an Arch Linux `PKGBUILD` covering the Linux assets.
@@ -180,6 +210,16 @@ fn validate(package: Package) Error!void {
 }
 
 /// The intersection of the Debian, Arch, Homebrew, and Scoop package-name rules.
+/// One segment of a winget package identifier: 1 to 32 bytes, none of them a dot,
+/// whitespace, a control byte, or `\/:*?"<>|`.
+fn validatePublisher(publisher: []const u8) Error!void {
+    if (publisher.len == 0 or publisher.len > 32) return error.InvalidField;
+    for (publisher) |byte| switch (byte) {
+        0...32, 127, '.', '\\', '/', ':', '*', '?', '"', '<', '>', '|' => return error.InvalidField,
+        else => {},
+    };
+}
+
 fn validateName(name: []const u8) Error!void {
     if (name.len < 2) return error.InvalidName;
     if (!std.ascii.isLower(name[0]) and !std.ascii.isDigit(name[0])) return error.InvalidName;
@@ -364,6 +404,35 @@ fn scoopArch(
         try writer.writeAll("]]");
     }
     try writer.writeAll(if (more) "\n        },\n" else "\n        }\n");
+}
+
+// winget.
+
+fn yamlField(writer: *Writer, key: []const u8, value: []const u8) Writer.Error!void {
+    try writer.print("{s}: ", .{key});
+    try jsonString(writer, value);
+    try writer.writeByte('\n');
+}
+
+fn wingetInstaller(writer: *Writer, package: Package, arch: []const u8, asset: Asset) Writer.Error!void {
+    try writer.print("  - Architecture: {s}\n", .{arch});
+    if (std.ascii.endsWithIgnoreCase(asset.url, ".zip")) {
+        try writer.writeAll("    InstallerType: zip\n    NestedInstallerType: portable\n" ++
+            "    NestedInstallerFiles:\n      - RelativeFilePath: ");
+        try jsonString(writer, asset.path);
+        try writer.writeAll("\n        PortableCommandAlias: ");
+        try jsonString(writer, package.name);
+        try writer.writeByte('\n');
+    } else {
+        try writer.writeAll("    InstallerType: portable\n    Commands:\n      - ");
+        try jsonString(writer, package.name);
+        try writer.writeByte('\n');
+    }
+    try writer.writeAll("    InstallerUrl: ");
+    try jsonString(writer, asset.url);
+    try writer.writeAll("\n    InstallerSha256: ");
+    for (asset.sha256) |byte| try writer.writeByte(std.ascii.toUpper(byte));
+    try writer.writeByte('\n');
 }
 
 // PKGBUILD.
@@ -689,6 +758,69 @@ test "scoop: two architectures, a renamed bare binary" {
         \\}
         \\
     , writeScoop, .{package});
+}
+
+test "winget: one zip with a nested executable, one bare binary" {
+    var package = example;
+    package.publisher = "93ams";
+    package.assets = &.{
+        .{
+            .os = .windows,
+            .arch = .x86_64,
+            .url = "https://x.test/snek-windows-x86_64.zip",
+            .sha256 = sha_d,
+            .path = "snek.exe",
+        },
+        .{
+            .os = .windows,
+            .arch = .aarch64,
+            .url = "https://x.test/snek-arm64.exe",
+            .sha256 = sha_a,
+            .path = "snek-arm64.exe",
+        },
+    };
+    try expectRendered(
+        \\# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+        \\PackageIdentifier: 93ams.snek
+        \\PackageVersion: "0.2.0-rc.1"
+        \\PackageLocale: en-US
+        \\Publisher: "93ams"
+        \\PackageName: "snek"
+        \\License: "MIT"
+        \\ShortDescription: "A \"typed\" CLI kit #1 \\ it's fast"
+        \\PackageUrl: "https://github.com/93ams/snek"
+        \\Installers:
+        \\  - Architecture: x64
+        \\    InstallerType: zip
+        \\    NestedInstallerType: portable
+        \\    NestedInstallerFiles:
+        \\      - RelativeFilePath: "snek.exe"
+        \\        PortableCommandAlias: "snek"
+        \\    InstallerUrl: "https://x.test/snek-windows-x86_64.zip"
+        \\    InstallerSha256: DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+        \\  - Architecture: arm64
+        \\    InstallerType: portable
+        \\    Commands:
+        \\      - "snek"
+        \\    InstallerUrl: "https://x.test/snek-arm64.exe"
+        \\    InstallerSha256: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        \\ManifestType: singleton
+        \\ManifestVersion: 1.6.0
+        \\
+    , writeWinget, .{package});
+}
+
+test "winget: the publisher is one identifier segment" {
+    var sink: Writer.Discarding = .init(&.{});
+    var package = example;
+    for ([_][]const u8{ "", "93.ams", "a b", "a/b", &@as([33]u8, @splat('x')) }) |publisher| {
+        package.publisher = publisher;
+        try testing.expectError(error.InvalidField, writeWinget(&sink.writer, package));
+    }
+    package.publisher = "93ams";
+    try writeWinget(&sink.writer, package);
+    package.assets = example.assets[0..1];
+    try testing.expectError(error.NoAssets, writeWinget(&sink.writer, package));
 }
 
 test "pkgbuild: quoting, pkgver, one install line" {

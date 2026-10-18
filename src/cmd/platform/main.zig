@@ -9,11 +9,19 @@ const info = @import("info.zig");
 const update = @import("update.zig");
 const release = @import("release.zig");
 const ssh = @import("ssh.zig");
+const webauthn = @import("webauthn.zig");
 
 pub const command = cli.command(.{
     .name = "platform",
-    .summary = "Directories, system information, self-update, releases, and SSH keys",
-    .subcommands = .{ dirs.command, info.command, update.command, release.command, ssh.command },
+    .summary = "Directories, system information, self-update, releases, SSH keys, and WebAuthn",
+    .subcommands = .{
+        dirs.command,
+        info.command,
+        update.command,
+        release.command,
+        ssh.command,
+        webauthn.command,
+    },
 });
 
 /// The text form of `dirs` and `info`: `rows` as two columns, the names padded to the
@@ -41,4 +49,5 @@ test {
     std.testing.refAllDecls(update);
     std.testing.refAllDecls(release);
     std.testing.refAllDecls(ssh);
+    std.testing.refAllDecls(webauthn);
 }

@@ -92,7 +92,7 @@ sessions, drops silent tabs, and moves its token into a cookie. Left:
 
 | Item | Size | Notes |
 |---|---|---|
-| **CTAP2 on macOS and Windows** | M | `ctap.Device` has a Linux hidraw implementation only. macOS needs IOKit's HID manager; on Windows an unelevated process cannot open a FIDO device, so the way there is `webauthn.dll`, a different API from CTAP. Everything else left for Windows is in [WINDOWS.md](WINDOWS.md). |
+| **CTAP2 on macOS and Windows** | M | `ctap.Device` has a Linux hidraw implementation only. macOS needs IOKit's HID manager; on Windows an unelevated process cannot open a FIDO device, so the way there is `webauthn.dll`, a different API from CTAP. Everything else left for Windows is in [docs/windows.md](docs/windows.md). |
 | **Dogfooding leftovers** | S | From building `examples/repos`: `Keymap` modes were judged unnecessary (two keymaps chosen in `view` do it); `testing.Driver` frees a model only when its `deinit` is `pub fn (*M) void`, which is documented, not checked at compile time; `cfg` places its configuration directory by hand to match `platform.dirs`, since it imports only std, so the two must be kept in step; `help`, `paginator`, `stopwatch`, `timer`, and `shell` have no `snek tui demo`, so the site shows no GIF for them. |
 | **CTAP2 on a real key** | S | The protocol layers, ClientPIN included, are tested against a simulated authenticator (and AES-CBC against NIST's vectors); no hardware key has been through `Hidraw` yet. |
 
@@ -151,7 +151,7 @@ melt). Left from that list:
 
 | Item | Size | Notes |
 |---|---|---|
-| **More of SSH** | S | The server does sessions and opt-in port forwarding (`ssh -L`, `ssh -R`); the client checks `known_hosts`, logs in with Ed25519 keys or passwords, runs commands and terminals, and forwards `ssh -L`. The client also signs with the ssh-agent's Ed25519 keys (Unix sockets; Windows' named pipe is in [WINDOWS.md](WINDOWS.md)). Agent forwarding, SFTP, keyboard-interactive logins, certificates, and the client's side of `ssh -R` are not done. |
+| **More of SSH** | S | The server does sessions and opt-in port forwarding (`ssh -L`, `ssh -R`); the client checks `known_hosts`, logs in with Ed25519 keys or passwords, runs commands and terminals, and forwards `ssh -L`. The client also signs with the ssh-agent's Ed25519 keys (Unix sockets; Windows' named pipe is in [docs/windows.md](docs/windows.md)). Agent forwarding, SFTP, keyboard-interactive logins, certificates, and the client's side of `ssh -R` are not done. |
 | **WebP, and rarer JPEGs** | M | `term.image` reads PNG, GIF, and JPEG (baseline and progressive); WebP, and arithmetic-coded, lossless, and 12-bit JPEGs, are not read. |
 | **CFF fonts** | M | `TrueType` draws TrueType outlines; OpenType fonts with CFF outlines (`.otf`) are refused, so the recorder and freeze need a `.ttf` face. |
 

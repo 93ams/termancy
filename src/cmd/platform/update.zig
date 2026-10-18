@@ -69,9 +69,7 @@ fn run(ctx: *cli.Context, flags: UpdateFlags) !void {
         .timeout = timeout,
         .user_agent = "snek/" ++ version,
     };
-    var options = defaultOptions();
-    options.install.accept = .{ .context = &ctx.gpa, .run = runsVersion };
-    try runWith(ctx, flags, http.transport(), options, null);
+    try runWith(ctx, flags, http.transport(), defaultOptions(), null);
 }
 
 /// The update options for this build of snek, without an install check.
@@ -93,7 +91,7 @@ fn decodeKey(comptime text: []const u8) [std.crypto.sign.Ed25519.PublicKey.encod
 }
 
 /// Checks for an update through `transport` and, unless `flags.check`, installs it at
-/// `destination` (null: the running executable).
+/// `destination` (null: the running executable, which must then pass `runsVersion`).
 fn runWith(
     ctx: *cli.Context,
     flags: UpdateFlags,
@@ -129,6 +127,9 @@ fn runWith(
     try ctx.out.print("snek {f} is available (this is {f})\n", .{ plan.latest, plan.current });
     if (flags.check) return;
     const target = destination orelse try runningExecutable(ctx);
+    var accept: Accept = .{ .gpa = ctx.gpa, .expected = plan.latest };
+    var opts = options;
+    if (destination == null) opts.install.accept = .{ .context = &accept, .run = runsVersion };
     try ctx.out.flush(); // The question follows the line above.
     try ctx.confirm("Replace {s} with snek {f}?", .{ target.path, plan.latest });
     ctx.log(.info, "replacing {s}", .{target.path});
@@ -139,7 +140,7 @@ fn runWith(
     watched.archive = plan.binary.url;
     try progress.advance(0, .running);
     const fetch = watched.transport();
-    update.apply(ctx.gpa, ctx.io, fetch, plan, options, target.dir, target.path) catch |err| {
+    update.apply(ctx.gpa, ctx.io, fetch, plan, opts, target.dir, target.path) catch |err| {
         try progress.end(failedStep(err, progress.at), .failed);
         return applyFailed(ctx, plan, err);
     };
@@ -240,24 +241,48 @@ fn runningExecutable(ctx: *cli.Context) !Destination {
     return .{ .dir = .cwd(), .path = path };
 }
 
-/// The install check: the new executable must run `--version` successfully.
+/// What `runsVersion` needs: the release's version, which the new snek must report.
+const Accept = struct { gpa: std.mem.Allocator, expected: platform.version.Version };
+
+/// The install check: the new executable must run `--version` successfully and report the
+/// release's version, so an older signed archive published under a newer tag (the signature
+/// covers the bytes, not the tag) is not installed as a downgrade.
 fn runsVersion(
     context: ?*anyopaque,
     io: std.Io,
     dir: std.Io.Dir,
     exe_path: []const u8,
 ) error{Rejected}!void {
-    const gpa: *const std.mem.Allocator = @ptrCast(@alignCast(context.?));
+    const accept: *const Accept = @ptrCast(@alignCast(context.?));
+    const gpa = accept.gpa;
     var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const len = dir.realPathFile(io, exe_path, &path_buffer) catch return error.Rejected;
-    const result = std.process.run(gpa.*, io, .{
+    const result = std.process.run(gpa, io, .{
         .argv = &.{ path_buffer[0..len], "--version" },
     }) catch return error.Rejected;
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
-    if (!result.term.success() or !std.mem.startsWith(u8, result.stdout, "snek ")) {
-        return error.Rejected;
-    }
+    if (!result.term.success() or !reports(result.stdout, accept.expected)) return error.Rejected;
+}
+
+/// Whether `stdout` of `snek --version` names `expected`: `snek <version>`, then a space,
+/// a line end, or nothing.
+fn reports(stdout: []const u8, expected: platform.version.Version) bool {
+    var buffer: [128]u8 = undefined;
+    const want = std.fmt.bufPrint(&buffer, "snek {f}", .{expected}) catch return false;
+    if (!std.mem.startsWith(u8, stdout, want)) return false;
+    const rest = stdout[want.len..];
+    return rest.len == 0 or rest[0] == ' ' or rest[0] == '\n' or rest[0] == '\r';
+}
+
+test reports {
+    const v = try platform.version.parse("1.2.0");
+    try testing.expect(reports("snek 1.2.0\n", v));
+    try testing.expect(reports("snek 1.2.0 (abc1234, 2026-10-17)\n", v));
+    try testing.expect(!reports("snek 1.1.0\n", v)); // An older release, re-tagged.
+    try testing.expect(!reports("snek 1.2.0-rc.1\n", v));
+    try testing.expect(!reports("snek 1.2.01\n", v));
+    try testing.expect(!reports("other 1.2.0\n", v));
 }
 
 const repo = source.owner ++ "/" ++ source.repo;
@@ -312,7 +337,8 @@ fn applyFailed(ctx: *cli.Context, plan: update.Plan, err: update.ApplyError) Rep
         error.ExecutableMissing => ctx.fail("{s} holds no snek executable; not installed", .{
             name,
         }),
-        error.Rejected => ctx.fail("the new snek does not run; the old one was restored", .{}),
+        error.Rejected => ctx.fail("the new snek does not run as snek {f}; the old one " ++
+            "was restored", .{plan.latest}),
         error.RollbackFailed => ctx.fail("the update failed and so did restoring the old " ++
             "executable; it is left next to the new one, with .old appended", .{}),
         error.NameTooLong,

@@ -11,16 +11,46 @@ Five Zig libraries and a program built from them:
 | **`platform`** | The operating system as a CLI needs it: standard directories, processes, signals, atomic and lock files, daemons, secure memory, logging, crash reports, tracing, opt-in telemetry, self-update, package manifests, SSH keys and an SSH server (wish), secrets as words (melt). |
 | **`snek`** | A program built only from the libraries' public surfaces: configuration tooling, project and command generators, gum-style shell widgets, a Markdown reader (glow), terminal recordings as GIFs (vhs), images of code (freeze), and system information. |
 
-Zig **0.17.0**, standard library only. `cli` and `tui` build on `term`; otherwise no library
-imports another. What comes next is in
-[ROADMAP.md](ROADMAP.md), what changed in [CHANGELOG.md](CHANGELOG.md), and what stays
-stable in [docs/stability.md](docs/stability.md); what `snek` prints for scripts is
-specified in [docs/machine-output.md](docs/machine-output.md). New here? Start with
-[Your first app in 10 minutes](docs/guide.md).
+Zig **0.17.0**, standard library only. `cli` and `tui` build on `term`; otherwise no library imports
+another. What comes next is in [ROADMAP.md](ROADMAP.md), what changed in
+[CHANGELOG.md](CHANGELOG.md), and what stays stable in [docs/stability.md](docs/stability.md); what
+`snek` prints for scripts is specified in [docs/machine-output.md](docs/machine-output.md). New
+here? Start with [Your first app in 10 minutes](docs/guide.md). To help, see
+[CONTRIBUTING.md](CONTRIBUTING.md); to report a vulnerability, [SECURITY.md](SECURITY.md).
 
 [cobra]: https://github.com/spf13/cobra
 [viper]: https://github.com/spf13/viper
 [shadcn/ui]: https://ui.shadcn.com
+
+## Install
+
+**snek**, the program: each [release](https://github.com/93ams/snek/releases) has an archive
+per system (`snek-<os>-<cpu>.tar.gz`, `.zip` on Windows; `linux`, `macos`, `windows` on
+`x86_64` and `aarch64`), each with an Ed25519 signature beside it and all in `SHA256SUMS`.
+
+```sh
+curl -fsSL https://github.com/93ams/snek/releases/latest/download/snek-linux-x86_64.tar.gz \
+  | tar -xz -C ~/.local/bin snek
+scoop install https://github.com/93ams/snek/releases/latest/download/snek.json  # Windows
+snek platform update                                # later: checks the signature, then swaps
+```
+
+The release also carries Homebrew (`snek.rb`) and winget (`snek.yaml`; `winget install
+--manifest snek.yaml`) manifests. To build it instead: `zig build -Doptimize=ReleaseSafe`
+with Zig 0.17.0.
+
+On Windows, `snek.exe` is not code-signed yet, so the first run of a downloaded copy may
+stop at a SmartScreen warning ("Windows protected your PC"): check it against
+`SHA256SUMS`, then choose **More info**, **Run anyway**.
+
+**The libraries**, in a Zig project:
+
+```sh
+zig fetch --save git+https://github.com/93ams/snek#v0.1.0
+```
+
+then import the modules you use in `build.zig` (below), or let `snek cli init` set a project
+up.
 
 ## A complete example
 
@@ -81,11 +111,11 @@ zig build run -- serve -p 9000
 ```
 
 `init` writes `build.zig`, `build.zig.zon`, `src/main.zig` (the entry point and the command tree),
-and `src/settings.zig`, whose `Settings` struct is what the configuration file holds:
-`zig build schema` writes its JSON Schema, from which
-`snek cfg init demo.toml --schema zig-out/schema.json` writes a starter file. `add` writes one file
-per command with a typed flags struct, a handler, and a test, and wires it into its parent. A path
-like `config get` creates the `config` group (`src/cmd/config/main.zig`) when it is missing. The
+an example `hello` command in `src/cmd/hello.zig`, and `src/settings.zig`, whose `Settings` struct
+is what the configuration file holds: `zig build schema` writes its JSON Schema, from which `snek
+cfg init demo.toml --schema zig-out/schema.json` writes a starter file. `add` writes one file per
+command with a typed flags struct, a handler, and a test, and wires it into its parent. A path like
+`config get` creates the `config` group (`src/cmd/config/main.zig`) when it is missing. The
 generated project builds and its tests pass with no edits.
 
 To add the libraries by hand, depend on this package and import the modules you use:
@@ -277,25 +307,23 @@ the `--config` path, the file a variable names, or `config.toml` in the user's c
 directory, and a missing file is not an error. `glob`, `edit.applyAll`, and
 `Duration.toIo` round it out.
 
-**Reading**: `get`, typed getters (`getInt`, `getDuration`, `getStringList`, ...), `keys`,
-and `decode(T)` into a struct with coercion from text, range checks, required fields, and
-an optional strict mode for unknown keys. Struct `meta` adds `.secret`, `.help`, `.key`,
-`.min`/`.max`/`.one_of`/`.pattern` constraints, `.renamed_from` (the old key still reads,
-with a warning), `.deprecated = "why"` (read, with a warning when set; `deprecated` in the
-schema too), and `.merge`; a struct's `validate` checks rules across fields; with
-`Options.errors`, every problem is reported at once. Problems point at the file and line
-that set the key, `app.toml:4:8: server.port: must be at most 65535`, and
-`Diagnostic.writeSnippet` shows that line with a caret under the value (`cfg.locate` finds
-any key in any format's text). `changed(io)` says whether a loaded file (or one it
-includes) changed on disk, with one `stat` each, for a watch loop that calls `reload`.
-`cfg.migrate.run` upgrades documents through a list of versioned migrations.
-`view("db")` hands a component its own section (`getString("host")` reads `db.host`, and
-`decode` decodes just that part). `addResolver("name", ...)` makes `${name:arg}` in a file
-call your function (`${env:HOME}`, `${git:branch}`), as `addSecretProvider` does for
-secrets. `findFile(.{ .upward = true })` searches the working directory and its parents,
-as git and cosmiconfig do. `platform.remote.get` fetches a file over HTTP with an ETag
-cache that serves the last copy offline; `loadSource` it, as `snek cfg -c https://...`
-does.
+**Reading**: `get`, typed getters (`getInt`, `getDuration`, `getStringList`, ...), `keys`, and
+`decode(T)` into a struct with coercion from text, range checks, required fields, and unknown keys
+rejected (`.strict`) or reported as warnings at their file and line with a "did you mean"
+(`.warn_unknown`). Struct `meta` adds `.secret`, `.help`, `.key`, `.min`/`.max`/`.one_of`/`.pattern`
+constraints, `.renamed_from` (the old key still reads, with a warning), `.deprecated = "why"` (read,
+with a warning when set; `deprecated` in the schema too), and `.merge`; a struct's `validate` checks
+rules across fields; with `Options.errors`, every problem is reported at once. Problems point at the
+file and line that set the key, `app.toml:4:8: server.port: must be at most 65535`, and
+`Diagnostic.writeSnippet` shows that line with a caret under the value (`cfg.locate` finds any key
+in any format's text). `changed(io)` says whether a loaded file (or one it includes) changed on
+disk, with one `stat` each, for a watch loop that calls `reload`. `cfg.migrate.run` upgrades
+documents through a list of versioned migrations. `view("db")` hands a component its own section
+(`getString("host")` reads `db.host`, and `decode` decodes just that part). `addResolver("name",
+...)` makes `${name:arg}` in a file call your function (`${env:HOME}`, `${git:branch}`), as
+`addSecretProvider` does for secrets. `findFile(.{ .upward = true })` searches the working directory
+and its parents, as git and cosmiconfig do. `platform.remote.get` fetches a file over HTTP with an
+ETag cache that serves the last copy offline; `loadSource` it, as `snek cfg -c https://...` does.
 `Duration` (`1h30m`) and `ByteSize` (`10MiB`) work as config fields and as flag types.
 
 **Writing**: `write(writer, format, .{ .layer, .redact })` with secrets redacted by default.
@@ -481,7 +509,7 @@ snek platform dirs                             # where config, cache, and state 
 | `tui md [source]` | Markdown from a file, a URL, or a repository's README, in a reader, as [glow](https://github.com/charmbracelet/glow) |
 | `tui image <file>` | a PNG, JPEG, or GIF in the terminal (kitty, iTerm2, sixel, or half blocks) |
 | `tui serve -- command` | a terminal program over SSH, as [wish](https://github.com/charmbracelet/wish), or with `--web` in the browser, as [ttyd](https://github.com/tsl0922/ttyd) (a token link swapped for a cookie, loopback by default, at most 32 sessions) |
-| `tui init`, `add <component>...`, `list`, `diff <component>`, `demo [component]` | copy components into a project, keep them current, and try them first |
+| `tui init`, `add <component>...`, `list`, `diff <component>`, `demo [component]` | copy components into a project (any subdirectory of it; `init` wires the nearest `build.zig`), keep them current, and try them first |
 | `platform dirs`, `info`, `update` | standard directories, system facts, self-update |
 | `platform release keygen`, `sign`, `verify`, `manifest` | publish releases `platform.update` installs: Ed25519 signatures and package manifests |
 | `platform ssh keygen`, `fingerprint`, `melt`, `restore`, `sign`, `verify`, `run` | SSH keys as `ssh-keygen` makes them, backed up as 24 words ([melt](https://github.com/charmbracelet/melt)), and files signed as `ssh-keygen -Y` signs them |

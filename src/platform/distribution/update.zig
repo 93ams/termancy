@@ -9,8 +9,8 @@
 //!    rejected, never installed on its checksum alone.
 //! 4. **Install**: `install` replaces an executable atomically and keeps a rollback copy
 //!    (`<exe>.old`) until the new one is in place and accepted.
-//! 5. **Fetch**: `HttpTransport` over `std.http.Client`, with redirects, a size limit, and
-//!    an optional timeout.
+//! 5. **Fetch**: `HttpTransport` over `std.http.Client`: https only (redirects too), with a
+//!    size limit and an optional timeout.
 //!
 //! `check` and `apply` run the whole flow through a `Transport`, so tests drive it with an
 //! in-memory fake. Nothing here reads the executable's path, the clock, or the network on
@@ -615,7 +615,7 @@ fn backUp(
 ) InstallError!bool {
     const result = switch (strategy) {
         .rename_over => dir.copyFile(exe_path, dir, old_path, io, .{}),
-        .move_aside => dir.rename(exe_path, dir, old_path, io),
+        .move_aside => renameImage(io, dir, exe_path, old_path),
     };
     result catch |err| switch (err) {
         error.FileNotFound => return false,
@@ -623,6 +623,33 @@ fn backUp(
     };
     return true;
 }
+
+/// `dir.rename` of `from` to `to`, its sibling, that also moves a running executable on
+/// Windows. shortcut: Zig 0.17's rename opens the file to write it as well as to move it,
+/// which Windows refuses for a running image (`FileBusy`; docs/zig-issues.md, issue 6);
+/// `MoveFileExW` asks only to move it. Remove when std's rename asks for less.
+fn renameImage(io: Io, dir: Io.Dir, from: []const u8, to: []const u8) !void {
+    if (builtin.os.tag != .windows) return dir.rename(from, dir, to, io);
+    assert(std.mem.eql(u8, std.fs.path.dirname(from) orelse "", std.fs.path.dirname(to) orelse ""));
+    var real: [max_path]u8 = undefined;
+    const real_from = real[0..try dir.realPathFile(io, from, &real)];
+    const parent = std.fs.path.dirname(real_from) orelse return error.RenameFailed;
+    var joined: [max_path]u8 = undefined;
+    const real_to = std.fmt.bufPrint(&joined, "{s}\\{s}", .{ parent, std.fs.path.basename(to) }) catch
+        return error.NameTooLong;
+    var from_w: [max_path:0]u16 = undefined;
+    var to_w: [max_path:0]u16 = undefined;
+    from_w[std.unicode.wtf8ToWtf16Le(&from_w, real_from) catch return error.RenameFailed] = 0;
+    to_w[std.unicode.wtf8ToWtf16Le(&to_w, real_to) catch return error.RenameFailed] = 0;
+    if (MoveFileExW(&from_w, &to_w, move_file_replace_existing) == 0) return error.RenameFailed;
+}
+
+const move_file_replace_existing = 0x1;
+extern "kernel32" fn MoveFileExW(
+    existing: [*:0]const u16,
+    new: [*:0]const u16,
+    flags: u32,
+) callconv(.winapi) i32;
 
 /// Puts `<exe>.old` back at `exe_path`, or removes `exe_path` if there was no backup.
 fn rollBack(
@@ -639,7 +666,7 @@ fn rollBack(
         };
         return;
     }
-    dir.rename(old_path, dir, exe_path, io) catch return error.RollbackFailed;
+    renameImage(io, dir, old_path, exe_path) catch return error.RollbackFailed;
 }
 
 // 5. Fetch, and the flow.
@@ -709,6 +736,7 @@ pub const HttpTransport = struct {
         limit: usize,
     ) Transport.Error![]u8 {
         const uri = std.Uri.parse(url) catch return error.FetchFailed;
+        if (!isHttps(uri)) return error.FetchFailed;
         var request = http.client.request(.GET, uri, .{
             .redirect_behavior = .init(http.max_redirects),
             .headers = .{
@@ -720,6 +748,8 @@ pub const HttpTransport = struct {
         request.sendBodiless() catch return error.FetchFailed;
         var redirect_buffer: [8 * 1024]u8 = undefined;
         var response = request.receiveHead(&redirect_buffer) catch |err| return failure(err);
+        // std follows a redirect to plain http too: such a body is never read.
+        if (!isHttps(request.uri)) return error.FetchFailed;
         if (statusError(response.head.status)) |err| return err;
         if (response.head.content_length) |length| {
             if (length > limit) return error.TooLarge;
@@ -757,6 +787,10 @@ pub const HttpTransport = struct {
             .body => |result| result,
             .expired => error.Timeout,
         };
+    }
+
+    fn isHttps(uri: std.Uri) bool {
+        return std.ascii.eqlIgnoreCase(uri.scheme, "https");
     }
 
     /// The error for a response with `status`, or null for success.
@@ -1160,6 +1194,20 @@ fn expectFile(dir: Io.Dir, path: []const u8, expected: []const u8) !void {
 
 fn expectMissing(dir: Io.Dir, path: []const u8) !void {
     try testing.expectError(error.FileNotFound, dir.access(testing.io, path, .{}));
+}
+
+test "renameImage moves a running executable aside, and back" {
+    // This test's own executable, which runs: what `move_aside` does to snek.exe.
+    const io = testing.io;
+    var self_buffer: [max_path]u8 = undefined;
+    const self = self_buffer[0..try std.process.executablePath(io, &self_buffer)];
+    var moved_buffer: [max_path]u8 = undefined;
+    const moved = try std.fmt.bufPrint(&moved_buffer, "{s}.moved", .{self});
+    const cwd = Io.Dir.cwd();
+    try renameImage(io, cwd, self, moved);
+    defer renameImage(io, cwd, moved, self) catch {};
+    try cwd.access(io, moved, .{});
+    try testing.expectError(error.FileNotFound, cwd.access(io, self, .{}));
 }
 
 test "install: both strategies replace the file and remove the backup" {
@@ -1596,6 +1644,28 @@ test "HttpTransport: 404 is NotFound, other failures are FetchFailed" {
     try testing.expectEqual(error.NotFound, HttpTransport.statusError(.not_found).?);
     try testing.expectEqual(error.FetchFailed, HttpTransport.statusError(.forbidden).?);
     try testing.expectEqual(error.FetchFailed, HttpTransport.statusError(.bad_gateway).?);
+}
+
+test "HttpTransport: plain http is refused, even from a server that answers" {
+    const io = testing.io;
+    var listener = try (try Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io, .{});
+    defer listener.deinit(io);
+    const answer = struct {
+        fn run(i: Io, l: *Io.net.Server) !void {
+            const stream = try l.accept(i);
+            defer stream.close(i);
+            var w = stream.writer(i, &.{});
+            try w.interface.writeAll("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nhi");
+        }
+    }.run;
+    var answering = try io.concurrent(answer, .{ io, &listener });
+    defer answering.cancel(io) catch {};
+    var client: std.http.Client = .{ .allocator = testing.allocator, .io = io };
+    defer client.deinit();
+    var http: HttpTransport = .{ .client = &client };
+    var url: [64]u8 = undefined;
+    const plain = try std.fmt.bufPrint(&url, "http://{f}/", .{listener.socket.address});
+    try testing.expectError(error.FetchFailed, http.fetch(testing.allocator, plain, 64));
 }
 
 test "HttpTransport: the interface compiles without being called" {

@@ -1,6 +1,6 @@
 //! `snek cli init <name>`: a new application on the `cli` and `cfg` modules, laid out as
-//! snek itself is: `build.zig`, `build.zig.zon`, and `src/main.zig` holding `main` and the
-//! command tree.
+//! snek itself is: `build.zig`, `build.zig.zon`, `src/main.zig` holding `main` and the
+//! command tree, and an example command in `src/cmd/hello.zig`.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -30,10 +30,11 @@ pub const command = cli.command(.{
     .name = "init",
     .summary = "Create a new application on the cli and cfg modules",
     .description =
-    \\Write build.zig, build.zig.zon, src/main.zig, README.md, and .gitignore for a new
-    \\application called <name>. The snek dependency is a path with --module-path, or is
-    \\fetched with --fetch (which runs zig fetch --save=snek <url>); with neither, add it
-    \\yourself before building. Refuses to write into a non-empty directory without --force.
+    \\Write build.zig, build.zig.zon, src/main.zig, an example command in src/cmd/hello.zig,
+    \\README.md, and .gitignore for a new application called <name>. The snek dependency is
+    \\a path with --module-path, or is fetched with --fetch (which runs zig fetch
+    \\--save=snek <url>); with neither, add it yourself before building. Refuses to write
+    \\into a non-empty directory without --force.
     ,
     .flags = InitFlags,
     .args = .{ .min = 1, .max = 1, .usage = "<name>" },
@@ -78,6 +79,7 @@ fn run(ctx: *cli.Context, flags: InitFlags) !void {
             try templates.render(arena, templates.buildZon, .{ package, fingerprint, dependency }),
         },
         .{ "src/main.zig", try templates.render(arena, templates.mainZig, .{name}) },
+        .{ "src/cmd/hello.zig", try templates.render(arena, templates.leaf, .{templates.hello}) },
         .{ "src/settings.zig", try templates.render(arena, templates.settingsZig, .{name}) },
         .{ "README.md", try templates.render(arena, templates.readme, .{name}) },
         .{ ".gitignore", templates.gitignore },
@@ -85,11 +87,15 @@ fn run(ctx: *cli.Context, flags: InitFlags) !void {
     for (files) |file| try writeFile(ctx, dir, dir_path, file[0], file[1], flags.force);
     if (flags.fetch) |url| try fetch(ctx, dir_path, url);
     if (flags.module_path == null and flags.fetch == null) {
-        try ctx.out.print("next: cd {s} && zig fetch --save=snek <url of snek>\n", .{dir_path});
+        try ctx.out.print("next: cd {s}" ++ then ++ "zig fetch --save=snek <url of snek>\n", .{dir_path});
     } else {
-        try ctx.out.print("next: cd {s} && zig build run -- --help\n", .{dir_path});
+        try ctx.out.print("next: cd {s}" ++ then ++ "zig build run -- --help\n", .{dir_path});
     }
 }
+
+/// Between the two commands of the "next:" hint: `&&` where every shell takes it; on
+/// Windows a second line, since Windows PowerShell 5.1 does not.
+const then = if (@import("builtin").os.tag == .windows) "\n      " else " && ";
 
 /// The package name for `build.zig.zon`: `name` with `-` as `_`, which must then be a
 /// plain Zig identifier.

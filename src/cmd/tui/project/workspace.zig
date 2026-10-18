@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const platform = @import("platform");
 const project = @import("../../cli/project.zig");
 const catalog = @import("catalog.zig");
 const manifest = @import("manifest.zig");
@@ -37,7 +38,8 @@ pub const Workspace = struct {
     dir: std.Io.Dir,
     /// `-C` as given, for messages.
     path: []const u8,
-    /// Printed before project paths: empty for `.`, else the path and a `/`.
+    /// Printed before project paths: empty for `.`, else the path and the separator it
+    /// uses (`platform.files.join`'s rule: `\` on Windows for a path written with it).
     prefix: []const u8,
     plan: project.Plan,
     /// The manifest as it was on disk before this command changed it, for `add` to find
@@ -56,7 +58,7 @@ pub const Workspace = struct {
             .prefix = if (std.mem.eql(u8, path, "."))
                 ""
             else
-                try std.fmt.allocPrint(ctx.arena, "{s}/", .{std.mem.trimEnd(u8, path, "/")}),
+                try platform.files.join(ctx.arena, std.mem.trimEnd(u8, path, "/"), ""),
             .plan = .{ .io = ctx.io, .arena = ctx.arena, .root = dir },
         };
         if (!zig_project) return ws;
@@ -71,6 +73,13 @@ pub const Workspace = struct {
 
     pub fn close(ws: *Workspace, io: std.Io) void {
         ws.dir.close(io);
+    }
+
+    /// `sub_path`, a path in the project written with `/`, as messages show it: after
+    /// `prefix`, with its separator.
+    pub fn show(ws: *const Workspace, arena: std.mem.Allocator, sub_path: []const u8) ![]const u8 {
+        if (ws.prefix.len == 0) return sub_path;
+        return platform.files.join(arena, ws.prefix, sub_path);
     }
 
     /// The content of `sub_path`, or null when it does not exist.

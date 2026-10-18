@@ -105,6 +105,29 @@ git history.
 
 ### Added
 
+- **`cfg`:** `DecodeOptions.warn_unknown` reports keys no field claims as warnings, at the
+  file and line that set them, with "did you mean" for a close field; strict-mode and schema
+  `additionalProperties: false` errors suggest the key too, and `snek cfg validate --schema`
+  warns about an undeclared key close to a declared one.
+- **`tui.testing.Driver`:** a model's `deinit(*M, std.mem.Allocator)` gets the driver's
+  allocator.
+- **DX:** `cli.command` compile errors name the command and suggest the closest name for
+  unknown spec fields, `meta` names (listing the struct's fields), `.args` fields, and
+  constraint flags: `cli.command("greet"): unknown spec field 'sumary'; did you mean
+  'summary'?`. `snek cli add` generates its test with `cli.testing.run`, a few lines instead
+  of twenty, and `snek cli init` also writes an example `hello` command with its test.
+- **`platform`:** `windows_hello.register`, WebAuthn registration through Windows Hello,
+  next to `assert`; `webauthn.CreationOptions`, `Registration` (with `credential()`, what a
+  relying party keeps), and `attestedCredential`, which reads the credential out of a
+  registration's authenticator data, with `CreationOptions.parseJson` and
+  `Registration.writeJson` for their JSON forms. `distribution.manifests.writeWinget` writes
+  a winget manifest, from a `Package` whose new `publisher` names the identifier's first
+  part.
+- **snek:** `platform webauthn get` and `create`, a WebAuthn client for scripts: the options
+  a relying party sends, as JSON, in; the response's JSON out. Through Windows Hello on
+  Windows; `get` through a USB security key on Linux. `platform release manifest -f winget`
+  (with `--publisher`); the release publishes `snek.yaml` beside the Homebrew and Scoop
+  manifests, and Authenticode-signs `snek.exe` when given a certificate.
 - **`cli`:** `.confirm = true` with `ctx.confirm(fmt, args)`, a question made at run time
   under the same `--yes` and no-terminal rules; per-command `.exit_statuses`, in that
   command's man page and its section of the single page and Markdown.
@@ -342,8 +365,49 @@ git history.
     - A lock file left empty or unreadable for over `Lock.stale_grace` is stale.
   - `snek tui add` with no names, at a terminal, offers a multi-select of components.
 
+### Security
+
+From a review before the repository went public:
+
+- **ssh:** a packet longer than 64 KiB, sent before login, crashed the server (and a
+  malicious server crashed the client); packets are read in full whatever their size.
+- **ssh:** `Server.Config.max_connections` and `login_timeout` are enforced; connections were
+  unlimited and could wait forever without logging in.
+- **ssh:** a session's `env`, `signal`, and `pty-req` requests and forwarded host names no
+  longer grow memory without bound: kept per channel, at most 64 variables, one terminal,
+  known signal names only.
+- **ssh:** strict key exchange requires the peer's KEXINIT first; a connection hangs up
+  before a key's nonce (the sequence number) would repeat; received packets are wiped on
+  disconnect.
+- **`tui serve`:** `authorized_keys` entries with options (`from=`, `command=`, `restrict`)
+  are left out with a warning, since the server cannot enforce them; client-chosen user
+  names are escaped in the log.
+- **`platform update`:** the new executable must report the release's version, so an older
+  signed archive re-published under a newer tag is rolled back; `update.HttpTransport`
+  fetches over https only and refuses a redirect to plain http.
+- **`platform.web`:** with `--anyone` on the loopback, DNS-rebound hostnames get 421;
+  connections that do not send their request within 10 s (`Config.head_timeout`) are hung
+  up on; the page sends a Content-Security-Policy; `tui serve --web --anyone` off the
+  loopback warns that any page a visitor opens can run the command.
+
 ### Fixed
 
+- **Windows:** `snek platform update` replaces the running `snek.exe` (it failed renaming
+  it aside), and snek deletes the `snek.exe.old` left behind on its next start. The web
+  server's request timeout and the SSH server's login timeout fire (a `shutdown` did not
+  wake the read they waited on). The Windows Hello dialog appears when asked from Windows
+  Terminal or another pseudo console. `snek cli init`'s "next:" hint is two lines, since
+  Windows PowerShell 5.1 has no `&&`; `snek tui init` and `add` print `C:\x\build.zig`, not
+  `C:\x/build.zig`.
+- `snek tui init` works in a subdirectory of a project: it writes `tui.zon` where asked,
+  wires the nearest `build.zig` at or above it, and hints only when that applies.
+- `tui.testing.Driver`: a model `deinit` of any other signature is a compile error, not
+  silently skipped.
+- Usage errors are JSON when the arguments ask for `-o json` or `-o jsonl`, as other errors
+  were; `snek tui add -q --dry-run` prints nothing; `snek tui add` no longer crashes when the
+  components resolve to exactly one.
+- `build.zig.zon` said `0.0.0` while snek said `0.1.0`: the version is now written once, in
+  `build.zig.zon`, and passed to snek by `build.zig`.
 - `snek cli record` prints its failures once, after the progress; `tui serve --web`'s
   plain-HTTP warning, `cfg validate`'s warnings, and `tui demo`'s hint follow `-q` and the
   theme's colors.

@@ -785,13 +785,6 @@ fn reportUsage(
     usage: parse.Usage,
 ) InternalError!u8 {
     assert(usage.message.len > 0);
-    try app.theme.writePrefix(env.err, env.err_color, app.displayName(), .@"error");
-    try env.err.print("{s}\n", .{usage.message});
-    const hint = app.theme.hint.lowered(env.err_color);
-    if (usage.hint.len > 0) {
-        try Theme.paint(env.err, env.err_color, hint, usage.hint);
-        try env.err.writeByte('\n');
-    }
     // Name the deepest command the arguments reach, for the pointer to its help.
     var path: std.ArrayList(*const Command) = .empty;
     try path.append(arena, root);
@@ -800,11 +793,54 @@ fn reportUsage(
         try path.append(arena, sub);
     }
     const path_text = try parse.pathString(arena, path.items);
+    if (wantsJson(args)) {
+        const run_help = try Messages.allocRender(arena, app.messages.run_help, &.{path_text});
+        var json: std.json.Stringify = .{ .writer = env.err };
+        try json.write(.{
+            .@"error" = usage.message,
+            .hint = if (usage.hint.len > 0)
+                try std.mem.concat(arena, u8, &.{ usage.hint, " ", run_help })
+            else
+                run_help,
+        });
+        try env.err.writeByte('\n');
+        return exit_usage;
+    }
+    try app.theme.writePrefix(env.err, env.err_color, app.displayName(), .@"error");
+    try env.err.print("{s}\n", .{usage.message});
+    const hint = app.theme.hint.lowered(env.err_color);
+    if (usage.hint.len > 0) {
+        try Theme.paint(env.err, env.err_color, hint, usage.hint);
+        try env.err.writeByte('\n');
+    }
     if (env.err_color != .none) try hint.writeSgr(env.err);
     try Messages.render(env.err, app.messages.run_help, &.{path_text});
     if (env.err_color != .none and hint.hasSgr()) try env.err.writeAll(ansi.reset);
     try env.err.writeByte('\n');
     return exit_usage;
+}
+
+/// Whether `args` ask for `-o json` or `-o jsonl` (the last `-o` wins), read without
+/// parsing them: a usage error stops the parser before it may reach the flag.
+fn wantsJson(args: []const []const u8) bool {
+    var json = false;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--")) break;
+        const value = if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) blk: {
+            i += 1;
+            if (i == args.len) break;
+            break :blk args[i];
+        } else if (std.mem.startsWith(u8, arg, "--output="))
+            arg["--output=".len..]
+        else if (std.mem.startsWith(u8, arg, "-o"))
+            std.mem.trimStart(u8, arg[2..], "=")
+        else
+            continue;
+        json = std.mem.eql(u8, value, "json") or std.mem.eql(u8, value, "jsonl");
+    }
+    return json;
 }
 
 fn shellMessage(app: App, err: shell.Error) []const u8 {
@@ -2418,6 +2454,28 @@ test "errors under -o json are JSON on standard error" {
         const json = try cli_testing.run(app, &.{ "break", "--how", case.how, "-o", "json" }, .{});
         defer json.deinit();
         try json.expect(case.status, "", case.json);
+    }
+}
+
+test "usage errors the parser finds are JSON when the arguments ask for -o json" {
+    const app: App = .{ .root = &break_root };
+    // `-o json` comes after the problem, so the parser never reads it.
+    const unknown = try cli_testing.run(app, &.{ "break", "--bogus", "-o", "json" }, .{});
+    defer unknown.deinit();
+    try unknown.expect(2, "", "{\"error\":\"unknown flag: --bogus\"," ++
+        "\"hint\":\"Run 'tool break --help' for usage.\"}\n");
+    const near = try cli_testing.run(app, &.{ "break", "--hwo", "x", "--output=jsonl" }, .{});
+    defer near.deinit();
+    try near.expect(2, "", "{\"error\":\"unknown flag: --hwo\"," ++
+        "\"hint\":\"Did you mean --how? Run 'tool break --help' for usage.\"}\n");
+    // The last -o wins, and nothing after -- is a flag.
+    for ([_][]const []const u8{
+        &.{ "break", "--bogus", "-ojson", "-o", "text" },
+        &.{ "break", "--bogus", "--", "-o", "json" },
+    }) |args| {
+        const text = try cli_testing.run(app, args, .{});
+        defer text.deinit();
+        try text.expect(2, "", "tool: unknown flag: --bogus\nRun 'tool break --help' for usage.\n");
     }
 }
 

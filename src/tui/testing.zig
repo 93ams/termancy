@@ -41,9 +41,17 @@ pub const DriverOptions = struct {
     before: []const u8 = "",
 };
 
+/// The compile error for a model's `deinit` of type `F`, which `Driver` cannot call.
+fn deinitError(comptime Model: type, comptime F: type) []const u8 {
+    const m = @typeName(Model);
+    return "tui.testing.Driver(" ++ m ++ "): deinit must be fn (*" ++ m ++ ") void or fn (*" ++
+        m ++ ", std.mem.Allocator) void, found " ++ @typeName(F);
+}
+
 /// Runs a `Program(Model)` headlessly. The driver owns its model (`deinit` frees it,
-/// with `Model.deinit` when declared) and keeps it and the program on the heap, so a
-/// `Driver` may be moved and the model's address stays put.
+/// with `Model.deinit` when declared: `fn (*Model) void` or `fn (*Model, Allocator) void`,
+/// given the driver's allocator; any other `deinit` is a compile error) and keeps it and the
+/// program on the heap, so a `Driver` may be moved and the model's address stays put.
 pub fn Driver(comptime Model: type) type {
     return struct {
         gpa: Allocator,
@@ -69,12 +77,12 @@ pub fn Driver(comptime Model: type) type {
         pub fn init(gpa: Allocator, initial: Model, options: DriverOptions) Error!Self {
             const owned = gpa.create(Model) catch |err| {
                 var copy = initial;
-                freeModel(&copy);
+                freeModel(gpa, &copy);
                 return err;
             };
             owned.* = initial;
             errdefer {
-                freeModel(owned);
+                freeModel(gpa, owned);
                 gpa.destroy(owned);
             }
             const output = try gpa.create(Io.Writer.Allocating);
@@ -106,7 +114,7 @@ pub fn Driver(comptime Model: type) type {
             const owned = d.program.model;
             d.program.deinit();
             d.gpa.destroy(d.program);
-            freeModel(owned);
+            freeModel(d.gpa, owned);
             d.gpa.destroy(owned);
             d.screen.deinit();
             d.output.deinit();
@@ -114,8 +122,14 @@ pub fn Driver(comptime Model: type) type {
             d.* = undefined;
         }
 
-        fn freeModel(m: *Model) void {
-            if (@hasDecl(Model, "deinit")) m.deinit();
+        fn freeModel(gpa: Allocator, m: *Model) void {
+            // A non-pub `deinit` in another file is invisible here, and so skipped.
+            if (!@hasDecl(Model, "deinit")) return;
+            switch (@TypeOf(Model.deinit)) {
+                fn (*Model) void => m.deinit(),
+                fn (*Model, Allocator) void => m.deinit(gpa),
+                else => |F| @compileError(deinitError(Model, F)),
+            }
         }
 
         /// The model, for inspecting state or calling its methods.
@@ -588,6 +602,26 @@ test "Driver: a line exactly as wide as the terminal takes one row" {
     try d.expectScreen("x\n0123456789\n0123456789");
     try d.press("a");
     try d.expectScreen("x\n0123456789");
+}
+
+test "Driver: a model's deinit may take the driver's allocator" {
+    const Owning = struct {
+        text: []u8,
+        pub fn update(_: *@This(), _: Msg) Cmd {
+            return .none;
+        }
+        pub fn view(m: *const @This(), w: *Io.Writer) Io.Writer.Error!void {
+            try w.writeAll(m.text);
+        }
+        pub fn deinit(m: *@This(), gpa: Allocator) void {
+            gpa.free(m.text);
+        }
+    };
+    // testing.allocator reports the text as a leak if deinit is skipped.
+    const text = try testing.allocator.dupe(u8, "owned");
+    var d: Driver(Owning) = try .init(testing.allocator, .{ .text = text }, .{});
+    defer d.deinit();
+    try d.expectScreen("owned");
 }
 
 test "Driver: a frame taller than the terminal keeps its last rows" {

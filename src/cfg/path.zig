@@ -119,6 +119,42 @@ pub fn join(arena: Allocator, parent: []const u8, key: []const u8) Allocator.Err
     return out.toOwnedSlice();
 }
 
+/// The key in `candidates` closest to `key`, when close enough to be a typo of it: within
+/// an edit distance of a third of its length (at least 1, at most 3), where swapping two
+/// adjacent bytes is one edit. Ties go to the earliest. For "did you mean" hints.
+pub fn suggest(key: []const u8, candidates: []const []const u8) ?[]const u8 {
+    const max_len = 64;
+    if (key.len == 0 or key.len > max_len) return null;
+    var best: ?[]const u8 = null;
+    var best_distance = std.math.clamp(key.len / 3, 1, 3) + 1;
+    for (candidates) |candidate| {
+        if (candidate.len > max_len) continue;
+        // Optimal string alignment, over three rolling rows.
+        var rows: [3][max_len + 1]usize = undefined;
+        for (0..candidate.len + 1) |j| rows[1][j] = j;
+        for (key, 0..) |ca, i| {
+            const before = &rows[i % 3];
+            const previous = &rows[(i + 1) % 3];
+            const current = &rows[(i + 2) % 3];
+            current[0] = i + 1;
+            for (candidate, 0..) |cb, j| {
+                var d = @min(previous[j] + @intFromBool(ca != cb), previous[j + 1] + 1);
+                d = @min(d, current[j] + 1);
+                if (i > 0 and j > 0 and ca == candidate[j - 1] and key[i - 1] == cb) {
+                    d = @min(d, before[j - 1] + 1);
+                }
+                current[j + 1] = d;
+            }
+        }
+        const distance = rows[(key.len + 1) % 3][candidate.len];
+        if (distance < best_distance) {
+            best = candidate;
+            best_distance = distance;
+        }
+    }
+    return best;
+}
+
 /// Maps a path to an environment variable name: `server.tls-cert` with prefix `APP`
 /// becomes `APP_SERVER_TLS_CERT`. Non-alphanumeric bytes become `_`.
 pub fn toEnvName(
@@ -188,6 +224,15 @@ test "join quotes when needed" {
     try std.testing.expectEqualStrings("a.b", try join(arena.allocator(), "a", "b"));
     try std.testing.expectEqualStrings("a.\"b.c\"", try join(arena.allocator(), "a", "b.c"));
     try std.testing.expectEqualStrings("k", try join(arena.allocator(), "", "k"));
+}
+
+test "suggest a close key" {
+    const keys = [_][]const u8{ "host", "port", "timeout" };
+    try std.testing.expectEqualStrings("port", suggest("prot", &keys).?);
+    try std.testing.expectEqualStrings("timeout", suggest("timeuot", &keys).?);
+    try std.testing.expectEqualStrings("host", suggest("hst", &keys).?);
+    try std.testing.expectEqual(null, suggest("name", &keys));
+    try std.testing.expectEqual(null, suggest("", &keys));
 }
 
 test "toEnvName" {

@@ -118,10 +118,13 @@ pub const color_flag = builtin_flags[5];
 pub fn command(comptime spec: anytype) Command {
     comptime {
         const S = @TypeOf(spec);
+        const named = @hasField(S, "name");
+        const where = if (named) "cli.command(\"" ++ spec.name ++ "\"): " else "cli.command: ";
         for (@typeInfo(S).@"struct".field_names) |field| {
             for (spec_fields) |known| {
                 if (std.mem.eql(u8, field, known)) break;
-            } else @compileError("cli.command: unknown spec field '" ++ field ++ "'");
+            } else @compileError(where ++ "unknown spec field '" ++ field ++ "'" ++
+                didYouMean(field, spec_fields));
         }
         if (!@hasField(S, "name")) @compileError("cli.command: a command needs a .name");
 
@@ -152,7 +155,7 @@ pub fn command(comptime spec: anytype) Command {
             spec.args
         else
             null;
-        if (@hasField(S, "flags")) result.flags = flagsOf(spec.flags);
+        if (@hasField(S, "flags")) result.flags = flagsIn(where, spec.flags);
         for ([_]struct { []const u8, usize }{
             .{ "confirm", 0 },
             .{ "dry_run", 1 },
@@ -165,7 +168,7 @@ pub fn command(comptime spec: anytype) Command {
             if (wanted) result.flags = result.flags ++ .{builtin_flags[pair[1]]};
         }
         if (@hasField(S, "persistent_flags")) {
-            result.persistent_flags = flagsOf(spec.persistent_flags);
+            result.persistent_flags = flagsIn(where, spec.persistent_flags);
         }
         // `-v` and `--log-level`, for this command and every one under it.
         if (@hasField(S, "logging") and spec.logging) {
@@ -222,7 +225,9 @@ fn argsOf(comptime name: []const u8, comptime args: anytype) Command.Args {
         } else if (@hasField(Command.Args, field)) {
             @field(result, field) = @field(args, field);
         } else {
-            @compileError("cli: unknown field '" ++ field ++ "' in " ++ @typeName(Command.Args));
+            @compileError("cli.command(\"" ++ name ++ "\"): unknown field '" ++ field ++
+                "' in " ++ @typeName(Command.Args) ++
+                didYouMean(field, @typeInfo(Command.Args).@"struct".field_names));
         }
     }
     return result;
@@ -232,7 +237,7 @@ fn argsOf(comptime name: []const u8, comptime args: anytype) Command.Args {
 fn typedArgs(comptime name: []const u8, comptime T: type) Command.Args {
     const where = "cli.command(\"" ++ name ++ "\"): ";
     if (@typeInfo(T) != .@"struct") @compileError(where ++ ".args must be a struct type");
-    checkMeta(T);
+    checkMeta(where, T);
     const info = @typeInfo(T).@"struct";
     var min: usize = 0;
     var max: ?usize = info.field_names.len;
@@ -403,12 +408,17 @@ fn handler(
 
 /// The flags of a flags struct, one per field that is not `.internal`.
 pub fn flagsOf(comptime T: type) []const Flag {
+    return flagsIn("cli: ", T);
+}
+
+/// `flagsOf`, with compile errors starting with `where`.
+fn flagsIn(comptime where: []const u8, comptime T: type) []const Flag {
     comptime {
         if (@typeInfo(T) != .@"struct") {
             @compileError("cli: flags must be a struct, found " ++ @typeName(T));
         }
         @setEvalBranchQuota(1000 + 5000 * @typeInfo(T).@"struct".field_names.len);
-        checkMeta(T);
+        checkMeta(where, T);
         const info = @typeInfo(T).@"struct";
         var out: [info.field_names.len]Flag = undefined;
         var n: usize = 0;
@@ -544,22 +554,40 @@ pub fn longName(comptime T: type, comptime field: []const u8) []const u8 {
     return option(T, field, "name", text.kebab(field));
 }
 
-fn checkMeta(comptime T: type) void {
+fn checkMeta(comptime where: []const u8, comptime T: type) void {
     if (!@hasDecl(T, "meta")) return;
+    const fields = @typeInfo(T).@"struct".field_names;
     for (@typeInfo(@TypeOf(T.meta)).@"struct".field_names) |name| {
         if (!@hasField(T, name)) {
-            @compileError(@typeName(T) ++ ".meta names no field '" ++ name ++ "'");
+            var list: []const u8 = "";
+            for (fields, 0..) |field, i| list = list ++ (if (i == 0) "" else ", ") ++ field;
+            @compileError(where ++ @typeName(T) ++ ".meta names no field '" ++ name ++ "'" ++
+                didYouMean(name, fields) ++ " (fields: " ++ list ++ ")");
         }
     }
 }
 
 fn checkFlagName(comptime cmd: Command, comptime name: []const u8) void {
-    for (cmd.flags ++ cmd.persistent_flags) |flag| {
+    const all = cmd.flags ++ cmd.persistent_flags;
+    var names: [all.len][]const u8 = undefined;
+    for (&names, all) |*out, flag| {
         if (std.mem.eql(u8, flag.name, name)) return;
+        out.* = flag.name;
     }
-    @compileError(
-        "cli.command(\"" ++ cmd.name ++ "\"): constraint names unknown flag '" ++ name ++ "'",
-    );
+    @compileError("cli.command(\"" ++ cmd.name ++ "\"): constraint names unknown flag '" ++
+        name ++ "'" ++ didYouMean(name, &names));
+}
+
+/// `; did you mean 'x'?` for the candidate `text.suggest` picks for `input`, or nothing.
+fn didYouMean(comptime input: []const u8, comptime candidates: anytype) []const u8 {
+    comptime {
+        // Each comparison branches per pair of bytes; this only runs on the way to an error.
+        @setEvalBranchQuota(1_000_000);
+        var names: [candidates.len][]const u8 = undefined;
+        for (&names, candidates) |*out, candidate| out.* = candidate;
+        const best = text.suggest(input, &names) orelse return "";
+        return "; did you mean '" ++ best ++ "'?";
+    }
 }
 
 fn checkDuplicates(comptime cmd: Command) void {

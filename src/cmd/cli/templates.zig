@@ -134,7 +134,8 @@ pub fn fingerprint(random: std.Random, package: []const u8) u64 {
     return @as(u64, std.hash.Crc32.hash(package)) << 32 | id;
 }
 
-/// `src/main.zig`: `main` and the root command, with an empty, marked subcommand list.
+/// `src/main.zig`: `main` and the root command, listing `hello` (`src/cmd/hello.zig`) at the
+/// markers as `snek cli add` would.
 pub fn mainZig(w: *Writer, name: []const u8) Writer.Error!void {
     try w.print(
         \\//! `{s}`: the entry point and the command tree.
@@ -151,6 +152,7 @@ pub fn mainZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\    .name = "{s}",
         \\    .summary = "A command-line application built with snek",
         \\    .subcommands = .{{
+        \\        @import("cmd/hello.zig").command,
         \\        {s}
         \\    }},
         \\}});
@@ -162,6 +164,7 @@ pub fn mainZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\
         \\test {{
         \\    _ = @import("settings.zig");
+        \\    _ = @import("cmd/hello.zig");
         \\    {s}
         \\}}
         \\
@@ -219,7 +222,7 @@ pub fn readme(w: *Writer, name: []const u8) Writer.Error!void {
         \\```sh
         \\zig build run -- --help
         \\zig build test
-        \\snek cli add hello --flag name:string=world --summary "Say hello"
+        \\snek cli add greet --flag name:string=world --summary "Greet someone"
         \\```
         \\
         \\The command tree starts in `src/main.zig`; each command is a file under `src/cmd/`.
@@ -274,6 +277,20 @@ pub const Leaf = struct {
     args_min: usize = 0,
     /// `null` for no limit.
     args_max: ?usize = 0,
+};
+
+/// The command `snek cli init` starts a project with, in `src/cmd/hello.zig`.
+pub const hello: Leaf = .{
+    .path = &.{"hello"},
+    .summary = "Say hello",
+    .flags = &.{.{
+        .name = "name",
+        .field = "name",
+        .base = .string,
+        .default = "\"world\"",
+        .short = 'n',
+        .help = "Who to greet",
+    }},
 };
 
 /// A leaf: a `Flags` struct, the command, a handler that prints what it was given, and a
@@ -610,27 +627,14 @@ fn testBlock(w: *Writer, l: Leaf) Writer.Error!void {
     try writeWords(w, l.path);
     try w.writeAll(
         \\" {
-        \\    var environ: std.process.Environ.Map = .init(std.testing.allocator);
-        \\    defer environ.deinit();
-        \\    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-        \\    defer out.deinit();
-        \\    var err: std.Io.Writer.Allocating = .init(std.testing.allocator);
-        \\    defer err.deinit();
         \\    const app: cli.App = .{ .root = &command, .completion_command = false };
-        \\    const status = app.execute(.{
-        \\        .io = std.testing.io,
-        \\        .gpa = std.testing.allocator,
-        \\        .environ = &environ,
-        \\        .out = &out.writer,
-        \\        .err = &err.writer,
-        \\    }, &.{
+        \\    const result = try cli.testing.run(app, &.{
     );
     try testArgs(w, l);
     try w.writeAll(
-        \\);
-        \\    try std.testing.expectEqualStrings("", err.written());
-        \\    try std.testing.expectEqual(0, status);
-        \\    try std.testing.expectEqualStrings(
+        \\, .{});
+        \\    defer result.deinit();
+        \\    try result.expect(0,
         \\
     );
     try w.writeAll("        \\\\");
@@ -644,7 +648,7 @@ fn testBlock(w: *Writer, l: Leaf) Writer.Error!void {
     for (0..l.args_min) |i| try w.print("        \\\\arg=arg{d}\n", .{i + 1});
     try w.writeAll(
         \\        \\
-        \\    , out.written());
+        \\    , "");
         \\}
         \\
     );
@@ -775,23 +779,10 @@ test leaf {
         \\}
         \\
         \\test "greet" {
-        \\    var environ: std.process.Environ.Map = .init(std.testing.allocator);
-        \\    defer environ.deinit();
-        \\    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
-        \\    defer out.deinit();
-        \\    var err: std.Io.Writer.Allocating = .init(std.testing.allocator);
-        \\    defer err.deinit();
         \\    const app: cli.App = .{ .root = &command, .completion_command = false };
-        \\    const status = app.execute(.{
-        \\        .io = std.testing.io,
-        \\        .gpa = std.testing.allocator,
-        \\        .environ = &environ,
-        \\        .out = &out.writer,
-        \\        .err = &err.writer,
-        \\    }, &.{ "--mode", "plain" });
-        \\    try std.testing.expectEqualStrings("", err.written());
-        \\    try std.testing.expectEqual(0, status);
-        \\    try std.testing.expectEqualStrings(
+        \\    const result = try cli.testing.run(app, &.{ "--mode", "plain" }, .{});
+        \\    defer result.deinit();
+        \\    try result.expect(0,
         \\        \\greet
         \\        \\name=world
         \\        \\times=1
@@ -800,7 +791,7 @@ test leaf {
         \\        \\tag=0 values
         \\        \\limit=null
         \\        \\
-        \\    , out.written());
+        \\    , "");
         \\}
         \\
     , text);
@@ -832,7 +823,8 @@ test "leaf: no flags, unlimited arguments" {
         \\}
         \\
     ));
-    try testing.expect(std.mem.indexOf(u8, text, "}, &.{ \"arg1\", \"arg2\" });\n") != null);
+    const call = "run(app, &.{ \"arg1\", \"arg2\" }, .{});\n";
+    try testing.expect(std.mem.indexOf(u8, text, call) != null);
 }
 
 test group {
@@ -903,8 +895,17 @@ test "init templates" {
     const arena = arena_state.allocator();
     const main = try render(arena, mainZig, .{"demo"});
     try testing.expect(std.mem.indexOf(u8, main, "    .name = \"demo\",\n") != null);
-    try testing.expect(std.mem.indexOf(u8, main, "        // snek:subcommands\n    },\n") != null);
-    const tests = "test {\n    _ = @import(\"settings.zig\");\n    // snek:tests\n}\n";
+    try testing.expect(std.mem.indexOf(u8, main,
+        \\        @import("cmd/hello.zig").command,
+        \\        // snek:subcommands
+    ) != null);
+    const tests =
+        \\test {
+        \\    _ = @import("settings.zig");
+        \\    _ = @import("cmd/hello.zig");
+        \\    // snek:tests
+        \\}
+    ;
     try testing.expect(std.mem.indexOf(u8, main, tests) != null);
     const build = try render(arena, buildZig, .{"demo"});
     try testing.expect(std.mem.indexOf(u8, build, ".name = \"demo\", .root_module") != null);

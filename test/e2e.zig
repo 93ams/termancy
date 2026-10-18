@@ -8,6 +8,8 @@
 //! generated completion scripts are also run by each shell the host has: bash, zsh, fish,
 //! and PowerShell (`pwsh`).
 
+/// What `snek --version` prints: the version in `build.zig.zon`.
+const version = @import("../build.zig.zon").version;
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -399,6 +401,20 @@ const cases = [_]Case{
         .name = "validate -q keeps the warnings to itself",
         .args = &.{ "cfg", "validate", "-q", "lint.toml" },
         .stdout = "lint.toml: ok\n",
+    },
+    .{
+        .name = "validate suggests the key a typo meant",
+        .args = &.{ "cfg", "validate", "--schema", "schema.json", "typo.toml" },
+        .stderr =
+        \\snek: warning: typo.toml:2:10: srever: unknown key; did you mean 'server'?
+        \\  2 | srever = "x"
+        \\    |          ^
+        \\snek: typo.toml:5:8: server.prot: unknown key; did you mean 'port'?
+        \\  5 | prot = 8080
+        \\    |        ^
+        \\
+        ,
+        .status = 1,
     },
     .{
         .name = "validate against a schema reports every problem",
@@ -1307,7 +1323,7 @@ const cases = [_]Case{
     .{
         .name = "version command",
         .args = &.{"version"},
-        .stdout_contains = "snek 0.1.0\nzig 0.17.0, ",
+        .stdout_contains = "snek " ++ version ++ "\nzig 0.17.0, ",
     },
     .{
         .name = "show --layer env shows what the environment supplied",
@@ -1384,7 +1400,7 @@ const cases = [_]Case{
     .{
         .name = "version flag",
         .args = &.{"--version"},
-        .stdout = "snek 0.1.0\n",
+        .stdout = "snek " ++ version ++ "\n",
     },
     .{
         .name = "no arguments print help",
@@ -1451,7 +1467,7 @@ const cases = [_]Case{
         .stdout_contains = "{\n  \"os\": \"" ++ @tagName(builtin.os.tag) ++
             "\",\n  \"arch\": \"" ++ @tagName(builtin.cpu.arch) ++
             "\",\n  \"zig\": \"" ++ builtin.zig_version_string ++
-            "\",\n  \"snek\": \"0.1.0\",\n  \"ci\": null,\n  \"stdin_tty\": false,\n" ++
+            "\",\n  \"snek\": \"" ++ version ++ "\",\n  \"ci\": null,\n  \"stdin_tty\": false,\n" ++
             "  \"stdout_tty\": false,\n  \"elevated\": ",
     },
     .{
@@ -1464,7 +1480,7 @@ const cases = [_]Case{
         .name = "platform info as text",
         .args = &.{ "platform", "info" },
         .stdin = "",
-        .stdout_contains = "snek        0.1.0\nci          none\nstdin_tty   no\nstdout_tty  no\n",
+        .stdout_contains = "snek        " ++ version ++ "\nci          none\nstdin_tty   no\nstdout_tty  no\n",
     },
     .{
         // Refused before any network access: the suite never touches the network.
@@ -1483,6 +1499,35 @@ const cases = [_]Case{
             "dirs --help' for usage.\"}\n",
         .status = 2,
     },
+    .{
+        .name = "platform dirs reports a usage error the parser finds as JSON under -o json",
+        .args = &.{ "platform", "dirs", "-o", "json", "--bogus" },
+        .stderr = "{\"error\":\"unknown flag: --bogus\",\"hint\":\"Run 'snek platform " ++
+            "dirs --help' for usage.\"}\n",
+        .status = 2,
+    },
+    .{
+        .name = "platform webauthn get needs the origin",
+        .args = &.{ "platform", "webauthn", "get" },
+        .stdin = "{}",
+        .stderr = "snek: required flag --origin is not set\n" ++
+            "Run 'snek platform webauthn get --help' for usage.\n",
+        .status = 2,
+    },
+    .{
+        .name = "platform webauthn get refuses options that are not JSON",
+        .args = &.{ "platform", "webauthn", "get", "--origin", "https://example.com" },
+        .stdin = "not json",
+        .stderr = "snek: the options are not a JSON object\n",
+        .status = 1,
+    },
+    .{
+        .name = "platform webauthn create refuses options without the user",
+        .args = &.{ "platform", "webauthn", "create", "--origin", "https://example.com" },
+        .stdin = "{\"rp\":{\"name\":\"x\"},\"challenge\":\"AA\"}",
+        .stderr = "snek: the options lack a required field\n",
+        .status = 1,
+    },
 
     // __complete, what the shell scripts call
     .{
@@ -1490,7 +1535,8 @@ const cases = [_]Case{
         .args = &.{ "__complete", "" },
         .stdout = "cfg\tQuery, explain, edit, and convert configuration\n" ++
             "cli\tGenerate cli applications; documentation and completion for snek\n" ++
-            "platform\tDirectories, system information, self-update, releases, and SSH keys\n" ++
+            "platform\tDirectories, system information, self-update, releases, SSH keys, " ++
+            "and WebAuthn\n" ++
             "tui\tTerminal widgets for scripts, and components to copy into your project\n" ++
             "version\tPrint version information\n" ++
             "help\tHelp about any command\n",
@@ -2129,12 +2175,15 @@ const demo_created =
     \\created demo/build.zig
     \\created demo/build.zig.zon
     \\created demo/src/main.zig
+    \\created demo/src/cmd/hello.zig
     \\created demo/src/settings.zig
     \\created demo/README.md
     \\created demo/.gitignore
-    \\next: cd demo && zig build run -- --help
     \\
-;
+++ "next: cd demo" ++ then ++ "zig build run -- --help\n";
+
+/// How `snek cli init` joins the commands of its "next:" hint.
+const then = if (builtin.os.tag == .windows) "\n      " else " && ";
 
 const project_chains = [_]ProjectChain{
     .{
@@ -2142,8 +2191,8 @@ const project_chains = [_]ProjectChain{
         .steps = &.{
             .{ .args = &.{ "cli", "init", "demo" }, .module_path = true, .stdout = demo_created },
             .{
-                .args = &.{ "cli", "add", "-C", "demo", "hello", "-f", "name:string,short=n" },
-                .stdout = "created demo/src/cmd/hello.zig\nupdated demo/src/main.zig\n",
+                .args = &.{ "cli", "add", "-C", "demo", "greet", "-f", "name:string,short=n" },
+                .stdout = "created demo/src/cmd/greet.zig\nupdated demo/src/main.zig\n",
             },
             .{
                 .args = &.{ "cli", "add", "-C", "demo", "config", "get", "--args", "1" },
@@ -2217,8 +2266,15 @@ const project_chains = [_]ProjectChain{
             .{
                 .zig = true,
                 .cwd = "demo",
-                .args = &.{ "build", "run", "--", "hello", "-n", "zig" },
-                .stdout = "hello\nname=zig\n",
+                .args = &.{ "build", "run", "--", "greet", "-n", "zig" },
+                .stdout = "greet\nname=zig\n",
+                .stderr = null,
+            },
+            .{
+                .zig = true,
+                .cwd = "demo",
+                .args = &.{ "build", "run", "--", "hello" },
+                .stdout = "hello\nname=world\n",
                 .stderr = null,
             },
             .{ .zig = true, .cwd = "demo", .args = &.{ "build", "schema" }, .stderr = null },
@@ -2244,12 +2300,12 @@ const project_chains = [_]ProjectChain{
             \\created z/build.zig
             \\created z/build.zig.zon
             \\created z/src/main.zig
+            \\created z/src/cmd/hello.zig
             \\created z/src/settings.zig
             \\created z/README.md
             \\created z/.gitignore
-            \\next: cd z && zig fetch --save=snek <url of snek>
             \\
-            ,
+            ++ "next: cd z" ++ then ++ "zig fetch --save=snek <url of snek>\n",
         }},
         .files = &.{.{ "z/build.zig.zon", ".dependencies = .{}," }},
     },

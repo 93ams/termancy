@@ -171,6 +171,8 @@ pub const Transport = struct {
     }
 
     pub fn deinit(t: *Transport) void {
+        // The last packets read hold plaintext: passwords, among others.
+        std.crypto.secureZero(u8, t.packet.allocatedSlice());
         t.packet.deinit(t.gpa);
         t.peer_host_key.deinit(t.gpa);
         std.crypto.secureZero(u8, std.mem.asBytes(&t.send_cipher));
@@ -230,6 +232,9 @@ pub const Transport = struct {
     }
 
     fn readPacket(t: *Transport) Error![]const u8 {
+        // The sequence number is the nonce: past 2^32 packets under one key it would repeat.
+        if (t.recv_cipher != .none and t.recv_seq == std.math.maxInt(u32))
+            return error.ProtocolError;
         defer t.recv_seq +%= 1;
         var nonce: [8]u8 = undefined;
         std.mem.writeInt(u64, &nonce, t.recv_seq, .big);
@@ -244,7 +249,9 @@ pub const Transport = struct {
         const tag_len: usize = if (t.recv_cipher == .none) 0 else 16;
         t.packet.clearRetainingCapacity();
         try t.packet.appendSlice(t.gpa, first[0..4]);
-        try t.packet.appendSlice(t.gpa, try t.take(length + tag_len));
+        // Read through, not taken: a packet may be longer than the reader's buffer.
+        const rest = try t.packet.addManyAsSlice(t.gpa, length + tag_len);
+        t.in.readSliceAll(rest) catch |err| return t.readError(err);
         const whole = t.packet.items;
         const body = whole[4 .. 4 + length];
         switch (t.recv_cipher) {
@@ -273,7 +280,11 @@ pub const Transport = struct {
     }
 
     fn take(t: *Transport, n: usize) Error![]const u8 {
-        return t.in.take(n) catch |err| switch (err) {
+        return t.in.take(n) catch |err| t.readError(err);
+    }
+
+    fn readError(t: *const Transport, err: Io.Reader.Error) Error {
+        return switch (err) {
             error.EndOfStream => error.Disconnected,
             error.ReadFailed => if (t.hungUp()) error.Disconnected else error.ReadFailed,
         };
@@ -304,6 +315,10 @@ pub const Transport = struct {
     }
 
     fn sendLocked(t: *Transport, payload: []const u8) Error!void {
+        // shortcut: hang up rather than re-key before the nonce (the sequence number) repeats;
+        // snek never starts a re-key, and OpenSSH peers re-key long before this.
+        if (t.send_cipher != .none and t.send_seq == std.math.maxInt(u32))
+            return error.ProtocolError;
         defer t.send_seq +%= 1;
         const block = t.send_cipher.block();
         const aead = t.send_cipher != .none;
@@ -433,6 +448,8 @@ pub const Transport = struct {
         const guessed = r.boolean() catch return error.ProtocolError;
         if (first and wire.listHas(lists[0], if (server) strict_client else strict_server))
             t.strict = true;
+        // Strict: their KEXINIT must have been their first packet (sequence number 0).
+        if (first and t.strict and t.recv_seq != 1) return error.ProtocolError;
         if (first and server and wire.listHas(lists[0], "ext-info-c")) t.ext_info = true;
         const kex = t.pick(lists[0], &kex_algorithms) orelse return error.KeyExchangeFailed;
         const host_algorithm = t.pick(lists[1], host_algorithms) orelse
@@ -741,6 +758,22 @@ test "packets round trip under each cipher" {
     }
 }
 
+test "no packet is sent or read under a key once its nonce would repeat" {
+    var pipe_buffer: [512]u8 = undefined;
+    var out: Io.Writer = .fixed(&pipe_buffer);
+    var dummy: Io.Reader = .fixed("");
+    const key: keys.KeyPair = .fromSeed(@splat(1));
+    var t: Transport = .init(testing.allocator, testing.io, &dummy, &out, key, "SSH-2.0-test");
+    defer t.deinit();
+    t.send_cipher = .{ .chacha = .{ .main = @splat(2), .header = @splat(3) } };
+    t.recv_cipher = t.send_cipher;
+    t.send_seq = std.math.maxInt(u32);
+    t.recv_seq = std.math.maxInt(u32);
+    try testing.expectError(error.ProtocolError, t.send("\x05hello"));
+    try testing.expectError(error.ProtocolError, t.read());
+    try testing.expectEqual(0, out.end);
+}
+
 test "a flipped bit fails the integrity check" {
     var pipe_buffer: [512]u8 = undefined;
     var out: Io.Writer = .fixed(&pipe_buffer);
@@ -756,4 +789,66 @@ test "a flipped bit fails the integrity check" {
     defer receiver.deinit();
     receiver.recv_cipher = sender.send_cipher;
     try testing.expectError(error.MacError, receiver.read());
+}
+
+test "a packet longer than the reader's buffer" {
+    const gpa = testing.allocator;
+    var out: Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var dummy: Io.Reader = .fixed("");
+    const key: keys.KeyPair = .fromSeed(@splat(1));
+    var sender: Transport = .init(gpa, testing.io, &dummy, &out.writer, key, "SSH-2.0-test");
+    defer sender.deinit();
+    sender.send_cipher = .{ .chacha = .{ .main = @splat(2), .header = @splat(3) } };
+    const payload = try gpa.alloc(u8, 100 * 1024);
+    defer gpa.free(payload);
+    @memset(payload, 'x');
+    payload[0] = msg.channel_data;
+    try sender.send(payload);
+    // The server's and client's readers buffer 64 KiB; packets may be 256 KiB.
+    var source: Io.Reader = .fixed(out.written());
+    var small: [4096]u8 = undefined;
+    var limited = source.limited(.unlimited, &small);
+    var receiver: Transport =
+        .init(gpa, testing.io, &limited.interface, &out.writer, key, "SSH-2.0-test");
+    defer receiver.deinit();
+    receiver.recv_cipher = sender.send_cipher;
+    try testing.expectEqualSlices(u8, payload, try receiver.read());
+}
+
+test "strict key exchange: nothing may come before the KEXINIT" {
+    const gpa = testing.allocator;
+    const key: keys.KeyPair = .fromSeed(@splat(1));
+    var kexinit: wire.Builder = .init(gpa);
+    defer kexinit.deinit();
+    try kexinit.byte(msg.kexinit);
+    try kexinit.raw(&@as([16]u8, @splat(0)));
+    try kexinit.names(&.{ "curve25519-sha256", strict_client });
+    try kexinit.names(&.{"ssh-ed25519"});
+    for (0..2) |_| try kexinit.names(&ciphers);
+    for (0..2) |_| try kexinit.names(&.{"hmac-sha2-256-etm@openssh.com"});
+    for (0..2) |_| try kexinit.names(&.{"none"});
+    for (0..2) |_| try kexinit.names(&.{});
+    try kexinit.boolean(false);
+    try kexinit.int(0);
+    for ([_]bool{ false, true }) |ignore_first| {
+        var peer: Io.Writer.Allocating = .init(gpa);
+        defer peer.deinit();
+        try peer.writer.writeAll("SSH-2.0-peer\r\n");
+        var dummy: Io.Reader = .fixed("");
+        var sender: Transport = .init(gpa, testing.io, &dummy, &peer.writer, key, "SSH-2.0-x");
+        defer sender.deinit();
+        if (ignore_first) try sender.send(&.{ msg.ignore, 0, 0, 0, 0 });
+        try sender.send(kexinit.bytes());
+        var in: Io.Reader = .fixed(peer.written());
+        var out: Io.Writer.Allocating = .init(gpa);
+        defer out.deinit();
+        var server: Transport = .init(gpa, testing.io, &in, &out.writer, key, "SSH-2.0-test");
+        defer server.deinit();
+        // Without the IGNORE, the exchange goes on and finds the stream's end.
+        try testing.expectError(
+            if (ignore_first) error.ProtocolError else error.Disconnected,
+            server.handshake(),
+        );
+    }
 }

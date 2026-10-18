@@ -82,7 +82,7 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
         // A line per component when there are several. Planning one takes no time worth
         // animating, and a failure's message must not land on a line redrawn in place.
         const list = try ctx.arena.alloc(live.Steps.Step, if (order.len > 1) order.len else 0);
-        for (list, order) |*step, component| step.* = .{ .name = component.name };
+        for (list, order[0..list.len]) |*step, component| step.* = .{ .name = component.name };
         var steps: live.Steps = .{ .items = list };
         const items = [_]live.Item{.{ .steps = &steps }};
         var display = ctx.live(&items);
@@ -100,11 +100,11 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
     if (!ctx.dry_run) {
         try ws.commit(ctx);
         for (removals.items) |path| ws.dir.deleteFile(ctx.io, path) catch |err| {
-            return ctx.fail("{s}{s}: cannot remove: {s}", .{ ws.prefix, path, @errorName(err) });
+            return ctx.fail("{s}: cannot remove: {s}", .{ try ws.show(ctx.arena, path), @errorName(err) });
         };
     }
     try ctx.out.writeAll(report.written());
-    if (ctx.dry_run) try ctx.err.writeAll("snek: dry run: nothing was written\n");
+    if (ctx.dry_run and !ctx.quiet) try ctx.err.writeAll("snek: dry run: nothing was written\n");
     if (skipped.items.len > 0) {
         const names = try std.mem.join(ctx.arena, ", ", skipped.items);
         return ctx.fail("edited files were left alone ({s}); review them with snek tui diff " ++
@@ -201,15 +201,15 @@ fn retire(
         const untouched = std.mem.eql(u8, &manifest.hash(disk), entry.value_ptr);
         if (prune and untouched) {
             try removals.append(ctx.arena, path);
-            try report.print("removed {s}{s}\n", .{ ws.prefix, path });
+            try report.print("removed {s}\n", .{try ws.show(ctx.arena, path)});
             continue;
         }
         try record.put(ctx.arena, name, entry.value_ptr.*);
         if (prune) {
-            try report.print("kept (retired, modified) {s}{s}\n", .{ ws.prefix, path });
+            try report.print("kept (retired, modified) {s}\n", .{try ws.show(ctx.arena, path)});
         } else {
-            try report.print("retired (no longer part of {s}; use --prune) {s}{s}\n", .{
-                component.name, ws.prefix, path,
+            try report.print("retired (no longer part of {s}; use --prune) {s}\n", .{
+                component.name, try ws.show(ctx.arena, path),
             });
         }
     }
@@ -243,7 +243,7 @@ fn addComponent(
         } else if (recorded) |hash| {
             try record.put(ctx.arena, name, hash);
         }
-        try report.print("{s} {s}{s}\n", .{ action.verb(), ws.prefix, path });
+        try report.print("{s} {s}\n", .{ action.verb(), try ws.show(ctx.arena, path) });
     }
     try m.components.put(ctx.arena, component.name, record);
     return any_skipped;

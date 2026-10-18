@@ -44,14 +44,19 @@ pub const Error = error{ InvalidValue, MissingField, UnknownField } || Allocator
 
 /// How `decode` treats unknown keys, bounds, and warnings.
 pub const Options = struct {
-    /// Reject table keys that no struct field claims.
+    /// Reject table keys that no struct field claims: "unknown key", with "did you mean"
+    /// for a close field.
     strict: bool = false,
+    /// Without `strict`, note each such key in `warnings` instead (when given). Off by
+    /// default: a tree may hold keys meant for others, such as `Config`'s `profiles`.
+    warn_unknown: bool = false,
     /// Collect every problem here, in the decode arena, instead of stopping at the first.
     /// Decoding still fails, with the first problem's error and in `diag`.
     errors: ?*std.ArrayList(Diagnostic) = null,
     /// Notes on keys read under a name `meta` marks `.renamed_from`, in the decode arena:
     /// `key` is the old name, `message` says which to use instead. Also keys `meta` marks
-    /// `.deprecated` that are set: `message` is "deprecated: " and the reason.
+    /// `.deprecated` that are set: `message` is "deprecated: " and the reason. Also keys
+    /// no field claims, with `warn_unknown`.
     warnings: ?*std.ArrayList(Diagnostic) = null,
 };
 
@@ -279,7 +284,12 @@ const Decoder = struct {
                 @field(result, name) = undefined;
             }
         }
-        if (d.options.strict) d.rejectUnknown(T, value.table, key) catch |err| {
+        const warn = d.options.warn_unknown and d.options.warnings != null;
+        if (d.options.strict or warn) d.unknownKeys(
+            T,
+            value.table,
+            key,
+        ) catch |err| {
             if (!d.recover(err)) return err;
         };
         // Rules across fields need every field decoded.
@@ -388,7 +398,15 @@ const Decoder = struct {
         }
     }
 
-    fn rejectUnknown(d: *Decoder, comptime T: type, table: Table, key: []const u8) Error!void {
+    /// Fails on the first table key no field of `T` claims, when strict; else adds a
+    /// warning for each (`warn_unknown`).
+    fn unknownKeys(d: *Decoder, comptime T: type, table: Table, key: []const u8) Error!void {
+        const names = @typeInfo(T).@"struct".field_names;
+        const keys = comptime blk: {
+            var out: [names.len][]const u8 = undefined;
+            for (names, &out) |name, *k| k.* = fieldKey(T, name);
+            break :blk out;
+        };
         var it = table.iterator();
         outer: while (it.next()) |entry| {
             inline for (@typeInfo(T).@"struct".field_names) |name| {
@@ -403,7 +421,16 @@ const Decoder = struct {
                 }
             }
             const unknown_key = try path.join(d.arena, key, entry.key_ptr.*);
-            return d.fail(unknown_key, error.UnknownField, "unknown key");
+            const message = if (path.suggest(entry.key_ptr.*, &keys)) |near|
+                try std.fmt.allocPrint(d.arena, "unknown key; did you mean '{s}'?", .{near})
+            else
+                "unknown key";
+            if (!d.options.strict) {
+                const warning: Diagnostic = .{ .key = unknown_key, .message = message };
+                try d.options.warnings.?.append(d.arena, warning);
+                continue;
+            }
+            return d.fail(unknown_key, error.UnknownField, message);
         }
     }
 };
@@ -788,7 +815,27 @@ test "strict decoding rejects unknown keys" {
         decode(Server, a, tree, .{ .strict = true }, &diag),
     );
     try testing.expectEqualStrings("prot", diag.key);
+    try testing.expectEqualStrings("unknown key; did you mean 'port'?", diag.message);
     _ = try decode(Server, a, tree, .{}, null);
+    // With warn_unknown: a warning per unknown key, and none for a `Value` field's contents.
+    const T = struct { server: Server, extra: Value = .null };
+    const nested = try json.parse(a,
+        \\{"server": {"port": 1, "prot": 2, "zzz": 3}, "extra": {"anything": 1}, "srever": 0}
+    , null);
+    var warnings: std.ArrayList(Diagnostic) = .empty;
+    _ = try decode(T, a, nested, .{ .warnings = &warnings }, null);
+    try testing.expectEqual(0, warnings.items.len);
+    _ = try decode(T, a, nested, .{ .warnings = &warnings, .warn_unknown = true }, null);
+    try testing.expectEqual(3, warnings.items.len);
+    try testing.expectEqualStrings("server.prot", warnings.items[0].key);
+    try testing.expectEqualStrings("unknown key; did you mean 'port'?", warnings.items[0].message);
+    try testing.expectEqualStrings("server.zzz", warnings.items[1].key);
+    try testing.expectEqualStrings("unknown key", warnings.items[1].message);
+    try testing.expectEqualStrings("srever", warnings.items[2].key);
+    try testing.expectEqualStrings(
+        "unknown key; did you mean 'server'?",
+        warnings.items[2].message,
+    );
 }
 
 test "decode booleans and floats from text" {

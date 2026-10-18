@@ -13,7 +13,8 @@ const cli = @import("cli");
 const platform = @import("platform");
 const build_options = @import("build_options");
 
-pub const version = "0.1.0";
+/// From `build.zig.zon`, the one place the version is written.
+pub const version = build_options.version;
 
 /// The version with the commit and date of the build, when `zig build` was given them.
 pub const full_version = cli.version.string(.{
@@ -48,6 +49,7 @@ pub const root = cli.command(.{
 
 pub fn main(init: std.process.Init) u8 {
     setCrashReportDir(init.arena.allocator(), init.environ_map);
+    if (builtin.os.tag == .windows) removeUpdateLeftovers(init.io, init.arena.allocator());
     const app: cli.App = .{
         .root = &root,
         .version = full_version,
@@ -59,6 +61,13 @@ pub fn main(init: std.process.Init) u8 {
         .color_flag = true,
     };
     return app.run(init);
+}
+
+/// Deletes the `snek.exe.old` that `snek platform update` leaves on Windows, which cannot
+/// delete a running executable: the update's own process still runs the old one.
+fn removeUpdateLeftovers(io: std.Io, arena: std.mem.Allocator) void {
+    const path = platform.exe.pathAlloc(io, arena) catch return;
+    platform.update.removeLeftovers(io, .cwd(), path) catch {};
 }
 
 /// Crash reports go to snek's state directory; without a home directory, there are none.

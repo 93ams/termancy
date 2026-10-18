@@ -24,12 +24,15 @@ const demo_created =
     \\created demo/build.zig
     \\created demo/build.zig.zon
     \\created demo/src/main.zig
+    \\created demo/src/cmd/hello.zig
     \\created demo/src/settings.zig
     \\created demo/README.md
     \\created demo/.gitignore
-    \\next: cd demo && zig build run -- --help
     \\
-;
+++ "next: cd demo" ++ then ++ "zig build run -- --help\n";
+
+/// How `snek cli init` joins the commands of its "next:" hint.
+const then = if (@import("builtin").os.tag == .windows) "\n      " else " && ";
 
 /// The files `select` brings, `list` (which it requires) first.
 const select_files = [_][]const u8{ "demo/src/ui/list.zig", "demo/src/ui/select.zig" };
@@ -40,6 +43,14 @@ const steps = [_]Step{
         .args = &.{ "tui", "add", "-C", "demo", "select" },
         .stderr = "snek: demo/tui.zon: not found (run snek tui init first)\n",
         .status = 1,
+    },
+    .{
+        // A subdirectory, as in a monorepo: tui.zon goes there, the wiring to the build.zig
+        // above it.
+        .args = &.{ "tui", "init", "-C", "demo/src", "--dir", "widgets" },
+        .stdout = "created demo/src/tui.zon\ncreated demo/src/widgets/\n" ++
+            "next: pass --wire, or add this import to the root module in demo/build.zig:\n" ++
+            "    .{ .name = \"tui\", .module = snek.module(\"tui\") },\n",
     },
     .{
         .args = &.{ "tui", "init", "-C", "demo", "--wire" },
@@ -55,7 +66,6 @@ const steps = [_]Step{
     .{
         .args = &.{ "tui", "add", "-C", "demo", "select", "--dry-run", "-q" },
         .stdout = "unchanged " ++ select_files[0] ++ "\nunchanged " ++ select_files[1] ++ "\n",
-        .stderr = "snek: dry run: nothing was written\n",
     },
     .{ .args = &.{ "tui", "diff", "-C", "demo", "select" } },
     .{
@@ -78,15 +88,17 @@ const steps = [_]Step{
         .status = 2,
     },
     .{
-        // `add` needs only tui.zon, which a subdirectory of the project does not have.
+        // `add` needs only tui.zon: build.zig is further up.
         .args = &.{ "tui", "add", "-C", "demo/src", "select" },
-        .stderr = "snek: demo/src/tui.zon: not found (run snek tui init first)\n",
-        .status = 1,
+        .stdout = "created demo/src/widgets/list.zig\ncreated demo/src/widgets/select.zig\n",
+        .stderr = "✓ list\n✓ select\n",
     },
+    // Wired now: no hint.
+    .{ .args = &.{ "tui", "init", "-C", "demo/src" } },
     .{
-        .args = &.{ "tui", "init", "-C", "demo/src" },
-        .stderr = "snek: demo/src: not a Zig project (no build.zig)\n",
-        .status = 1,
+        // One component: no step lines.
+        .args = &.{ "tui", "add", "-C", "demo/src", "list" },
+        .stdout = "unchanged demo/src/widgets/list.zig\n",
     },
     .{ .zig = true, .cwd = "demo", .args = &.{"build"}, .stderr = null },
 };

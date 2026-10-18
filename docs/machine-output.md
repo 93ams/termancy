@@ -48,7 +48,10 @@ JSON is UTF-8, indented with two spaces, and ends with one newline.
 - `platform dirs`, `platform info`, and `tui list` take `-o text|json|yaml|jsonl`: the
   objects below as JSON, the same as YAML, or on one line (`jsonl`). Under `-o json` and
   `-o jsonl` their errors are one JSON object on stderr, `{"error": string, "hint":
-  string}`, with `hint` only for usage errors.
+  string}`, with `hint` only for usage errors. That holds for usage errors found while
+  parsing too, before `-o` is reached (`platform dirs --bogus -o json`): any `-o json`,
+  `-o jsonl`, or `--output=json` among the arguments (the last wins, none after `--`)
+  makes them JSON, still with exit status 2.
 - `NO_COLOR` (any value) disables color everywhere. Color is also off when the output is
   not a terminal.
 
