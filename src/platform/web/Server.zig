@@ -202,7 +202,8 @@ pub const SessionWriter = struct {
     }
 };
 
-/// One socket: its reader (the connection's task) hands input to the handler (its own).
+/// One socket: its reader hands input to the handler, each on a task of its own, while the
+/// connection's task waits for either to end the connection.
 const Connection = struct {
     gpa: Allocator,
     io: Io,
@@ -219,6 +220,11 @@ const Connection = struct {
     taken: std.ArrayList(u8) = .empty,
     resize: ?Size = null,
     closed: std.atomic.Value(bool) = .init(false),
+    /// The reader has the page's first message (and its size, if it was one).
+    started: bool = false,
+    /// The connection is over: the reader ended, the handler finished, or the browser went
+    /// silent. The connection's task then cancels the reader.
+    stopping: bool = false,
     /// When the browser last sent anything, in nanoseconds of the awake clock.
     last_seen: std.atomic.Value(i64),
     session: Session,
@@ -272,11 +278,54 @@ const Connection = struct {
         c.send(exit, .text) catch {};
         c.sendClose(1000);
         c.send_lock.lockUncancelable(c.io);
-        const already = c.finished;
         c.finished = true;
         c.send_lock.unlock(c.io);
-        // Wakes the reader, which may wait on a browser that never answers the close.
-        if (!already) c.stream.shutdown(c.io, .both) catch {};
+        // Stops the reader, which may wait on a browser that never answers the close.
+        c.stop();
+    }
+
+    /// Ends the connection: the connection's task cancels the reader.
+    fn stop(c: *Connection) void {
+        c.lock.lockUncancelable(c.io);
+        defer c.lock.unlock(c.io);
+        c.stopping = true;
+        c.changed.broadcast(c.io);
+    }
+
+    /// Waits until the reader has the page's first message (true) or the connection ends.
+    fn awaitStart(c: *Connection) bool {
+        c.lock.lockUncancelable(c.io);
+        defer c.lock.unlock(c.io);
+        while (!c.started) {
+            if (c.stopping) return false;
+            c.changed.wait(c.io, &c.lock) catch return false;
+        }
+        return true;
+    }
+
+    /// Waits until the connection ends.
+    fn awaitStop(c: *Connection) void {
+        c.lock.lockUncancelable(c.io);
+        defer c.lock.unlock(c.io);
+        while (!c.stopping) c.changed.wait(c.io, &c.lock) catch return;
+    }
+
+    /// The reader's task: the page's first message, which is its size, then the rest.
+    fn read(c: *Connection) void {
+        defer c.stop();
+        defer c.close();
+        if (!c.receive()) return;
+        {
+            c.lock.lockUncancelable(c.io);
+            defer c.lock.unlock(c.io);
+            if (c.resize) |size| {
+                c.session.size = size;
+                c.resize = null;
+            }
+            c.started = true;
+            c.changed.broadcast(c.io);
+        }
+        while (c.receive()) {}
     }
 
     fn close(c: *Connection) void {
@@ -340,9 +389,10 @@ const Connection = struct {
             io.sleep(c.config.ping_interval, .awake) catch return;
             const silent = awakeNow(io) - c.last_seen.load(.monotonic);
             if (silent >= c.config.idle_timeout.nanoseconds) {
-                // No close frame: the peer is gone, and a write to it could block. This wakes
-                // the reader, and a handler stuck writing.
+                // No close frame: the peer is gone, and a write to it could block. This stops
+                // the reader, and `shutdown` wakes a handler stuck writing.
                 c.close();
+                c.stop();
                 c.stream.shutdown(io, .both) catch {};
                 return;
             }
@@ -395,9 +445,10 @@ fn serveConnection(
     // cut off with `shutdown`: on Windows that does not wake a pending read
     // (docs/zig-issues.md, issue 4).
     var head: Head = .{ .server = &server };
-    var reading = io.concurrent(Head.receive, .{ &head, io }) catch return;
-    head.done.waitTimeout(io, .{ .duration = .{ .raw = config.head_timeout, .clock = .awake } }) catch {};
-    reading.cancel(io);
+    var receiving = io.concurrent(Head.receive, .{ &head, io }) catch return;
+    const deadline: Io.Timeout = .{ .duration = .{ .raw = config.head_timeout, .clock = .awake } };
+    head.done.waitTimeout(io, deadline) catch {};
+    receiving.cancel(io);
     var request = (head.request orelse return) catch return;
     const ws = (accept(&request, config, sessions, local) catch return) orelse return;
     defer _ = sessions.fetchSub(1, .release);
@@ -419,19 +470,26 @@ fn serveConnection(
         return;
     };
     defer watchdog.cancel(io);
-    // The page's first message is its size, so the program starts at that size.
-    if (!conn.receive()) return;
-    if (conn.resize) |size| {
-        conn.session.size = size;
-        conn.resize = null;
-    }
-    // The handler waits on input this task reads, so it needs a task of its own.
-    var handler = io.concurrent(Connection.runHandler, .{&conn}) catch {
-        conn.session.write("snek: cannot start the session here\r\n") catch {};
+    // The reader is canceled, not stopped with `shutdown`: on Windows, `shutdown` does not
+    // wake a pending read (docs/zig-issues.md, issue 4), so a browser that never answers the
+    // close would keep it, and this task, forever.
+    var reading = io.concurrent(Connection.read, .{&conn}) catch {
         conn.finish(1);
         return;
     };
-    while (conn.receive()) {}
+    // The page's first message is its size, so the program starts at that size.
+    if (!conn.awaitStart()) {
+        reading.cancel(io);
+        return;
+    }
+    var handler = io.concurrent(Connection.runHandler, .{&conn}) catch {
+        conn.session.write("snek: cannot start the session here\r\n") catch {};
+        conn.finish(1);
+        reading.cancel(io);
+        return;
+    };
+    conn.awaitStop();
+    reading.cancel(io);
     conn.close();
     handler.await(io);
 }
@@ -917,6 +975,30 @@ test "past max_sessions, sockets get 503 until one ends, however it ends" {
     var last: Client = undefined;
     try testing.expectEqual(101, try openSoon(&last, io, address, origin));
     last.close();
+}
+
+test "a session ends though its browser never answers the close" {
+    const io = testing.io;
+    var listener = try (try Io.net.IpAddress.parse("127.0.0.1", 0)).listen(io, .{});
+    defer listener.deinit(io);
+    const address = listener.socket.address;
+    const config: Config = .{ .handler = echo, .token = "", .anyone = true, .max_sessions = 1 };
+    var serving = try io.concurrent(serve, .{ testing.allocator, io, &listener, &config });
+    defer serving.cancel(io) catch {};
+    var origin_buffer: [64]u8 = undefined;
+    const origin = try std.fmt.bufPrint(&origin_buffer, "http://{f}", .{address});
+
+    var mute: Client = undefined;
+    try testing.expectEqual(101, try mute.open(io, address, "/ws", origin));
+    defer mute.close();
+    try mute.send(.binary, "bye");
+    try expectMessage(&mute, .binary, "size 80x24");
+    try expectMessage(&mute, .text, "{\"type\":\"exit\",\"status\":7}");
+    try expectMessage(&mute, .connection_close, "\x03\xe8");
+    // `mute` stays open and silent: the session's slot comes back only if its reader stops.
+    var next: Client = undefined;
+    try testing.expectEqual(101, try openSoon(&next, io, address, origin));
+    next.close();
 }
 
 /// Opens "/ws", retrying while the server still frees the last session's slot.

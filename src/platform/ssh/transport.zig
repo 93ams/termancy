@@ -290,10 +290,11 @@ pub const Transport = struct {
         };
     }
 
-    /// Whether the socket failed because the other side went away. shortcut: on Windows,
-    /// Zig 0.17's `Io.net` reports a read after the peer closes as `error.Unexpected`
-    /// (NTSTATUS `PIPE_DISCONNECTED`) rather than the end of the stream; that is the only
-    /// `Unexpected` taken as a hang-up. Remove when std maps the status.
+    /// Whether the socket failed because the connection was hung up. shortcut: on Windows,
+    /// Zig 0.17's `Io.net` reports a read after the socket's own `shutdown` as
+    /// `error.Unexpected` (NTSTATUS `PIPE_DISCONNECTED`) rather than the end of the stream
+    /// (a read after the peer closes ends cleanly); that is the only `Unexpected` taken as a
+    /// hang-up. Remove when std maps the status (docs/zig-issues.md, issue 2).
     fn hungUp(t: *const Transport) bool {
         if (@import("builtin").os.tag != .windows) return false;
         const err = (t.socket_err orelse return false).* orelse return false;
