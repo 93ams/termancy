@@ -2573,3 +2573,34 @@ const Forward = struct {
         return to.writeSplat(data, splat);
     }
 };
+
+const StorageFlags = struct {
+    storage: union(enum) {
+        disk: struct { path: []const u8 = "/var" },
+        s3: struct { bucket: []const u8 },
+        memory,
+    } = .memory,
+};
+
+fn printStorage(ctx: *Context, flags: StorageFlags) !void {
+    switch (flags.storage) {
+        .disk => |d| try ctx.out.print("disk {s}\n", .{d.path}),
+        .s3 => |s| try ctx.out.print("s3 {s}\n", .{s.bucket}),
+        .memory => try ctx.out.writeAll("memory\n"),
+    }
+}
+
+const storage_root = spec.command(.{ .name = "app", .flags = StorageFlags, .run = printStorage });
+
+test "a choice: named, picked by a variant's flag, and refused when they disagree" {
+    const app: App = .{ .root = &storage_root };
+    try expectRun(app, &.{}, 0, "memory\n", "");
+    try expectRun(app, &.{ "--storage", "disk" }, 0, "disk /var\n", "");
+    try expectRun(app, &.{"--storage-s3-bucket=b"}, 0, "s3 b\n", "");
+    try expectRun(app, &.{ "--storage-s3-bucket", "b", "--storage", "s3" }, 0, "s3 b\n", "");
+    try expectRun(app, &.{ "--storage", "disk", "--storage-s3-bucket", "b" }, 2, "", "app: flag --storage-s3-bucket is for --storage s3, but --storage is disk\n" ++
+        "Run 'app --help' for usage.\n");
+    // A variant's required flag is required once the variant is picked.
+    try expectRun(app, &.{ "--storage", "s3" }, 2, "", "app: required flag --storage-s3-bucket is not set\n" ++
+        "Run 'app --help' for usage.\n");
+}
