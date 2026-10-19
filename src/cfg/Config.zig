@@ -29,6 +29,9 @@ const Array = @import("value.zig").Array;
 const Format = @import("format.zig").Format;
 const Diagnostic = @import("Diagnostic.zig");
 const decoding = @import("decode.zig");
+const settings_ = @import("settings.zig");
+const cfg_settings = settings_;
+const field = @import("field");
 const dotenv = @import("dotenv.zig");
 const path = @import("path.zig");
 const scalar = @import("scalar.zig");
@@ -91,6 +94,8 @@ automatic_env: bool = false,
 env_prefix: []const u8 = "",
 /// Key path -> environment variable name, from `bindEnv`.
 env_bindings: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+/// Key path -> the flag that sets it, from `nameFlags`: for saying how to set a missing key.
+flag_names: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 /// Key paths that have no value in any layer but should still be looked up in the
 /// environment: registered by `decode` and `registerKeys`.
 known_keys: std.StringArrayHashMapUnmanaged(void) = .empty,
@@ -212,6 +217,22 @@ fn invalidate(config: *Config) void {
 
 // -- Sources ---------------------------------------------------------------------------
 
+/// Records which flag sets each key, given or not, so a missing required key's message can
+/// name it: `records` is any slice whose elements have `name` (without `--`) and an
+/// optional `key` field, such as `cli.Context.flagKeys()`. `bindFlags` names its records too.
+pub fn nameFlags(config: *Config, records: anytype, options: BindOptions) Allocator.Error!void {
+    const a = config.arena.allocator();
+    for (records) |record| {
+        const named: ?[]const u8 = if (@hasField(@TypeOf(record), "key")) record.key else null;
+        const key = named orelse try flagKey(a, options, record.name);
+        const gop = try config.flag_names.getOrPut(a, key);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try a.dupe(u8, key);
+            gop.value_ptr.* = try std.mem.concat(a, u8, &.{ "--", record.name });
+        }
+    }
+}
+
 /// What setting a value can fail with: a malformed key, or a key through a non-table.
 pub const SetError = error{ InvalidPath, NotATable, IndexOutOfRange, Unrepresentable } ||
     Allocator.Error;
@@ -221,25 +242,26 @@ pub fn setDefault(config: *Config, key_path: []const u8, value: anytype) SetErro
     try config.putEncoded(.default, key_path, value);
 }
 
-/// Sets every field of a struct as a default, registers the keys `T.meta` marks secret,
-/// and binds the environment variables it names with `.env` (see `bindEnv`).
+/// Sets every field of `value` as a default, under the keys the settings type `X` (see
+/// `cfg.settings`; or a plain struct) gives them; marks the keys its specs make secret,
+/// lists that merge by appending, and binds the environment variables its keys name with
+/// `.env` (see `bindEnv`).
 ///
 /// Defaults can live in a `.zon` file next to the source, checked against the struct by
 /// the compiler: a missing, misspelled, or mistyped field is a compile error.
 ///
 /// ```zig
 /// const defaults: Settings = @import("defaults.zon");
-/// try config.setDefaults(defaults);
+/// try config.setDefaults(Settings, defaults);
 /// ```
-pub fn setDefaults(config: *Config, value: anytype) SetError!void {
-    const T = @TypeOf(value);
+pub fn setDefaults(config: *Config, comptime X: type, value: settings_.Of(X).Type) SetError!void {
     const a = config.arena.allocator();
-    for (comptime decoding.appendKeys(T)) |key| try config.setMerge(key, .append);
-    const encoded = try decoding.encode(a, value);
+    for (comptime settings_.appendKeys(X)) |key| try config.setMerge(key, .append);
+    const encoded = try decoding.encodeAs(X, a, value);
     try config.mergeInto(a, &config.layers[@backingInt(Layer.default)], encoded);
-    for (comptime decoding.secretKeys(T)) |key| try config.markSecret(key);
-    try config.bindEnvs(T);
-    try config.registerKeys(comptime structKeys(T));
+    for (comptime settings_.secretKeys(X)) |key| try config.markSecret(key);
+    try config.bindEnvs(X);
+    try config.registerKeys(comptime settings_.structKeys(X));
     config.invalidate();
 }
 
@@ -1051,12 +1073,11 @@ pub fn bindEnv(config: *Config, key_path: []const u8, env_name: []const u8) Allo
     config.invalidate();
 }
 
-/// Binds every environment variable `T.meta` names with `.env`, at any depth: with
-/// `.port = .{ .env = "PORT" }`, the key `port` is read from `$PORT`, as `bindEnv` does.
-/// The same option names a `cli` flag's variable, so one struct serves both. `setDefaults`
-/// and `decode` call this.
-pub fn bindEnvs(config: *Config, comptime T: type) Allocator.Error!void {
-    for (comptime decoding.envBindings(T)) |binding| {
+/// Binds every environment variable the keys of the settings type `X` name with `.env`, at
+/// any depth: with `.port = .{ .env = "PORT" }`, the key `port` is read from `$PORT`, as
+/// `bindEnv` does. `setDefaults` and `decode` call this.
+pub fn bindEnvs(config: *Config, comptime X: type) Allocator.Error!void {
+    for (comptime settings_.envBindings(X)) |binding| {
         if (config.env_bindings.contains(binding.key)) continue; // `bindEnv` wins.
         try config.bindEnv(binding.key, binding.env);
     }
@@ -1092,6 +1113,7 @@ pub const BindOptions = struct {
 /// (`setDefaults`, `decode`, or `registerKeys`), a record whose key is none of them is
 /// left out unless it names its `key`: `--config` or `--verbose` do not become settings.
 pub fn bindFlags(config: *Config, records: anytype, options: BindOptions) SetError!void {
+    try config.nameFlags(records, options);
     const a = config.arena.allocator();
     var flags: Value = .empty_table;
     const filter = config.known_keys.count() > 0;
@@ -1149,8 +1171,8 @@ pub const Merge = enum {
     append,
 };
 
-/// Sets how the lists at `key_path` combine across files and layers. A struct's `meta` can
-/// say the same (`.plugins = .{ .merge = .append }`), applied by `setDefaults`.
+/// Sets how the lists at `key_path` combine across files and layers. A settings type's keys
+/// can say the same (`.plugins = .{ .merge = .append }`), applied by `setDefaults`.
 pub fn setMerge(config: *Config, key_path: []const u8, strategy: Merge) Allocator.Error!void {
     const a = config.arena.allocator();
     switch (strategy) {
@@ -1762,14 +1784,16 @@ pub const View = struct {
         return v.config.getInt(T, try v.key(key_path));
     }
 
-    /// The section as a `T`, as `Config.decode` decodes the whole; a diagnostic names the
-    /// full key, and its file and line when known. A missing section decodes as empty.
+    /// The section as the settings type `X`, as `Config.decode` decodes the whole; a
+    /// diagnostic names the full key, and its file and line when known. A missing section
+    /// decodes as empty.
     pub fn decode(
         v: View,
-        comptime T: type,
+        comptime X: type,
         options: decoding.Options,
         diag: ?*Diagnostic,
-    ) GetError!T {
+    ) GetError!settings_.Of(X).Type {
+        const T = X;
         const a = v.config.arena.allocator();
         const section = try v.config.get(v.prefix) orelse Value{ .table = .empty };
         const copy = try section.clone(a);
@@ -1869,26 +1893,107 @@ fn scalarText(a: Allocator, value: Value) Allocator.Error!?[]const u8 {
     };
 }
 
-/// Decodes the whole effective tree as a `T`. Every key `T` declares is also looked up in
-/// the environment, even when no other source sets it. The result lives until `deinit`
-/// (or, for a configuration made with an arena, as long as the arena: see `init`).
+/// Decodes the whole effective tree as the settings type `X` (see `cfg.settings`; or a
+/// plain type). Every key `X` declares is also looked up in the environment, even when no
+/// other source sets it. The result lives until `deinit` (or, for a configuration made
+/// with an arena, as long as the arena: see `init`).
 pub fn decode(
     config: *Config,
-    comptime T: type,
+    comptime X: type,
     options: decoding.Options,
     diag: ?*Diagnostic,
-) GetError!T {
-    try config.registerKeys(comptime structKeys(T));
-    for (comptime decoding.secretKeys(T)) |key| try config.markSecret(key);
+) GetError!settings_.Of(X).Type {
+    const T = X;
+    try config.registerKeys(comptime settings_.structKeys(T));
+    for (comptime settings_.secretKeys(T)) |key| try config.markSecret(key);
     try config.bindEnvs(T);
     const a = config.arena.allocator();
     const copy = try (try config.resolve()).clone(a);
+    if (options.warnings) |list| try config.duplicateKeys(a, list);
     defer if (options.warnings) |list| config.locateAll(list.items);
     return decoding.decode(T, a, copy, options, diag) catch |err| {
-        if (diag) |d| config.locateDiagnostic(d);
-        if (options.errors) |list| config.locateAll(list.items);
+        if (diag) |d| {
+            config.locateDiagnostic(d);
+            try config.hintMissing(a, d);
+        }
+        if (options.errors) |list| {
+            config.locateAll(list.items);
+            for (list.items) |*d| try config.hintMissing(a, d);
+        }
         return err;
     };
+}
+
+/// Adds to a missing key's message the other ways to set it: its variable and its flag.
+fn hintMissing(config: *Config, a: Allocator, d: *Diagnostic) Allocator.Error!void {
+    if (!std.mem.eql(u8, d.message, decoding.missing_message)) return;
+    var ways: std.ArrayList([]const u8) = .empty;
+    if (config.env_bindings.get(d.key)) |name| {
+        try ways.append(a, try std.mem.concat(a, u8, &.{ "$", name }));
+    } else if (config.automatic_env) {
+        try ways.append(a, try std.mem.concat(a, u8, &.{ "$", try path.toEnvName(a, config.env_prefix, d.key) }));
+    }
+    if (config.flag_names.get(d.key)) |flag| try ways.append(a, flag);
+    if (ways.items.len == 0) return;
+    var message: std.Io.Writer.Allocating = .init(a);
+    message.writer.print("{s}; set it in a file, ", .{d.message}) catch return error.OutOfMemory;
+    for (ways.items, 0..) |way, i| {
+        const between = if (i == 0) "" else if (i + 1 == ways.items.len) ", or " else ", ";
+        if (ways.items.len == 1) message.writer.writeAll("or ") catch return error.OutOfMemory;
+        message.writer.print("{s}{s}", .{ between, way }) catch return error.OutOfMemory;
+    }
+    d.message = message.written();
+}
+
+/// A warning for each key a file sets twice, at the later one, which wins. TOML and YAML
+/// reject duplicates when parsing; JSON, `.env`, and INI keep the last, as their readers
+/// usually do, so a repeated key would otherwise go unnoticed.
+fn duplicateKeys(config: *Config, a: Allocator, warnings: *std.ArrayList(Diagnostic)) Allocator.Error!void {
+    for (config.files.items) |file| {
+        if (file.text.len == 0) continue;
+        var seen: std.StringHashMapUnmanaged(usize) = .empty;
+        const Key = struct { path: []const u8, start: usize };
+        var written: std.ArrayList(Key) = .empty;
+        switch (file.format) {
+            .json, .jsonc => for (json.spans(a, file.text, file.format == .jsonc) catch continue) |span| {
+                if (span.kind != .field) continue;
+                try written.append(a, .{ .path = try joinSegments(a, span.path), .start = span.start });
+            },
+            .dotenv => for (dotenv.spans(a, file.text) catch continue) |span| {
+                try written.append(a, .{ .path = span.path, .start = span.start });
+            },
+            .ini => for (@import("ini.zig").spans(a, file.text) catch continue) |span| {
+                if (span.kind != .entry) continue;
+                try written.append(a, .{ .path = try joinSegments(a, span.path), .start = span.start });
+            },
+            .toml, .yaml, .zon => continue,
+        }
+        for (written.items) |key| {
+            const gop = try seen.getOrPut(a, key.path);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = key.start;
+                continue;
+            }
+            var first: Diagnostic = .{};
+            Diagnostic.report(&first, file.text, gop.value_ptr.*, "first");
+            var warning: Diagnostic = .{};
+            Diagnostic.report(&warning, file.text, key.start, try std.fmt.allocPrint(
+                a,
+                "set again; this replaces the value on line {d}",
+                .{first.line},
+            ));
+            warning.key = key.path;
+            warning.file = file.name;
+            try warnings.append(a, warning);
+            gop.value_ptr.* = key.start;
+        }
+    }
+}
+
+fn joinSegments(a: Allocator, segments: []const []const u8) Allocator.Error![]const u8 {
+    var out: []const u8 = "";
+    for (segments) |segment| out = try path.join(a, out, segment);
+    return out;
 }
 
 fn locateAll(config: *Config, diagnostics: []Diagnostic) void {
@@ -1943,37 +2048,6 @@ fn fileNamed(config: *const Config, name: []const u8) ?*const FileSource {
     return null;
 }
 
-/// The leaf keys a struct type declares, recursively.
-fn structKeys(comptime T: type) []const []const u8 {
-    comptime {
-        var out: []const []const u8 = &.{};
-        collectKeys(T, "", &out);
-        return out;
-    }
-}
-
-fn collectKeys(
-    comptime T: type,
-    comptime prefix: []const u8,
-    comptime out: *[]const []const u8,
-) void {
-    const Base = switch (@typeInfo(T)) {
-        .optional => |o| o.child,
-        else => T,
-    };
-    const is_table = @typeInfo(Base) == .@"struct" and !decoding.hasParse(Base) and Base != Value;
-    if (!is_table) {
-        out.* = out.* ++ .{prefix};
-        return;
-    }
-    const info = @typeInfo(Base).@"struct";
-    for (info.field_names) |name| {
-        const key = decoding.metaOption(Base, name, "key", @as([]const u8, name));
-        const field_type = info.field_types[std.meta.fieldIndex(Base, name).?];
-        collectKeys(field_type, if (prefix.len == 0) key else prefix ++ "." ++ key, out);
-    }
-}
-
 /// What `write` and `snapshot` write.
 pub const WriteOptions = struct {
     /// Write one layer instead of the effective tree.
@@ -2020,21 +2094,23 @@ pub fn snapshot(config: *Config, options: WriteOptions) Allocator.Error!Value {
 
 const testing = std.testing;
 
-const App = struct {
+const AppSettings = struct {
     server: struct {
         host: []const u8 = "localhost",
         port: u16 = 8080,
     } = .{},
     debug: bool = false,
     token: ?[]const u8 = null,
-
-    pub const meta = .{ .token = .{ .secret = true } };
 };
+
+const App = settings_.settings(AppSettings, field.Set(.{field.Spec(AppSettings){ .fields = .{
+    .token = .{ .secret = true },
+} }}), .{});
 
 test "precedence across layers" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    try config.setDefaults(App{});
+    try config.setDefaults(App, .{});
     try config.loadSource("a.json", "{\"server\": {\"port\": 1, \"host\": \"file\"}}", .json, null);
     try config.loadSource("b.json", "{\"server\": {\"port\": 2}}", .json, null);
     try testing.expectEqual(2, (try config.get("server.port")).?.int);
@@ -2121,7 +2197,7 @@ test "decode reads the environment for declared keys" {
 test "write redacts secrets" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    try config.setDefaults(App{ .token = "hunter2" });
+    try config.setDefaults(App, .{ .token = "hunter2" });
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
     try config.write(&out.writer, .json, .{});
@@ -2135,7 +2211,7 @@ test "write redacts secrets" {
 test "keys are sorted leaves" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    try config.setDefaults(App{});
+    try config.setDefaults(App, .{});
     const all = try config.keys();
     const expected = [_][]const u8{ "debug", "server.host", "server.port" };
     try testing.expectEqual(expected.len, all.len);
@@ -2535,7 +2611,7 @@ test "Origin.format" {
 test "setDefaults then strict decode" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    try config.setDefaults(App{ .token = "t" });
+    try config.setDefaults(App, .{ .token = "t" });
     const app = try config.decode(App, .{ .strict = true }, null);
     try testing.expectEqual(8080, app.server.port);
     try testing.expectEqualStrings("t", app.token.?);
@@ -2547,15 +2623,17 @@ test "setDefaults then strict decode" {
     _ = try config.decode(App, .{}, null);
 }
 
-test "meta .env binds a variable to a field" {
-    const Settings = struct {
-        server: struct {
-            port: u16 = 8080,
-            pub const meta = .{ .port = .{ .env = "PORT" } };
-        } = .{},
+test "keys' .env bind a variable to a field" {
+    const Plain = struct {
+        server: struct { port: u16 = 8080 } = .{},
         token: ?[]const u8 = null,
-        pub const meta = .{ .token = .{ .env = "API_TOKEN", .secret = true } };
     };
+    const Settings = settings_.settings(Plain, field.Set(.{field.Spec(Plain){ .fields = .{
+        .token = .{ .secret = true },
+    } }}), .{ .fields = .{
+        .server = .{ .fields = .{ .port = .{ .env = "PORT" } } },
+        .token = .{ .env = "API_TOKEN" },
+    } });
     var environ: std.process.Environ.Map = .init(testing.allocator);
     defer environ.deinit();
     try environ.put("PORT", "9000");
@@ -2563,7 +2641,7 @@ test "meta .env binds a variable to a field" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
     config.useEnv(&environ);
-    try config.setDefaults(Settings{});
+    try config.setDefaults(Settings, .{});
     try testing.expectEqual(9000, (try config.getInt(u16, "server.port")).?);
     try testing.expectEqual(Layer.env, (try config.explain("server.port")).?.layer);
     // `decode` binds them too, and an explicit `bindEnv` wins.
@@ -2584,18 +2662,19 @@ test "compile-time defaults from a .zon file" {
         ratio: f64 = 1,
         debug: bool = false,
         token: ?[]const u8 = null,
-
-        pub const meta = .{ .token = .{ .secret = true } };
     };
+    const Keyed = settings_.settings(Settings, field.Set(.{field.Spec(Settings){ .fields = .{
+        .token = .{ .secret = true },
+    } }}), .{});
     const defaults: Settings = @import("testdata/defaults.zon");
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    try config.setDefaults(defaults);
+    try config.setDefaults(Keyed, defaults);
     try testing.expectEqualStrings("0.0.0.0", (try config.getString("server.host")).?);
     try testing.expectEqual(9000, (try config.getInt(u16, "server.port")).?);
     try testing.expectEqualStrings("debug", (try config.getString("level")).?);
     try testing.expect(config.isSecret("token"));
-    const settings = try config.decode(Settings, .{ .strict = true }, null);
+    const settings = try config.decode(Keyed, .{ .strict = true }, null);
     try testing.expectEqualStrings("api", settings.tags[1]);
     try testing.expectEqual(0.75, settings.ratio);
     try testing.expectEqual(false, settings.debug);
@@ -2657,7 +2736,7 @@ test "decode reports a bad environment value by key" {
 test "repeated mutation rebuilds without leaking or growing the cache" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    try config.setDefaults(App{});
+    try config.setDefaults(App, .{});
     var environ: std.process.Environ.Map = .init(testing.allocator);
     defer environ.deinit();
     try environ.put("APP_DEBUG", "true");
@@ -2743,7 +2822,7 @@ test "bindFlags sets the key a record names, and leaves out flags that are not s
     try config.setDefaults(struct {
         depth: u8 = 3,
         fetch: struct { concurrency: u8 = 4 } = .{},
-    }{});
+    }, .{});
     const Record = struct { name: []const u8, value: []const u8, key: ?[]const u8 = null };
     const records = [_]Record{
         .{ .name = "config", .value = "/etc/app.toml" },
@@ -2816,14 +2895,13 @@ test "write shows the derived profile and env layers" {
 }
 
 test "lists at an append key accumulate across files and layers" {
-    const Settings = struct {
+    const Settings = settings_.settings(struct {
         plugins: []const []const u8 = &.{"core"},
         tags: []const []const u8 = &.{"default"},
-        pub const meta = .{ .plugins = .{ .merge = .append } };
-    };
+    }, field.none, .{ .fields = .{ .plugins = .{ .merge = .append } } });
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    try config.setDefaults(Settings{});
+    try config.setDefaults(Settings, .{});
     try config.loadSource("a.json", "{\"plugins\": [\"a\"], \"tags\": [\"a\"]}", .json, null);
     try config.loadSource("b.json", "{\"plugins\": [\"b\"], \"tags\": [\"b\"]}", .json, null);
     const plugins = (try config.get("plugins")).?.array.items;
@@ -3062,6 +3140,66 @@ test "decode with warn_unknown points at an unknown key and suggests a field" {
     );
 }
 
+test "a missing key's message names its variable and its flag" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    const Settings = cfg_settings.settings(struct { token: []const u8, name: []const u8 }, field.none, .{
+        .fields = .{ .token = .{ .env = "APP_TOKEN" } },
+    });
+    const Record = struct { name: []const u8, key: ?[]const u8 = null };
+    try config.nameFlags(&[_]Record{.{ .name = "token" }}, .{});
+    var errors: std.ArrayList(Diagnostic) = .empty;
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.MissingField, config.decode(Settings, .{ .errors = &errors }, &diag));
+    try testing.expectEqualStrings(
+        "required key is missing; set it in a file, $APP_TOKEN, or --token",
+        errors.items[0].message,
+    );
+    try testing.expectEqualStrings("required key is missing", errors.items[1].message);
+}
+
+test "a check across a table's fields points at the table in its file" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    const Listener = struct { host: []const u8 = "0.0.0.0", port: u16 = 80 };
+    const local = struct {
+        fn check(l: Listener, w: *Io.Writer) !void {
+            if (!std.mem.startsWith(u8, l.host, "127.")) return field.fail(w, "must be local", .{});
+        }
+    }.check;
+    const Settings = cfg_settings.settings(struct { admin: ?Listener = null }, field.Set(.{
+        field.Spec(Listener){ .checks = &.{.from(local)} },
+    }), .{});
+    try config.loadSource("app.toml", "name = 1\n\n[admin]\nhost = \"0.0.0.0\"\n", .toml, null);
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.InvalidValue, config.decode(Settings, .{}, &diag));
+    var buffer: [128]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    try w.print("{f}", .{diag});
+    try testing.expectEqualStrings("app.toml:3:1: admin: must be local (defaults: port = 80)", w.buffered());
+}
+
+test "keys set twice in a file are warned about, at the one that wins" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    try config.loadSource("a.json", "{\"port\": 1,\n \"port\": 2}", .json, null);
+    try config.loadSource(".env", "HOST=a\nPORT=3\nHOST=b\n", .dotenv, null);
+    var warnings: std.ArrayList(Diagnostic) = .empty;
+    const settings = try config.decode(struct { port: u16 = 0, host: []const u8 = "" }, .{
+        .warnings = &warnings,
+    }, null);
+    try testing.expectEqualStrings("b", settings.host);
+    try testing.expectEqual(2, warnings.items.len);
+    var buffer: [256]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    for (warnings.items) |warning| try w.print("{f}\n", .{warning});
+    try testing.expectEqualStrings(
+        \\a.json:2:2: port: set again; this replaces the value on line 1
+        \\.env:3:1: host: set again; this replaces the value on line 1
+        \\
+    , w.buffered());
+}
+
 test "decode errors and warnings point at the file and line that set the key" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3071,12 +3209,11 @@ test "decode errors and warnings point at the file and line that set the key" {
         .data = "include = \"base.yaml\"\n\n[server]\nport = 70000\n",
     });
     try tmp.dir.writeFile(io, .{ .sub_path = "base.yaml", .data = "name: x\nold_level: 3\n" });
-    const Settings = struct {
+    const Settings = settings_.settings(struct {
         name: []const u8,
         level: u8 = 0,
         server: struct { port: u16 = 80, host: []const u8 } = .{ .host = "" },
-        pub const meta = .{ .level = .{ .renamed_from = "old_level" } };
-    };
+    }, field.none, .{ .fields = .{ .level = .{ .renamed_from = "old_level" } } });
     var config: Config = .init(testing.allocator);
     defer config.deinit();
     try config.useIncludes("include");

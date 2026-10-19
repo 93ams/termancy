@@ -14,13 +14,23 @@ pub fn isList(comptime V: type) bool {
     return info == .pointer and info.pointer.size == .slice and V != []const u8;
 }
 
-/// Whether `V` has `pub fn parse(text: []const u8) !V`: a value read from text, such as a
-/// duration, rather than a group of settings.
+/// Whether `V` follows the `parse` convention, `pub fn parse(text: []const u8) !V`: a value
+/// read from text, such as a duration, rather than a group of settings. The signature is
+/// checked, not just the name, so an unrelated method called `parse` does not count.
 pub fn hasParse(comptime V: type) bool {
-    return switch (@typeInfo(V)) {
-        .@"struct", .@"enum", .@"union" => @hasDecl(V, "parse"),
-        else => false,
+    switch (@typeInfo(V)) {
+        .@"struct", .@"enum", .@"union" => {},
+        else => return false,
+    }
+    if (!@hasDecl(V, "parse")) return false;
+    const info = switch (@typeInfo(@TypeOf(V.parse))) {
+        .@"fn" => |f| f,
+        else => return false,
     };
+    if (info.param_types.len != 1 or info.param_types[0] != []const u8) return false;
+    const Return = info.return_type orelse return false;
+    return Return == V or
+        (@typeInfo(Return) == .error_union and @typeInfo(Return).error_union.payload == V);
 }
 
 /// A struct whose fields are settings of their own.

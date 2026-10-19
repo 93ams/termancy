@@ -40,6 +40,8 @@ const locate = @import("locate.zig");
 const path = @import("path.zig");
 const decoding = @import("decode.zig");
 const scalar = @import("scalar.zig");
+const settings_ = @import("settings.zig");
+const field = @import("field");
 
 const testing = std.testing;
 
@@ -1092,14 +1094,18 @@ const Sample = struct {
     size: scalar.ByteSize = .{ .bytes = 0 },
     when: ?scalar.DateTime = null,
     inner: struct { a: u8 = 0, b: ?[]const u8 = null, any: ?Value = null } = .{},
-
-    pub const meta = .{
-        .port = .{ .min = 1 },
-        .name = .{ .key = "service-name" },
-        .level = .{ .renamed_from = "log_level" },
-        .counts = .{ .max = 1000, .merge = .append },
-    };
+    store: union(enum) { disk: struct { path: []const u8 = "" }, memory } = .memory,
 };
+
+/// `Sample` with checks, a renamed key, an old key, and a list that appends.
+const sample_settings = settings_.settings(Sample, field.Set(.{field.Spec(Sample){ .fields = .{
+    .port = .{ .checks = &.{.min(1)} },
+    .counts = .{ .each = &.{.max(1000)} },
+} }}), .{ .fields = .{
+    .name = .{ .key = "service-name" },
+    .level = .{ .renamed_from = "log_level" },
+    .counts = .{ .merge = .append },
+} });
 
 /// Decodes `doc`, parsed as `format`, as a `Sample`: decoding succeeds or fails with a
 /// diagnostic, and a decoded value encodes and decodes back to the same tree. Returns
@@ -1115,7 +1121,7 @@ fn expectDecode(arena: Allocator, format: Format, doc: []const u8, strict: bool,
         .strict = strict,
         .errors = if (seed & 1 == 0) &errors else null,
     };
-    const sample = decoding.decode(Sample, arena, tree, options, &diag) catch |err| switch (err) {
+    const decoded = decoding.decode(sample_settings, arena, tree, options, &diag) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => {
             if (diag.message.len == 0) {
@@ -1125,17 +1131,17 @@ fn expectDecode(arena: Allocator, format: Format, doc: []const u8, strict: bool,
             return false;
         },
     };
-    const encoded = decoding.encode(arena, sample) catch |err| switch (err) {
+    const encoded = decoding.encodeAs(sample_settings, arena, decoded) catch |err| switch (err) {
         // A float that is not finite has no representation in some formats' trees.
         error.Unrepresentable => return true,
         else => return err,
     };
-    const again = decoding.decode(Sample, arena, encoded, .{ .strict = true }, &diag) catch |err| {
+    const again = decoding.decode(sample_settings, arena, encoded, .{ .strict = true }, &diag) catch |err| {
         report(format, seed, "an encoded value does not decode", doc);
         std.debug.print("{s}\n", .{diag.message});
         return err;
     };
-    const reencoded = try decoding.encode(arena, again);
+    const reencoded = try decoding.encodeAs(sample_settings, arena, again);
     if (!sameValue(encoded, reencoded)) {
         report(format, seed, "a decoded value does not encode back the same", doc);
         return error.TestUnexpectedResult;
@@ -1171,7 +1177,7 @@ test "the decode corpus decodes" {
             const a = arena_state.allocator();
             var diag: Diagnostic = .{};
             const tree = try format.parse(a, doc, &diag);
-            _ = decoding.decode(Sample, a, tree, .{ .strict = true }, &diag) catch |err| {
+            _ = decoding.decode(sample_settings, a, tree, .{ .strict = true }, &diag) catch |err| {
                 std.debug.print("{t}: {s}: {s}\n", .{ format, diag.key, diag.message });
                 return err;
             };

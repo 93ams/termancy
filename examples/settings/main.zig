@@ -20,36 +20,53 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
+const field = @import("field");
 const sys = @import("sys");
 
 const LogLevel = enum { debug, info, warn, @"error" };
 
+const Server = struct {
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 8080,
+    timeout: cfg.Duration = .{ .ns = 30 * std.time.ns_per_s },
+};
+
+const Database = struct {
+    url: []const u8 = "postgres://localhost/shop",
+    password: ?[]const u8 = null,
+    pool: u8 = 5,
+};
+
+const Log = struct {
+    level: LogLevel = .info,
+    format: []const u8 = "text",
+};
+
 const Settings = struct {
     schema_version: u32 = 3,
-    server: struct {
-        host: []const u8 = "127.0.0.1",
-        port: u16 = 8080,
-        timeout: cfg.Duration = .{ .ns = 30 * std.time.ns_per_s },
-        pub const meta = .{
-            .port = .{ .min = 1, .help = "Where the shop listens" },
-            .timeout = .{ .renamed_from = "request_timeout" },
-        };
-    } = .{},
-    database: struct {
-        url: []const u8 = "postgres://localhost/shop",
-        password: ?[]const u8 = null,
-        pool: u8 = 5,
-        pub const meta = .{
-            .password = .{ .secret = true },
-            .pool = .{ .min = 1, .max = 100 },
-        };
-    } = .{},
-    log: struct {
-        level: LogLevel = .info,
-        format: []const u8 = "text",
-        pub const meta = .{ .format = .{ .one_of = &.{ "text", "json" } } };
-    } = .{},
+    server: Server = .{},
+    database: Database = .{},
+    log: Log = .{},
 };
+
+/// What each setting means and must be, by type.
+const Specs = field.Set(.{
+    field.Spec(Server){ .fields = .{
+        .port = .{ .help = "Where the shop listens", .checks = &.{.min(1)} },
+    } },
+    field.Spec(Database){ .fields = .{
+        .password = .{ .secret = true },
+        .pool = .{ .checks = &.{ .min(1), .max(100) } },
+    } },
+    field.Spec(Log){ .fields = .{
+        .format = .{ .checks = &.{.oneOf(&.{ "text", "json" })} },
+    } },
+});
+
+/// The settings as files spell them: `server.timeout` was `server.request_timeout`.
+const shop = cfg.settings(Settings, Specs, .{ .fields = .{
+    .server = .{ .fields = .{ .timeout = .{ .renamed_from = "request_timeout" } } },
+} });
 
 const Global = struct {
     file: []const u8 = "app.toml",
@@ -107,7 +124,7 @@ fn show(ctx: *cli.Context, flags: ShowFlags) !void {
     const global = try ctx.flags(Global);
     var config: cfg.Config = .init(ctx.gpa);
     defer config.deinit();
-    try config.setDefaults(Settings{});
+    try config.setDefaults(shop, .{});
 
     var diag: cfg.Diagnostic = .{};
     const variants: []const []const u8 = &.{ flags.env orelse "", "local" };
@@ -133,7 +150,7 @@ fn show(ctx: *cli.Context, flags: ShowFlags) !void {
 
     // Decoding checks every value; the settings themselves are what an app would use.
     var problems: std.ArrayList(cfg.Diagnostic) = .empty;
-    _ = config.decode(Settings, .{ .errors = &problems }, &diag) catch |err| switch (err) {
+    _ = config.decode(shop, .{ .errors = &problems }, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
             for (problems.items) |*problem| {
@@ -179,9 +196,9 @@ fn check(ctx: *cli.Context) !void {
     var problems: std.ArrayList(cfg.Diagnostic) = .empty;
     var warnings: std.ArrayList(cfg.Diagnostic) = .empty;
     const options: cfg.DecodeOptions = .{ .errors = &problems, .warnings = &warnings };
-    _ = cfg.decode(Settings, ctx.arena, tree, options, null) catch {};
+    _ = cfg.decode(shop, ctx.arena, tree, options, null) catch {};
     // ...and the JSON Schema it generates, which editors and other tools can check too.
-    const generated = try cfg.schema.build(Settings, ctx.arena);
+    const generated = try cfg.schema.build(shop, ctx.arena);
     var schema_problems: std.ArrayList(cfg.Diagnostic) = .empty;
     _ = try cfg.schema.validate(ctx.arena, generated, tree, .{}, &schema_problems);
     for (schema_problems.items) |problem| {
@@ -218,7 +235,7 @@ fn set(ctx: *cli.Context, args: SetArgs) !void {
     // Refuse what the application would refuse to start with.
     var diag: cfg.Diagnostic = .{};
     const tree = try format.parse(ctx.arena, edited, null);
-    _ = cfg.decode(Settings, ctx.arena, tree, .{}, &diag) catch |err| switch (err) {
+    _ = cfg.decode(shop, ctx.arena, tree, .{}, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return ctx.fail("{f}", .{diag}),
     };
@@ -293,7 +310,7 @@ fn migrate(ctx: *cli.Context) !void {
 // -- schema, seal ------------------------------------------------------------------------
 
 fn schema(ctx: *cli.Context) !void {
-    try cfg.schema.write(Settings, ctx.arena, ctx.out);
+    try cfg.schema.write(shop, ctx.arena, ctx.out);
     try ctx.out.writeByte('\n');
 }
 

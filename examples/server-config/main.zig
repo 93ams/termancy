@@ -8,6 +8,7 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
+const field = @import("field");
 
 const Settings = struct {
     host: []const u8 = "127.0.0.1",
@@ -18,12 +19,13 @@ const Settings = struct {
         cert: ?[]const u8 = null,
         key: ?[]const u8 = null,
     } = .{},
-
-    pub const meta = .{
-        .port = .{ .min = 1 },
-        .workers = .{ .min = 1, .max = 64 },
-    };
 };
+
+/// What the settings must be, checked when they are decoded.
+const server = cfg.settings(Settings, field.Set(.{field.Spec(Settings){ .fields = .{
+    .port = .{ .checks = &.{.min(1)} },
+    .workers = .{ .checks = &.{ .min(1), .max(64) } },
+} }}), .{});
 
 const Flags = struct {
     config: ?[]const u8 = null,
@@ -37,7 +39,7 @@ const Flags = struct {
 fn serve(ctx: *cli.Context, flags: Flags) !void {
     var config: cfg.Config = .init(ctx.gpa);
     defer config.deinit();
-    try config.setDefaults(Settings{});
+    try config.setDefaults(server, .{});
     if (flags.config) |file| {
         var diag: cfg.Diagnostic = .{};
         config.loadFile(ctx.io, .cwd(), file, null, &diag) catch |err| switch (err) {
@@ -50,7 +52,7 @@ fn serve(ctx: *cli.Context, flags: Flags) !void {
     try config.bindFlags(try ctx.changedFlags(), .{});
 
     var diag: cfg.Diagnostic = .{};
-    const settings = config.decode(Settings, .{}, &diag) catch |err| switch (err) {
+    const settings = config.decode(server, .{}, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return ctx.fail("{f}", .{diag}),
     };

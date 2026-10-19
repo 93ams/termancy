@@ -477,6 +477,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "term", .module = host.libs[library("term")] },
+                .{ .name = "field", .module = host.libs[library("field")] },
                 .{ .name = "cli", .module = host.libs[library("cli")] },
                 .{ .name = "cfg", .module = host.libs[library("cfg")] },
                 .{ .name = "tui", .module = host.libs[library("tui")] },

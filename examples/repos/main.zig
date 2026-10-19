@@ -26,6 +26,7 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
+const field = @import("field");
 const term = @import("term");
 const tui = @import("tui");
 const sys = @import("sys");
@@ -53,11 +54,14 @@ pub const Settings = struct {
         concurrency: u8 = 4,
         /// How long one `git fetch` may take.
         timeout: cfg.Duration = .{ .ns = 120 * std.time.ns_per_s },
-        pub const meta = .{ .concurrency = .{ .min = 1, .max = 64 } };
     };
-
-    pub const meta = .{ .depth = .{ .min = 1, .max = 16 } };
 };
+
+/// What the settings must be, checked when they are decoded.
+pub const repo_settings = cfg.settings(Settings, field.Set(.{
+    field.Spec(Settings){ .fields = .{ .depth = .{ .checks = &.{ .min(1), .max(16) } } } },
+    field.Spec(Settings.Fetch){ .fields = .{ .concurrency = .{ .checks = &.{ .min(1), .max(64) } } } },
+}), .{});
 
 /// On every command.
 const Global = struct {
@@ -94,7 +98,7 @@ const Loaded = struct {
 fn load(ctx: *cli.Context) !Loaded {
     const global = try ctx.flags(Global);
     var config: cfg.Config = .init(ctx.arena);
-    try config.setDefaults(Settings{});
+    try config.setDefaults(repo_settings, .{});
     config.useEnv(ctx.environ);
     var diag: cfg.Diagnostic = .{};
     const file = config.loadAppFile(ctx.io, "repos", .{ .path = global.config }, &diag) catch |err|
@@ -106,7 +110,7 @@ fn load(ctx: *cli.Context) !Loaded {
         };
     try config.automaticEnv("REPOS");
     try config.bindFlags(try ctx.changedFlags(), .{});
-    const settings = config.decode(Settings, .{}, &diag) catch |err| switch (err) {
+    const settings = config.decode(repo_settings, .{}, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return ctx.fail("{f}", .{diag}),
     };
