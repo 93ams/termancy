@@ -574,11 +574,21 @@ const Parser = struct {
             const choice = flag.choice orelse continue;
             for (p.occurrences.items) |other| {
                 const named = other.flag;
-                if (!std.mem.eql(u8, named.name, choice) or !std.mem.eql(u8, named.owner, flag.owner)) continue;
+                const same_choice = std.mem.eql(u8, named.name, choice) and
+                    std.mem.eql(u8, named.owner, flag.owner);
+                if (!same_choice) continue;
                 if (field.sameName(other.value, flag.variant)) continue;
                 const variant = try p.arena.dupe(u8, flag.variant);
                 std.mem.replaceScalar(u8, variant, '_', '-');
-                return p.fail(p.messages().wrong_variant, &.{ flag.name, choice, variant, other.value });
+                return p.fail(
+                    p.messages().wrong_variant,
+                    &.{
+                        flag.name,
+                        choice,
+                        variant,
+                        other.value,
+                    },
+                );
             }
         }
         for (p.occurrences.items) |occurrence| {
@@ -1073,7 +1083,14 @@ const shape_root = spec.command(.{
                 host: bool = false,
                 offset: i32 = 0,
                 name: []const u8 = "",
-            }, field.none, .{ .fields = .{ .host = .{ .short = 'h' }, .offset = .{ .short = 'o' } } }),
+            }, field.none, .{
+                .fields = .{
+                    .host = .{
+                        .short = 'h',
+                    },
+                    .offset = .{ .short = 'o' },
+                },
+            }),
             .args = .{ .max = null },
             .run = noop,
         }),
@@ -1253,7 +1270,15 @@ test "boolean and counter flags from the environment are validated" {
         .flags = sets.flags(struct {
             force: bool = false,
             verbose: u8 = 0,
-        }, field.none, .{ .fields = .{ .force = .{ .env = "FORCE" }, .verbose = .{ .count = true, .env = "VERBOSE" } } }),
+        }, field.none, .{
+            .fields = .{
+                .force = .{ .env = "FORCE" },
+                .verbose = .{
+                    .count = true,
+                    .env = "VERBOSE",
+                },
+            },
+        }),
         .run = noop,
     });
     var environ: std.process.Environ.Map = .init(testing.allocator);
@@ -1455,7 +1480,15 @@ const deprecated_root = spec.command(.{
             colour: bool = false,
             color: bool = false,
         };
-        break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .colour = .{ .deprecated = "use --color" } } }}), .{});
+        break :flags sets.flags(
+            T,
+            field.Set(
+                .{field.Spec(T){
+                    .fields = .{ .colour = .{ .deprecated = "use --color" } },
+                }},
+            ),
+            .{},
+        );
     },
     .subcommands = .{
         spec.command(.{ .name = "remove", .deprecated = "use delete", .run = noop }),

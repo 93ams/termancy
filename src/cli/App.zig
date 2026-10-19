@@ -1495,7 +1495,11 @@ const RangeFlags = struct {
 
 fn ordered(flags: RangeFlags, w: *std.Io.Writer) !void {
     if (flags.low > flags.high) {
-        return field_.fail(w, "--low ({d}) must not exceed --high ({d})", .{ flags.low, flags.high });
+        return field_.fail(
+            w,
+            "--low ({d}) must not exceed --high ({d})",
+            .{ flags.low, flags.high },
+        );
     }
 }
 
@@ -1641,7 +1645,11 @@ const CopyArgs = struct {
     count: u8 = 1,
     files: []const []const u8 = &.{},
 };
-const copy_args = sets.args(CopyArgs, field_.none, .{ .fields = .{ .files = .{ .name = "file" } } });
+const copy_args = sets.args(
+    CopyArgs,
+    field_.none,
+    .{ .fields = .{ .files = .{ .name = "file" } } },
+);
 
 fn copy(ctx: *Context, flags: EchoFlags, args: CopyArgs) !void {
     try ctx.out.print("{t} x{d}{s}", .{ args.mode, args.count, if (flags.loud) " loud" else "" });
@@ -1838,7 +1846,11 @@ const RenameArgs = struct {
     count: u8,
     rest: []const []const u8 = &.{},
 };
-const rename_args = sets.args(RenameArgs, field_.none, .{ .fields = .{ .mode = .{ .prompt = "Mode" }, .count = .{ .prompt = "Count" } } });
+const rename_args = sets.args(
+    RenameArgs,
+    field_.none,
+    .{ .fields = .{ .mode = .{ .prompt = "Mode" }, .count = .{ .prompt = "Count" } } },
+);
 
 fn rename(ctx: *Context, args: RenameArgs) !void {
     try ctx.out.print("{t} {d} {d}\n", .{ args.mode, args.count, args.rest.len });
@@ -1848,7 +1860,11 @@ const PartlyArgs = struct {
     first: []const u8,
     second: []const u8,
 };
-const partly_args = sets.args(PartlyArgs, field_.none, .{ .fields = .{ .second = .{ .prompt = "Second" } } });
+const partly_args = sets.args(
+    PartlyArgs,
+    field_.none,
+    .{ .fields = .{ .second = .{ .prompt = "Second" } } },
+);
 
 fn partly(ctx: *Context, args: PartlyArgs) !void {
     try ctx.out.print("{s} {s}\n", .{ args.first, args.second });

@@ -324,7 +324,10 @@ const SealFlags = struct {
 };
 const seal_flags = cli.flags(SealFlags, field.Set(.{field.Spec(SealFlags){ .fields = .{
     .passphrase = .{ .secret = true, .help = "The passphrase to encrypt with" },
-    .memory = .{ .help = "KiB of memory the key derivation needs (its cost)", .checks = &.{.min(8)} },
+    .memory = .{
+        .help = "KiB of memory the key derivation needs (its cost)",
+        .checks = &.{.min(8)},
+    },
 } }}), .{ .fields = .{
     .passphrase = .{ .env = "SETTINGS_PASSPHRASE", .prompt = "Passphrase" },
 } });

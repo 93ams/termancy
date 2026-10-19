@@ -122,7 +122,11 @@ const paths_flags = cli.flags(PathsFlags, field.Set(.{field.Spec(PathsFlags){ .f
 const PathsArgs = struct {
     paths: []const []const u8,
 };
-const paths_args = cli.args(PathsArgs, field.none, .{ .fields = .{ .paths = .{ .name = "path" } } });
+const paths_args = cli.args(
+    PathsArgs,
+    field.none,
+    .{ .fields = .{ .paths = .{ .name = "path" } } },
+);
 
 fn checkPaths(ctx: *cli.Context, flags: PathsFlags, args: PathsArgs) !void {
     const policy: sys.sandbox.Policy = .{ .roots = flags.root };
@@ -148,7 +152,10 @@ const LogFlags = struct {
 const log_flags = cli.flags(LogFlags, field.Set(.{field.Spec(LogFlags){ .fields = .{
     .format = .{ .help = "Text for people, JSON lines for collectors" },
     .token = .{ .secret = true, .help = "An API token to log in with" },
-    .level = .{ .help = "The least to show", .checks = &.{.oneOf(&.{ "trace", "debug", "info", "warn", "error" })} },
+    .level = .{
+        .help = "The least to show",
+        .checks = &.{.oneOf(&.{ "trace", "debug", "info", "warn", "error" })},
+    },
 } }}), .{ .fields = .{
     .token = .{ .env = "DOCTOR_TOKEN" },
 } });

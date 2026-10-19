@@ -8,8 +8,8 @@ ordered within each section by value for effort.
 A feature belongs here only if it obeys all of these:
 
 1. **Pay only for what you use.** If an app doesn't use it, nothing is compiled in, run, or
-   shown in help. In practice: an optional `meta` key, an optional `App` or `Config` field
-   with an inert default, or a separate module.
+   shown in help. In practice: an optional spec, flag, or key option, an optional `App` or
+   `Config` field with an inert default, or a separate module.
 2. **No new dependencies.** Standard library only. OS services live in `sys`; network
    calls are thin, explicit functions there, never part of `cli`, `cfg`, or `tui`.
 3. **No hidden work.** No threads, timers, or I/O the caller did not ask for. "Watch" and

@@ -60,7 +60,9 @@ pub const Settings = struct {
 /// What the settings must be, checked when they are decoded.
 pub const repo_settings = cfg.settings(Settings, field.Set(.{
     field.Spec(Settings){ .fields = .{ .depth = .{ .checks = &.{ .min(1), .max(16) } } } },
-    field.Spec(Settings.Fetch){ .fields = .{ .concurrency = .{ .checks = &.{ .min(1), .max(64) } } } },
+    field.Spec(Settings.Fetch){
+        .fields = .{ .concurrency = .{ .checks = &.{ .min(1), .max(64) } } },
+    },
 }), .{});
 
 /// On every command.
@@ -68,8 +70,10 @@ const Global = struct {
     config: ?[]const u8 = null,
 };
 const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
-    .config = .{ .help = "The configuration file (default: config.toml in the user's configuration " ++
-        "directory for repos)" },
+    .config = .{
+        .help = "The configuration file (default: config.toml in the user's " ++
+            "configuration directory for repos)",
+    },
 } }}), .{ .fields = .{
     .config = .{ .short = 'c', .env = "REPOS_CONFIG", .value_name = "file" },
 } });

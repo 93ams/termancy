@@ -10,6 +10,13 @@ const keys = sys.ssh.keys;
 const mnemonic = sys.mnemonic;
 const Io = std.Io;
 
+/// What every `--passphrase` means; each command spells it the same.
+const passphrase_spec: field.Field([]const u8) = .{
+    .help = "Encrypt (or decrypt) the key with this passphrase; better given through " ++
+        "$TERMANCY_PASSPHRASE",
+    .secret = true,
+};
+
 const KeygenFlags = struct {
     file: []const u8 = "id_ed25519",
     comment: ?[]const u8 = null,
@@ -20,8 +27,7 @@ const KeygenFlags = struct {
 const keygen_flags = cli.flags(KeygenFlags, field.Set(.{field.Spec(KeygenFlags){ .fields = .{
     .file = .{ .help = "Where to write the private key (the public one gets .pub)" },
     .comment = .{ .help = "The key's comment (default: user@host)" },
-    .passphrase = .{ .help = "Encrypt (or decrypt) the key with this passphrase; better given through " ++
-        "$TERMANCY_PASSPHRASE", .secret = true },
+    .passphrase = passphrase_spec,
     .rounds = .{ .help = "bcrypt rounds for the passphrase", .checks = &.{.min(1)} },
     .force = .{ .help = "Replace a key already there" },
 } }}), .{ .fields = .{
@@ -35,8 +41,7 @@ const FileFlags = struct {
     passphrase: []const u8 = "",
 };
 const file_flags = cli.flags(FileFlags, field.Set(.{field.Spec(FileFlags){ .fields = .{
-    .passphrase = .{ .help = "Encrypt (or decrypt) the key with this passphrase; better given through " ++
-        "$TERMANCY_PASSPHRASE", .secret = true },
+    .passphrase = passphrase_spec,
 } }}), .{ .fields = .{
     .passphrase = .{ .env = "TERMANCY_PASSPHRASE" },
 } });
@@ -50,8 +55,7 @@ const RestoreFlags = struct {
 const restore_flags = cli.flags(RestoreFlags, field.Set(.{field.Spec(RestoreFlags){ .fields = .{
     .file = .{ .help = "Where to write the private key (the public one gets .pub)" },
     .comment = .{ .help = "The key's comment" },
-    .passphrase = .{ .help = "Encrypt (or decrypt) the key with this passphrase; better given through " ++
-        "$TERMANCY_PASSPHRASE", .secret = true },
+    .passphrase = passphrase_spec,
     .force = .{ .help = "Replace a key already there" },
 } }}), .{ .fields = .{
     .file = .{ .short = 'f' },
@@ -67,8 +71,7 @@ const SignFlags = struct {
 const sign_flags = cli.flags(SignFlags, field.Set(.{field.Spec(SignFlags){ .fields = .{
     .key = .{ .help = "The private key to sign with" },
     .namespace = .{ .help = "What the signature is for (file, git, email...)" },
-    .passphrase = .{ .help = "Encrypt (or decrypt) the key with this passphrase; better given through " ++
-        "$TERMANCY_PASSPHRASE", .secret = true },
+    .passphrase = passphrase_spec,
 } }}), .{ .fields = .{
     .key = .{ .short = 'k' },
     .namespace = .{ .short = 'n' },
@@ -104,8 +107,7 @@ const run_flags = cli.flags(RunFlags, field.Set(.{field.Spec(RunFlags){ .fields 
     .known_hosts = .{ .help = "The host keys to trust (default: ~/.ssh/known_hosts)" },
     .accept_new = .{ .help = "Trust and record the key of a host not yet known; a " ++
         "changed key is still refused" },
-    .passphrase = .{ .help = "Encrypt (or decrypt) the key with this passphrase; better given through " ++
-        "$TERMANCY_PASSPHRASE", .secret = true },
+    .passphrase = passphrase_spec,
 } }}), .{ .fields = .{
     .identity = .{ .short = 'i' },
     .port = .{ .short = 'p' },

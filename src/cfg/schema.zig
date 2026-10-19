@@ -128,7 +128,11 @@ fn object(
         try describe(field_spec, arena, &property);
         if (attrs.default_value_ptr) |ptr| {
             const default = @as(*const Field, @ptrCast(@alignCast(ptr))).*;
-            const encoded = try decoding.encodeAs(settings_.settings(Field, S, .{}), arena, default);
+            const encoded = try decoding.encodeAs(
+                settings_.settings(Field, S, .{}),
+                arena,
+                default,
+            );
             if (encoded != .null) try property.table.put(arena, "default", encoded);
         } else if (@typeInfo(Field) != .optional and !settings_.isTable(Field)) {
             try required.append(arena, .{ .string = key });
@@ -207,10 +211,22 @@ fn constrain(about: field.About, arena: Allocator, target: *Value) decoding.Enco
         .min => |b| if (b.number) |n| try target.table.put(arena, "minimum", boundValue(n)),
         .max => |b| if (b.number) |n| try target.table.put(arena, "maximum", boundValue(n)),
         .min_len => |n| try target.table.put(arena, if (target.table.get("type") != null and
-            std.mem.eql(u8, target.table.get("type").?.string, "array")) "minItems" else "minLength", .{ .int = @intCast(n) }),
+            std.mem.eql(
+                u8,
+                target.table.get("type").?.string,
+                "array",
+            )) "minItems" else "minLength", .{ .int = @intCast(n) }),
         .max_len => |n| try target.table.put(arena, if (target.table.get("type") != null and
-            std.mem.eql(u8, target.table.get("type").?.string, "array")) "maxItems" else "maxLength", .{ .int = @intCast(n) }),
-        .one_of => |choices| try target.table.put(arena, "enum", try decoding.encode(arena, choices)),
+            std.mem.eql(
+                u8,
+                target.table.get("type").?.string,
+                "array",
+            )) "maxItems" else "maxLength", .{ .int = @intCast(n) }),
+        .one_of => |choices| try target.table.put(
+            arena,
+            "enum",
+            try decoding.encode(arena, choices),
+        ),
         .glob => |pattern| try target.table.put(
             arena,
             "pattern",
@@ -754,8 +770,14 @@ test "schema for nested and optional structs, slices of structs, and renames" {
         level: enum { low, high } = .low,
         tls_verify: bool = true,
     };
-    const specs = field.Set(.{field.Spec(Plain){ .fields = .{ .tls_verify = .{ .help = "Verify peers" } } }});
-    const T = settings_.settings(Plain, specs, .{ .fields = .{ .tls_verify = .{ .key = "tls-verify" } } });
+    const specs = field.Set(
+        .{field.Spec(Plain){ .fields = .{ .tls_verify = .{ .help = "Verify peers" } } }},
+    );
+    const T = settings_.settings(
+        Plain,
+        specs,
+        .{ .fields = .{ .tls_verify = .{ .key = "tls-verify" } } },
+    );
     try expectSchema(T,
         \\{
         \\  "$schema": "http://json-schema.org/draft-07/schema#",

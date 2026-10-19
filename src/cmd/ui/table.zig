@@ -21,7 +21,9 @@ pub const Flags = struct {
 };
 const flags_flags = cli.flags(Flags, field_.Set(.{field_.Spec(Flags){ .fields = .{
     .separator = .{ .help = "The field separator: one character, or \\t (or tab) for TSV" },
-    .columns = .{ .help = "Column titles, comma-separated; then the first line is data, not titles" },
+    .columns = .{
+        .help = "Column titles, comma-separated; then the first line is data, not titles",
+    },
     .widths = .{ .help = "Column widths, comma-separated; 0 fits the column to its cells" },
     .border = .{ .help = "Border style: none, normal, rounded, thick, double, hidden, or ascii" },
     .height = .{ .help = "Rows shown at once" },

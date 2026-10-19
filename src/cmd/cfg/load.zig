@@ -18,14 +18,26 @@ pub const Global = struct {
     output: Output = .text,
 };
 pub const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
-    .config = .{ .help = "Config file to load; repeatable, later files win (default: discover termancy.*)" },
+    .config = .{
+        .help = "Config file to load; repeatable, later files win (default: discover termancy.*)",
+    },
     .profile = .{ .help = "Apply the profiles.<name> section" },
     .env_prefix = .{ .help = "Read key a.b from the variable <PREFIX>_A_B" },
     .set = .{ .help = "Override a value; repeatable" },
     .output = .{ .help = "Output format" },
 } }}), .{ .fields = .{
-    .config = .{ .short = 'c', .value_name = "path", .env = "TERMANCY_CONFIG", .split = ',', .complete = .from(completeConfigFiles) },
-    .profile = .{ .value_name = "name", .env = "TERMANCY_PROFILE", .complete = .from(completeProfiles) },
+    .config = .{
+        .short = 'c',
+        .value_name = "path",
+        .env = "TERMANCY_CONFIG",
+        .split = ',',
+        .complete = .from(completeConfigFiles),
+    },
+    .profile = .{
+        .value_name = "name",
+        .env = "TERMANCY_PROFILE",
+        .complete = .from(completeProfiles),
+    },
     .env_prefix = .{ .value_name = "prefix" },
     .set = .{ .value_name = "key=value" },
     .output = .{ .short = 'o' },
@@ -188,7 +200,10 @@ pub fn targetFile(ctx: *cli.Context, global: Global) ![]const u8 {
     var config: cfg.Config = .init(ctx.gpa);
     defer config.deinit();
     config.useEnv(ctx.environ);
-    const found = try config.findFile(ctx.io, .{ .name = "termancy", .dirs = &search_dirs }) orelse {
+    const found = try config.findFile(
+        ctx.io,
+        .{ .name = "termancy", .dirs = &search_dirs },
+    ) orelse {
         return ctx.fail("no config file found; pass --config <path>", .{});
     };
     ctx.log(.debug, "found {s}", .{found});

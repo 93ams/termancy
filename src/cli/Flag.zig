@@ -67,7 +67,11 @@ about: []const field_.About = &.{},
 /// is invalid to `w`, sets `about` when a built-in check failed, and returns
 /// `error.Invalid`. Null when the field has no checks. Run on each value given, and on an
 /// answer to a prompt; checks across fields wait for `Command.check`.
-validate: ?*const fn (text: []const u8, w: *std.Io.Writer, about: *?field_.About) field_.Error!void = null,
+validate: ?*const fn (
+    text: []const u8,
+    w: *std.Io.Writer,
+    about: *?field_.About,
+) field_.Error!void = null,
 /// For a flag of a choice's variant (`--storage-s3-bucket`): the flag naming the choice
 /// (`storage`, its long name) and the variant (`s3`). Naming another variant there is an
 /// error.

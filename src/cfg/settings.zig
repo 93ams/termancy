@@ -79,7 +79,9 @@ pub fn PlaceFields(comptime T: type) type {
 /// A settings type: `T`, what its fields mean (`S`, a `field.Set`), and how they are
 /// spelled (`keys`). Pass it wherever `cfg` takes a type to decode, encode, or describe.
 pub fn settings(comptime T: type, comptime S: type, comptime keys: Keys(T)) type {
-    if (comptime !field.isSet(S)) @compileError("cfg.settings: " ++ @typeName(S) ++ " is not a field.Set");
+    if (comptime !field.isSet(S)) {
+        @compileError("cfg.settings: " ++ @typeName(S) ++ " is not a field.Set");
+    }
     return struct {
         pub const is_cfg_settings = true;
         pub const Type = T;
@@ -238,7 +240,11 @@ pub fn sourcesOf(
     };
 }
 
-fn collectPathsOf(comptime T: type, comptime path: []const u8, comptime out: *[]const []const u8) void {
+fn collectPathsOf(
+    comptime T: type,
+    comptime path: []const u8,
+    comptime out: *[]const []const u8,
+) void {
     const C = field.Unwrap(T);
     for (field.fieldNames(C), field.fieldTypes(C)) |name, F| {
         if (isChoice(C) and F == void) continue;
@@ -252,7 +258,9 @@ fn collectPathsOf(comptime T: type, comptime path: []const u8, comptime out: *[]
 /// `APP_SERVER_PORT` for prefix `APP` and key `server.port`, as `path.toEnvName` does.
 fn envName(comptime prefix: []const u8, comptime key: []const u8) []const u8 {
     var out: []const u8 = "";
-    for (prefix ++ "_" ++ key) |c| out = out ++ .{if (std.ascii.isAlphanumeric(c)) std.ascii.toUpper(c) else '_'};
+    for (prefix ++ "_" ++ key) |c| {
+        out = out ++ .{if (std.ascii.isAlphanumeric(c)) std.ascii.toUpper(c) else '_'};
+    }
     return out;
 }
 
@@ -365,7 +373,10 @@ test "keys, secrets, variables, and appends follow places and specs" {
 test sourcesOf {
     const sources = comptime sourcesOf(example, .{ .file = "app.toml", .env_prefix = "APP" });
     try testing.expectEqualStrings("public.host", sources[0][0]);
-    try testing.expectEqualStrings("public.address in app.toml, $APP_PUBLIC_ADDRESS", sources[0][1]);
+    try testing.expectEqualStrings(
+        "public.address in app.toml, $APP_PUBLIC_ADDRESS",
+        sources[0][1],
+    );
     try testing.expectEqualStrings("public.port in app.toml, $PORT", sources[1][1]);
 }
 

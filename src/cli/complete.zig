@@ -686,7 +686,11 @@ const test_root = spec.command(.{
         const T = struct {
             output: enum { text, json } = .text,
         };
-        break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .output = .{ .help = "Output format" } } }}), .{ .fields = .{ .output = .{ .short = 'o' } } });
+        break :flags sets.flags(
+            T,
+            field.Set(.{field.Spec(T){ .fields = .{ .output = .{ .help = "Output format" } } }}),
+            .{ .fields = .{ .output = .{ .short = 'o' } } },
+        );
     },
     .subcommands = .{
         spec.command(.{
@@ -774,7 +778,9 @@ test "a bundle ending in a flag that takes a value completes the value" {
         .flags = sets.flags(struct {
             verbose: bool = false,
             output: enum { text, json } = .text,
-        }, field.none, .{ .fields = .{ .verbose = .{ .short = 'v' }, .output = .{ .short = 'o' } } }),
+        }, field.none, .{
+            .fields = .{ .verbose = .{ .short = 'v' }, .output = .{ .short = 'o' } },
+        }),
         .run = noop,
     });
     var out: Writer.Allocating = .init(testing.allocator);
@@ -797,7 +803,11 @@ test "hidden flags are not offered, a shadowed one is offered once" {
                 const T = struct {
                     name: []const u8 = "",
                 };
-                break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .name = .{ .help = "Sub name" } } }}), .{});
+                break :flags sets.flags(
+                    T,
+                    field.Set(.{field.Spec(T){ .fields = .{ .name = .{ .help = "Sub name" } } }}),
+                    .{},
+                );
             },
             .run = noop,
         })},
@@ -816,7 +826,13 @@ test "deprecated commands and flags are not offered" {
                 colour: bool = false,
                 color: bool = false,
             };
-            break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .colour = .{ .deprecated = "use --color" } } }}), .{});
+            break :flags sets.flags(
+                T,
+                field.Set(
+                    .{field.Spec(T){ .fields = .{ .colour = .{ .deprecated = "use --color" } } }},
+                ),
+                .{},
+            );
         },
         .subcommands = .{
             spec.command(.{ .name = "remove", .deprecated = "use delete", .run = noop }),

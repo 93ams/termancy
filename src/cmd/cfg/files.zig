@@ -584,7 +584,10 @@ const SecretFlags = struct {
     passphrase: []const u8,
 };
 const secret_flags = cli.flags(SecretFlags, field.Set(.{field.Spec(SecretFlags){ .fields = .{
-    .passphrase = .{ .help = "The passphrase; better given through the environment than here", .secret = true },
+    .passphrase = .{
+        .help = "The passphrase; better given through the environment than here",
+        .secret = true,
+    },
 } }}), .{ .fields = .{
     .passphrase = .{ .env = "TERMANCY_PASSPHRASE", .prompt = "Passphrase", .hidden = true },
 } });

@@ -245,7 +245,9 @@ test "init, then add twice" {
     try testing.expectEqualStrings("", init.err);
     try testing.expectEqual(0, init.status);
 
-    const leaf = try termancy(&.{ "cli", "add", "-C", project_dir, "config", "get", "-f", "raw:bool" });
+    const leaf = try termancy(
+        &.{ "cli", "add", "-C", project_dir, "config", "get", "-f", "raw:bool" },
+    );
     defer leaf.deinit();
     try testing.expectEqualStrings("", leaf.err);
     try testing.expectEqualStrings(
@@ -254,7 +256,9 @@ test "init, then add twice" {
             "updated " ++ project_dir ++ "/src/main.zig\n",
         leaf.out,
     );
-    const sibling = try termancy(&.{ "cli", "add", "-C", project_dir, "config", "set", "--args", "2" });
+    const sibling = try termancy(
+        &.{ "cli", "add", "-C", project_dir, "config", "set", "--args", "2" },
+    );
     defer sibling.deinit();
     try testing.expectEqual(0, sibling.status);
 

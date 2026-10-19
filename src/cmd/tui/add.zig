@@ -103,7 +103,10 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
     if (!ctx.dry_run) {
         try ws.commit(ctx);
         for (removals.items) |path| ws.dir.deleteFile(ctx.io, path) catch |err| {
-            return ctx.fail("{s}: cannot remove: {s}", .{ try ws.show(ctx.arena, path), @errorName(err) });
+            return ctx.fail(
+                "{s}: cannot remove: {s}",
+                .{ try ws.show(ctx.arena, path), @errorName(err) },
+            );
         };
     }
     try ctx.out.writeAll(report.written());

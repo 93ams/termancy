@@ -16,7 +16,9 @@ const InitFlags = struct {
 };
 const init_flags = cli.flags(InitFlags, field.Set(.{field.Spec(InitFlags){ .fields = .{
     .dir = .{ .help = "Directory to create (default: the name)" },
-    .module_path = .{ .help = "Depend on a termancy checkout at this path (for offline or local work)" },
+    .module_path = .{
+        .help = "Depend on a termancy checkout at this path (for offline or local work)",
+    },
     .fetch = .{ .help = "Depend on termancy at this URL, recorded by zig fetch --save=termancy" },
     .force = .{ .help = "Write into a non-empty directory, replacing files" },
 } }}), .{ .fields = .{
@@ -85,7 +87,10 @@ fn run(ctx: *cli.Context, flags: InitFlags) !void {
     for (files) |file| try writeFile(ctx, dir, dir_path, file[0], file[1], flags.force);
     if (flags.fetch) |url| try fetch(ctx, dir_path, url);
     if (flags.module_path == null and flags.fetch == null) {
-        try ctx.out.print("next: cd {s}" ++ then ++ "zig fetch --save=termancy <url of termancy>\n", .{dir_path});
+        try ctx.out.print(
+            "next: cd {s}" ++ then ++ "zig fetch --save=termancy <url of termancy>\n",
+            .{dir_path},
+        );
     } else {
         try ctx.out.print("next: cd {s}" ++ then ++ "zig build run -- --help\n", .{dir_path});
     }

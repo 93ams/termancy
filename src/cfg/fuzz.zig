@@ -1121,7 +1121,13 @@ fn expectDecode(arena: Allocator, format: Format, doc: []const u8, strict: bool,
         .strict = strict,
         .errors = if (seed & 1 == 0) &errors else null,
     };
-    const decoded = decoding.decode(sample_settings, arena, tree, options, &diag) catch |err| switch (err) {
+    const decoded = decoding.decode(
+        sample_settings,
+        arena,
+        tree,
+        options,
+        &diag,
+    ) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => {
             if (diag.message.len == 0) {
@@ -1136,7 +1142,13 @@ fn expectDecode(arena: Allocator, format: Format, doc: []const u8, strict: bool,
         error.Unrepresentable => return true,
         else => return err,
     };
-    const again = decoding.decode(sample_settings, arena, encoded, .{ .strict = true }, &diag) catch |err| {
+    const again = decoding.decode(
+        sample_settings,
+        arena,
+        encoded,
+        .{ .strict = true },
+        &diag,
+    ) catch |err| {
         report(format, seed, "an encoded value does not decode", doc);
         std.debug.print("{s}\n", .{diag.message});
         return err;

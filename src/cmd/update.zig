@@ -516,7 +516,10 @@ test "--yes downloads, verifies, and installs" {
     try testing.expectEqualStrings("✓ look up the latest release\n✓ download " ++ asset_name ++
         "\n✓ verify the checksum\n✓ install\n", t.err.written());
     var buffer: [64]u8 = undefined;
-    try testing.expectEqualStrings(new_binary, try tmp.dir.readFile(testing.io, "termancy", &buffer));
+    try testing.expectEqualStrings(
+        new_binary,
+        try tmp.dir.readFile(testing.io, "termancy", &buffer),
+    );
 }
 
 test "a corrupted download is not installed" {

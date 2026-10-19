@@ -19,7 +19,9 @@ const init_flags = cli.flags(InitFlags, field.Set(.{field.Spec(InitFlags){ .fiel
     .dir = .{ .help = "Where components go, relative to the project" },
     .project = .{ .help = "The project directory" },
     .wire = .{ .help = "Add the tui module to a build.zig made by termancy cli init" },
-    .dependency = .{ .help = "Add termancy as a dependency (zig fetch --save=termancy) and wire build.zig" },
+    .dependency = .{
+        .help = "Add termancy as a dependency (zig fetch --save=termancy) and wire build.zig",
+    },
 } }}), .{ .fields = .{
     .dir = .{ .value_name = "path" },
     .project = .{ .short = 'C', .value_name = "path" },
@@ -178,7 +180,10 @@ fn makeDir(ctx: *cli.Context, ws: *Workspace, dir: []const u8) !void {
     };
     ws.dir.access(ctx.io, dir, .{}) catch {
         ws.dir.createDirPath(ctx.io, dir) catch |err| {
-            return ctx.fail("{s}: cannot create: {s}", .{ try ws.show(ctx.arena, dir), @errorName(err) });
+            return ctx.fail(
+                "{s}: cannot create: {s}",
+                .{ try ws.show(ctx.arena, dir), @errorName(err) },
+            );
         };
         const shown = try ws.show(ctx.arena, try std.fmt.allocPrint(ctx.arena, "{s}/", .{dir}));
         try ctx.out.print("created {s}\n", .{shown});

@@ -62,7 +62,10 @@ fn spin(ctx: *cli.Context) !void {
     display.io = ctx.io;
     try display.draw(.now(ctx.io, .awake));
     // Without this, the check after Ctrl-C would pass whatever `term.live` did.
-    if (kernel32.cursorShown(stdout.handle)) return ctx.fail("the spinner left the cursor shown", .{});
+    if (kernel32.cursorShown(stdout.handle)) return ctx.fail(
+        "the spinner left the cursor shown",
+        .{},
+    );
     ctx.io.sleep(.fromSeconds(30), .awake) catch |err| {
         const shown = kernel32.cursorShown(stdout.handle);
         try ctx.out.writeAll(if (shown) "cursor shown\n" else "cursor hidden\n");

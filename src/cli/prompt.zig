@@ -1,8 +1,9 @@
 //! Asking for a required flag that was not given, in an interactive run: a flag with
-//! `.prompt = "Port"` in `meta` is asked for instead of being a usage error, and so is a
-//! required typed positional with one (when every missing one has). `App.prompter` does the
-//! asking; the default, `line`, reads one line. An app can draw the question with its own
-//! `tui` components instead, so `cli` itself needs nothing beyond `std`.
+//! `.prompt = "Port"` (a `cli.flags` option) is asked for instead of being a usage error,
+//! and so is a required typed positional with one (when every missing one has).
+//! `App.prompter` does the asking; the default, `line`, reads one line. An app can draw the
+//! question with its own `tui` components instead, so `cli` itself needs nothing beyond
+//! `std`.
 //!
 //! Prompting happens only when standard input and standard error are both terminals and the
 //! run is not under CI (`terminal.interactive`). A piped or scripted run gets the usual

@@ -6,8 +6,10 @@
 //! const Deploy = struct {                  // the flow's state; usually the flags struct too
 //!     env: enum { staging, production } = .staging,
 //!     migrate: bool = false,
-//!     pub const meta = .{ .migrate = .{ .help = "Run the migrations" } };
 //! };
+//! const deploy_flags = cli.flags(Deploy, field.Set(.{field.Spec(Deploy){ .fields = .{
+//!     .migrate = .{ .help = "Run the migrations" },
+//! } }}), .{});
 //! const Step = enum { where, build, ask_migrate, migrate, release };
 //!
 //! const deploy: cli.Flow(Deploy, Step) = .{ .start = .where, .steps = .{
@@ -47,8 +49,8 @@
 //!   `null`, to end). With neither, the flow ends.
 //!
 //! Fields of the state that are not settings (what the steps found, say) are marked
-//! `.internal = true` in its `meta`, so a state that is also the command's flags struct
-//! does not offer them as flags.
+//! `.internal = true` in its flag options (`cli.flags`), so a state that is also the
+//! command's flags struct does not offer them as flags.
 //!
 //! The graph is checked when it is compiled: steps are an enum, so every target exists,
 //! and a question names a field the state has, of a type that can be asked. A loop is

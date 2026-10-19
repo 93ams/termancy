@@ -9,6 +9,31 @@ git history.
 
 ### Breaking
 
+- **`pub const meta` is gone; what a field means and how it is spelled are separate:** what
+  a field means (help, `secret`, `deprecated`, and checks) is a `field.Spec`, in the new
+  `field` library that `cli` and `cfg` both import, keyed by type so one spec covers every
+  place a type occurs. How it is spelled comes per place from `cli.flags(T, Specs, options)`
+  and `cli.args(T, Specs, options)` (short, name, env, count, split, prompt, completion with
+  `.complete = .from(fn)`, requires, internal) and from `cfg.settings(T, Specs, keys)` (key,
+  renamed_from, env, merge). `.min`, `.max`, `.min_len`, `.max_len`, `.one_of`, and
+  `.pattern` are checks: `.checks = &.{ .min(1), .max(64) }`, `.oneOf(...)`, `.glob(...)`,
+  `.each` for a list's elements, and `.from(fn)` for any rule of your own. A flags struct's
+  `validate(flags, ctx)` and a settings struct's `validate(self)` become `Spec(T).checks`.
+- **Flag groups move into the flag set:** a command's `.exclusive`, `.together`, and
+  `.one_required` are `cli.flags` options naming fields (`.exclusive = &.{&.{ .json, .yaml }}`),
+  checked at compile time.
+- **A flag's configuration key is its field's path:** the `.key` option is gone. A flag in a
+  group (`fetch: struct { concurrency: u8 }`, `--concurrency` with the group's prefix
+  dropped) or below a command's `.settings` carries its path to `Config.bindFlags`, which
+  follows keys a settings type renamed; `bindFlags` now leaves out every record whose key
+  the configuration does not know (`setFlag` still sets any).
+- `Config.setDefaults` takes the settings type first: `config.setDefaults(Settings, .{})`.
+- A command's checks across its flags' fields run before its hooks (`Command.check`), and
+  report every failure; a single value's checks run as it is parsed. Checks only run on
+  values given: a default that fails its own checks is no longer an error.
+- A nested struct in a settings type without a default decodes from its fields' defaults
+  when its table is missing, instead of being a missing key.
+
 - **snek is now termancy, and the `platform` library is `sys`:** the program, the package
   (`.termancy` in `build.zig.zon`, with a new fingerprint), the repository URL, release
   archives (`termancy-<os>-<cpu>`), configuration files and directories (`termancy.toml`,
@@ -117,6 +142,25 @@ git history.
   quote lines of encrypted files.
 
 ### Added
+
+- **`field`:** specs and checks (`min`, `max` on numbers or any type with `order`, `minLen`,
+  `maxLen`, `oneOf`, `glob`, `from`) that describe themselves for help, docs, schemas, and
+  completion; typed field paths; "did you mean" (the one edit distance `cli` and `cfg` share).
+- **Nested flags and choices:** a struct field is a group of prefixed flags
+  (`--public-port`); a tagged union is a choice (`--storage s3`, `--storage-s3-bucket`), with
+  a variant's flag and another variant's name together an error. `cfg` decodes a choice from
+  a string naming the variant or a one-key table holding it, and writes it back the same way.
+- **`.settings` on a command:** a field of the flags read from configuration too, filled by a
+  loader, never required on the command line, with help saying where else each value can be
+  set (`cfg.sourcesOf`). `ctx.configError` exits 78 (`App.exit_config`), `ctx.settingsAsker`
+  with `Config.askWith` asks for a missing required key at a terminal, and `ctx.flagKeys`
+  with `Config.nameFlags` makes a missing key's message name its flag
+  (`set it in a file, $APP_TOKEN, or --token`).
+- `cfg` warns about a key set twice in one JSON, `.env`, or INI file; a failed check across
+  a table's fields names the fields that took their defaults; an invalid enum or variant
+  name gets "did you mean".
+- `cli` messages for a failed check (`must match`, a check's own words, the check pass's)
+  in every language.
 
 - **`cfg`:** `DecodeOptions.warn_unknown` reports keys no field claims as warnings, at the
   file and line that set them, with "did you mean" for a close field; strict-mode and schema

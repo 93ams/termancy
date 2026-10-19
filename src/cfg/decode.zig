@@ -283,10 +283,19 @@ const Decoder = struct {
         var failed = false;
         // Which fields took their defaults: named when a check across fields fails.
         var defaulted: [info.field_names.len]bool = @splat(false);
-        inline for (info.field_names, info.field_types, info.field_attrs, 0..) |name, Field, attrs, i| {
+        inline for (
+            info.field_names,
+            info.field_types,
+            info.field_attrs,
+            0..,
+        ) |name, Field, attrs, i| {
             const field_place = @field(place.fields, name);
             const field_spec = @field(spec.fields, name);
-            const child_key = try path.join(d.arena, key, comptime settings_.keyOf(field_place, name));
+            const child_key = try path.join(
+                d.arena,
+                key,
+                comptime settings_.keyOf(field_place, name),
+            );
             if (try d.findOrRenamed(field_place, name, value.table, key, child_key)) |found| {
                 const child = found.value;
                 // Problems name the key the value is under, the old one when it was renamed.
@@ -312,7 +321,13 @@ const Decoder = struct {
                 @field(result, name) = null;
             } else if (comptime settings_.isTable(Field)) {
                 // A table whose own fields all have defaults may be left out.
-                @field(result, name) = d.any(Field, S, field_place, .empty_table, child_key) catch |err| blk: {
+                @field(result, name) = d.any(
+                    Field,
+                    S,
+                    field_place,
+                    .empty_table,
+                    child_key,
+                ) catch |err| blk: {
                     if (!d.recover(err)) return err;
                     failed = true;
                     break :blk undefined;
@@ -330,7 +345,13 @@ const Decoder = struct {
         };
         // Checks across fields need every field decoded.
         if (!failed) inline for (spec.checks) |c| {
-            d.runCheck(T, c, result, key, defaultsNote(T, &defaulted, value.table.count() > 0)) catch |err| {
+            d.runCheck(
+                T,
+                c,
+                result,
+                key,
+                defaultsNote(T, &defaulted, value.table.count() > 0),
+            ) catch |err| {
                 if (!d.recover(err)) return err;
             };
         };
@@ -366,11 +387,14 @@ const Decoder = struct {
                 var found: ?[]const u8 = null;
                 inline for (names, keys) |name, variant_key| {
                     if (findKey(t, variant_key)) |payload| {
-                        if (found) |other| return d.fail(key, error.InvalidValue, try std.fmt.allocPrint(
-                            d.arena,
-                            "set only one of {s} and {s}",
-                            .{ other, variant_key },
-                        ));
+                        if (found) |other| {
+                            const message = try std.fmt.allocPrint(
+                                d.arena,
+                                "set only one of {s} and {s}",
+                                .{ other, variant_key },
+                            );
+                            return d.fail(key, error.InvalidValue, message);
+                        }
                         found = variant_key;
                         const at = try path.join(d.arena, key, variant_key);
                         chosen = try d.variant(U, S, place, name, payload, at, &failed);
@@ -568,7 +592,12 @@ fn DefaultsNote(comptime T: type) type {
             if (!note.present) return;
             const info = @typeInfo(T).@"struct";
             var first = true;
-            inline for (info.field_names, info.field_types, info.field_attrs, 0..) |name, F, attrs, i| {
+            inline for (
+                info.field_names,
+                info.field_types,
+                info.field_attrs,
+                0..,
+            ) |name, F, attrs, i| {
                 if (note.defaulted[i] and comptime isScalar(F)) {
                     const default = comptime defaultOf(F, attrs).?;
                     try w.writeAll(if (first) " (defaults: " else ", ");
@@ -589,7 +618,12 @@ fn isScalar(comptime F: type) bool {
     };
 }
 
-fn writeScalar(comptime F: type, value: F, name: []const u8, w: *std.Io.Writer) std.Io.Writer.Error!void {
+fn writeScalar(
+    comptime F: type,
+    value: F,
+    name: []const u8,
+    w: *std.Io.Writer,
+) std.Io.Writer.Error!void {
     switch (@typeInfo(F)) {
         .@"enum" => try w.print("{s} = {s}", .{ name, @tagName(value) }),
         .pointer => try w.print("{s} = \"{s}\"", .{ name, value }),
@@ -674,7 +708,11 @@ fn encodeStruct(comptime place: anytype, arena: Allocator, value: anytype) Encod
             @field(place.fields, name)
         else
             settings_.Place(Field){};
-        if (!skip) try table.put(arena, comptime settings_.keyOf(field_place, name), try encodeAt(field_place, arena, f));
+        if (!skip) try table.put(
+            arena,
+            comptime settings_.keyOf(field_place, name),
+            try encodeAt(field_place, arena, f),
+        );
     }
     return .{ .table = table };
 }
@@ -747,7 +785,12 @@ const Server = struct {
     tls_verify: bool = true,
 };
 
-fn decodeJson(comptime T: type, arena: Allocator, source: []const u8, diag: ?*Diagnostic) !settings_.Of(T).Type {
+fn decodeJson(
+    comptime T: type,
+    arena: Allocator,
+    source: []const u8,
+    diag: ?*Diagnostic,
+) !settings_.Of(T).Type {
     return decode(T, arena, try json.parse(arena, source, null), .{}, diag);
 }
 
@@ -875,7 +918,11 @@ test "keys rename fields" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const T = struct { cert: []const u8 };
-    const keyed = settings_.settings(T, field.none, .{ .fields = .{ .cert = .{ .key = "certificate" } } });
+    const keyed = settings_.settings(
+        T,
+        field.none,
+        .{ .fields = .{ .cert = .{ .key = "certificate" } } },
+    );
     const t = try decodeJson(keyed, arena.allocator(), "{\"certificate\": \"x\"}", null);
     try testing.expectEqualStrings("x", t.cert);
 }
@@ -1148,7 +1195,11 @@ test "structs: required, optional, defaults, nesting, strictness" {
         list: []const Inner = &.{},
         renamed: bool = false,
     };
-    const outer = settings_.settings(Outer, field.none, .{ .fields = .{ .renamed = .{ .key = "is-renamed" } } });
+    const outer = settings_.settings(
+        Outer,
+        field.none,
+        .{ .fields = .{ .renamed = .{ .key = "is-renamed" } } },
+    );
     const empty = try decode(outer, a, .empty_table, .{ .strict = true }, null);
     try testing.expectEqual(1, empty.inner.x);
     try testing.expectEqual(null, empty.maybe);
@@ -1357,7 +1408,8 @@ test "checks on values and across fields" {
         .{
             "{\"low\": 5, \"high\": 1}",
             "(root)",
-            "low must not exceed high (defaults: port = 8080, level = \"info\", host = \"a.example.com\")",
+            "low must not exceed high (defaults: port = 8080, level = \"info\", " ++
+                "host = \"a.example.com\")",
         },
     };
     for (cases) |case| {
@@ -1506,7 +1558,9 @@ test "a choice from its name or from a table naming it" {
     const table = try decodeJson(T, a, "{\"storage\": {\"s3\": {\"bucket\": \"b\"}}}", null);
     try testing.expectEqualStrings("b", table.storage.s3.bucket);
     try testing.expect((try decodeJson(T, a, "{}", null)).storage == .memory);
-    try testing.expect((try decodeJson(T, a, "{\"storage\": \"MEMORY\"}", null)).storage == .memory);
+    try testing.expect(
+        (try decodeJson(T, a, "{\"storage\": \"MEMORY\"}", null)).storage == .memory,
+    );
 
     var diag: Diagnostic = .{};
     const cases = [_]struct { []const u8, anyerror, []const u8, []const u8 }{
@@ -1516,7 +1570,12 @@ test "a choice from its name or from a table naming it" {
             "storage",
             "expected one of: disk, s3, memory; did you mean 's3'?",
         },
-        .{ "{\"storage\": \"s3\"}", error.MissingField, "storage.s3.bucket", "required key is missing" },
+        .{
+            "{\"storage\": \"s3\"}",
+            error.MissingField,
+            "storage.s3.bucket",
+            "required key is missing",
+        },
         .{
             "{\"storage\": {\"disk\": {}, \"s3\": {}}}",
             error.InvalidValue,
@@ -1537,7 +1596,10 @@ test "a choice encodes as its name, or a table naming it" {
     defer arena.deinit();
     const a = arena.allocator();
     const T = struct { storage: Storage };
-    try testing.expectEqualStrings("memory", (try encode(a, T{ .storage = .memory })).lookup("storage").?.string);
+    try testing.expectEqualStrings(
+        "memory",
+        (try encode(a, T{ .storage = .memory })).lookup("storage").?.string,
+    );
     const s3 = try encode(a, T{ .storage = .{ .s3 = .{ .bucket = "b" } } });
     try testing.expectEqualStrings("b", s3.lookup("storage.s3.bucket").?.string);
     const back = try decode(T, a, s3, .{ .strict = true }, null);
@@ -1550,7 +1612,9 @@ test "checks on a choice's variants, by type" {
     const a = arena.allocator();
     const T = struct { storage: Storage = .memory };
     const S3 = @FieldType(Storage, "s3");
-    const specs = field.Set(.{field.Spec(S3){ .fields = .{ .bucket = .{ .checks = &.{.minLen(3)} } } }});
+    const specs = field.Set(
+        .{field.Spec(S3){ .fields = .{ .bucket = .{ .checks = &.{.minLen(3)} } } }},
+    );
     var diag: Diagnostic = .{};
     try testing.expectError(error.InvalidValue, decodeJson(
         settings_.settings(T, specs, .{}),
@@ -1567,6 +1631,12 @@ test "an enum name close to a choice is suggested" {
     defer arena.deinit();
     var diag: Diagnostic = .{};
     const Level = enum { debug, info, warn };
-    try testing.expectError(error.InvalidValue, decode(Level, arena.allocator(), .{ .string = "wran" }, .{}, &diag));
-    try testing.expectEqualStrings("expected one of: debug, info, warn; did you mean 'warn'?", diag.message);
+    try testing.expectError(
+        error.InvalidValue,
+        decode(Level, arena.allocator(), .{ .string = "wran" }, .{}, &diag),
+    );
+    try testing.expectEqualStrings(
+        "expected one of: debug, info, warn; did you mean 'warn'?",
+        diag.message,
+    );
 }

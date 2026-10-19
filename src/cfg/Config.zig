@@ -1159,7 +1159,12 @@ pub fn bindFlags(config: *Config, records: anytype, options: BindOptions) SetErr
     try config.bindRecords(records, options, config.known_keys.count() > 0);
 }
 
-fn bindRecords(config: *Config, records: anytype, options: BindOptions, filter: bool) SetError!void {
+fn bindRecords(
+    config: *Config,
+    records: anytype,
+    options: BindOptions,
+    filter: bool,
+) SetError!void {
     const a = config.arena.allocator();
     var flags: Value = .empty_table;
     for (records) |record| {
@@ -1297,7 +1302,7 @@ pub fn markSecret(config: *Config, key_path: []const u8) Allocator.Error!void {
     try config.secrets.put(a, try a.dupe(u8, key_path), {});
 }
 
-/// Whether `key_path` was marked secret, by `markSecret` or a struct's `meta`.
+/// Whether `key_path` was marked secret, by `markSecret` or a settings type's specs.
 pub fn isSecret(config: *const Config, key_path: []const u8) bool {
     if (config.secrets.contains(key_path)) return true;
     if (!config.case_insensitive) return false;
@@ -2003,7 +2008,10 @@ fn hintMissing(config: *Config, a: Allocator, d: *Diagnostic) Allocator.Error!vo
     if (config.env_bindings.get(d.key)) |name| {
         try ways.append(a, try std.mem.concat(a, u8, &.{ "$", name }));
     } else if (config.automatic_env) {
-        try ways.append(a, try std.mem.concat(a, u8, &.{ "$", try path.toEnvName(a, config.env_prefix, d.key) }));
+        try ways.append(
+            a,
+            try std.mem.concat(a, u8, &.{ "$", try path.toEnvName(a, config.env_prefix, d.key) }),
+        );
     }
     if (config.flag_names.get(d.key)) |flag| try ways.append(a, flag);
     if (ways.items.len == 0) return;
@@ -2020,23 +2028,35 @@ fn hintMissing(config: *Config, a: Allocator, d: *Diagnostic) Allocator.Error!vo
 /// A warning for each key a file sets twice, at the later one, which wins. TOML and YAML
 /// reject duplicates when parsing; JSON, `.env`, and INI keep the last, as their readers
 /// usually do, so a repeated key would otherwise go unnoticed.
-fn duplicateKeys(config: *Config, a: Allocator, warnings: *std.ArrayList(Diagnostic)) Allocator.Error!void {
+fn duplicateKeys(
+    config: *Config,
+    a: Allocator,
+    warnings: *std.ArrayList(Diagnostic),
+) Allocator.Error!void {
     for (config.files.items) |file| {
         if (file.text.len == 0) continue;
         var seen: std.StringHashMapUnmanaged(usize) = .empty;
         const Key = struct { path: []const u8, start: usize };
         var written: std.ArrayList(Key) = .empty;
         switch (file.format) {
-            .json, .jsonc => for (json.spans(a, file.text, file.format == .jsonc) catch continue) |span| {
+            .json, .jsonc => for (
+                json.spans(a, file.text, file.format == .jsonc) catch continue,
+            ) |span| {
                 if (span.kind != .field) continue;
-                try written.append(a, .{ .path = try joinSegments(a, span.path), .start = span.start });
+                try written.append(
+                    a,
+                    .{ .path = try joinSegments(a, span.path), .start = span.start },
+                );
             },
             .dotenv => for (dotenv.spans(a, file.text) catch continue) |span| {
                 try written.append(a, .{ .path = span.path, .start = span.start });
             },
             .ini => for (@import("ini.zig").spans(a, file.text) catch continue) |span| {
                 if (span.kind != .entry) continue;
-                try written.append(a, .{ .path = try joinSegments(a, span.path), .start = span.start });
+                try written.append(
+                    a,
+                    .{ .path = try joinSegments(a, span.path), .start = span.start },
+                );
             },
             .toml, .yaml, .zon => continue,
         }
@@ -3218,14 +3238,20 @@ test "decode with warn_unknown points at an unknown key and suggests a field" {
 test "a missing key's message names its variable and its flag" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    const Settings = cfg_settings.settings(struct { token: []const u8, name: []const u8 }, field.none, .{
+    const Settings = cfg_settings.settings(struct {
+        token: []const u8,
+        name: []const u8,
+    }, field.none, .{
         .fields = .{ .token = .{ .env = "APP_TOKEN" } },
     });
     const Record = struct { name: []const u8, key: ?[]const u8 = null };
     try config.nameFlags(&[_]Record{.{ .name = "token" }}, .{});
     var errors: std.ArrayList(Diagnostic) = .empty;
     var diag: Diagnostic = .{};
-    try testing.expectError(error.MissingField, config.decode(Settings, .{ .errors = &errors }, &diag));
+    try testing.expectError(
+        error.MissingField,
+        config.decode(Settings, .{ .errors = &errors }, &diag),
+    );
     try testing.expectEqualStrings(
         "required key is missing; set it in a file, $APP_TOKEN, or --token",
         errors.items[0].message,
@@ -3236,7 +3262,10 @@ test "a missing key's message names its variable and its flag" {
 test "a missing required key is asked for, by its field path" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
-    const Settings = cfg_settings.settings(struct { token: []const u8, port: u16 = 1 }, field.none, .{
+    const Settings = cfg_settings.settings(struct {
+        token: []const u8,
+        port: u16 = 1,
+    }, field.none, .{
         .fields = .{ .token = .{ .key = "api_token" } },
     });
     const Asker = struct {
@@ -3273,7 +3302,10 @@ test "a check across a table's fields points at the table in its file" {
     var buffer: [128]u8 = undefined;
     var w: Io.Writer = .fixed(&buffer);
     try w.print("{f}", .{diag});
-    try testing.expectEqualStrings("app.toml:3:1: admin: must be local (defaults: port = 80)", w.buffered());
+    try testing.expectEqualStrings(
+        "app.toml:3:1: admin: must be local (defaults: port = 80)",
+        w.buffered(),
+    );
 }
 
 test "keys set twice in a file are warned about, at the one that wins" {

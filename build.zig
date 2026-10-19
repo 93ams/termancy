@@ -612,7 +612,9 @@ pub fn build(b: *std.Build) void {
     const check = b.step("check", "Compile everything for every supported target");
     for (check_targets) |query| {
         const cross = modules(b, b.resolveTargetQuery(query), optimize, false, build_options);
-        check.dependOn(&b.addExecutable(.{ .name = "termancy", .root_module = cross.termancy }).step);
+        check.dependOn(
+            &b.addExecutable(.{ .name = "termancy", .root_module = cross.termancy }).step,
+        );
         for (cross.all()) |module| {
             check.dependOn(&b.addTest(.{ .root_module = module }).step);
         }

@@ -46,16 +46,16 @@ Highest first:
 | file | `loadFile` and the other [sources](#sources), merged in order |
 | default | `setDefault`, `setDefaults` |
 
-Tables merge deeply; anything else replaces. `setMerge(key, .append)` (or `meta.merge =
-.append`) makes lists accumulate across sources instead. `explain(key)` names the layer and the
-file, variable, or flag behind a value.
+Tables merge deeply; anything else replaces. `setMerge(key, .append)` (or a key's
+`.merge = .append`, [below](#reading)) makes lists accumulate across sources instead.
+`explain(key)` names the layer and the file, variable, or flag behind a value.
 
 Defaults can be checked at compile time: a field the struct doesn't have, or a value of the
 wrong type, is a compile error.
 
 ```zig
 const defaults: Settings = @import("defaults.zon");
-try config.setDefaults(defaults);
+try config.setDefaults(Settings, defaults);
 ```
 
 ## Sources
@@ -105,19 +105,48 @@ Reloading:
 - `cfg.migrate.run` upgrades documents through a list of versioned migrations.
 - `glob` matches keys.
 
-Struct `meta` refines decoding:
+What a struct's fields mean comes from `field` specs, shared with `cli`; how they are spelled
+in configuration comes from `cfg.settings`, per place. Every function that takes a type to
+decode, encode, or describe (`decode`, `setDefaults`, `schema.write`) takes the settings type,
+or a plain struct, every field under its own name:
 
-| meta option | |
+```zig
+const Specs = field.Set(.{field.Spec(Settings){ .fields = .{
+    .port = .{ .help = "Port to listen on", .checks = &.{ .min(1024), .max(49151) } },
+    .password = .{ .secret = true },
+    .legacy = .{ .deprecated = "set by the server now" },
+} }});
+
+const settings = cfg.settings(Settings, Specs, .{ .fields = .{
+    .tls_cert = .{ .key = "certificate" },
+    .timeout = .{ .renamed_from = "request_timeout" },
+    .plugins = .{ .merge = .append },
+    .token = .{ .env = "API_TOKEN" },
+    .server = .{ .fields = .{ .port = .{ .env = "PORT" } } }, // per place, nested
+} });
+
+const s = try config.decode(settings, .{}, &diag);
+```
+
+| spec (`field.Spec`) | |
 |---|---|
-| `.secret` | redacted when written |
 | `.help` | description, also in the schema |
-| `.key` | the key to read, when not the field name |
-| `.min`, `.max`, `.one_of`, `.pattern` | constraints |
-| `.renamed_from` | the old key still reads, with a warning |
+| `.checks`, `.each` | checks on the value and on each element: `.min`, `.max`, `.minLen`, `.maxLen`, `.oneOf`, `.glob`, `.from(fn)`; the built-in ones carry over to the schema |
+| `.secret` | redacted when written |
 | `.deprecated = "why"` | read, with a warning when set; `deprecated` in the schema too |
+| `Spec(T).checks` | checks across a struct's fields, once all of them decoded |
+
+| key (`cfg.settings`) | |
+|---|---|
+| `.key` | the key to read, when not the field name |
+| `.renamed_from` | the old key still reads, with a warning |
+| `.env` | read from this variable (`Config` binds it) |
 | `.merge` | how lists combine across sources |
 
-A struct's `validate` checks rules across fields.
+A tagged union decodes as a choice between its variants: a string naming one, which takes
+its defaults (`storage = "memory"`), or a table with one key naming it and holding its fields
+(`[storage.s3]`). When a check across a table's fields fails, the message lists the fields
+that took their defaults, which the check read without the file saying so.
 
 ## Validation and errors
 
@@ -128,9 +157,13 @@ app.toml:4:8: server.port: must be at most 65535
 ```
 
 `Diagnostic.writeSnippet` shows that line with a caret under the value, and `cfg.locate` finds
-any key in any format's text. With `Options.errors`, every problem is reported at once.
+any key in any format's text. With `Options.errors`, every problem is reported at once. A
+required key nothing set says where it can be: `set it in a file, $APP_TOKEN, or --token`
+(`nameFlags` tells the configuration the flags; `askWith` asks for it at a terminal instead).
+With `Options.warnings`, a key set twice in one JSON, `.env`, or INI file is reported too
+(TOML and YAML reject it while parsing).
 
-`cfg.schema.write(T, arena, writer)` emits JSON Schema (draft-07), and `cfg.schema.validate`
+`cfg.schema.write(settings, arena, writer)` emits JSON Schema (draft-07), and `cfg.schema.validate`
 checks an untyped tree against one.
 
 ## Writing and editing

@@ -177,8 +177,12 @@ pub const ArgPlace = struct {
 /// `field.Set`) and how they are spelled from `options`. Give it to a command's `.flags`
 /// or `.persistent_flags`; a handler takes the plain `T`.
 pub fn flags(comptime T: type, comptime S: type, comptime options: FlagOptions(T)) type {
-    if (@typeInfo(T) != .@"struct") @compileError("cli: flags must be a struct, found " ++ @typeName(T));
-    if (comptime !field.isSet(S)) @compileError("cli.flags: " ++ @typeName(S) ++ " is not a field.Set");
+    if (@typeInfo(T) != .@"struct") {
+        @compileError("cli: flags must be a struct, found " ++ @typeName(T));
+    }
+    if (comptime !field.isSet(S)) {
+        @compileError("cli.flags: " ++ @typeName(S) ++ " is not a field.Set");
+    }
     return struct {
         pub const is_flag_set = true;
         pub const Value = T;
@@ -196,8 +200,12 @@ pub fn flags(comptime T: type, comptime S: type, comptime options: FlagOptions(T
 /// are required and come first, and the last may be a list taking the remaining words.
 /// Give it to a command's `.args`; a handler takes the plain `T`.
 pub fn args(comptime T: type, comptime S: type, comptime options: ArgOptions(T)) type {
-    if (@typeInfo(T) != .@"struct") @compileError("cli: .args must be a struct type, found " ++ @typeName(T));
-    if (comptime !field.isSet(S)) @compileError("cli.args: " ++ @typeName(S) ++ " is not a field.Set");
+    if (@typeInfo(T) != .@"struct") {
+        @compileError("cli: .args must be a struct type, found " ++ @typeName(T));
+    }
+    if (comptime !field.isSet(S)) {
+        @compileError("cli.args: " ++ @typeName(S) ++ " is not a field.Set");
+    }
     return struct {
         pub const is_arg_set = true;
         pub const Value = T;
@@ -208,14 +216,18 @@ pub fn args(comptime T: type, comptime S: type, comptime options: ArgOptions(T))
 
 /// `X` as a flag set: itself, or a plain struct with no specs or options.
 pub fn FlagSet(comptime X: type) type {
-    if (@typeInfo(X) != .@"struct") @compileError("cli: flags must be a struct, found " ++ @typeName(X));
+    if (@typeInfo(X) != .@"struct") {
+        @compileError("cli: flags must be a struct, found " ++ @typeName(X));
+    }
     if (@hasDecl(X, "is_flag_set")) return X;
     return flags(X, field.none, .{});
 }
 
 /// `X` as a positional set: itself, or a plain struct with no specs or options.
 pub fn ArgSet(comptime X: type) type {
-    if (@typeInfo(X) != .@"struct") @compileError("cli: .args must be a struct type, found " ++ @typeName(X));
+    if (@typeInfo(X) != .@"struct") {
+        @compileError("cli: .args must be a struct type, found " ++ @typeName(X));
+    }
     if (@hasDecl(X, "is_arg_set")) return X;
     return args(X, field.none, .{});
 }
@@ -242,7 +254,11 @@ fn build(comptime T: type, comptime S: type, comptime options: FlagOptions(T)) B
     }
 }
 
-fn nameAt(comptime all: []const Flag, comptime path: []const u8, comptime who: []const u8) []const u8 {
+fn nameAt(
+    comptime all: []const Flag,
+    comptime path: []const u8,
+    comptime who: []const u8,
+) []const u8 {
     for (all) |f| if (std.mem.eql(u8, f.field, path)) return f.name;
     @compileError("cli: --" ++ who ++ " requires " ++ path ++ ", which is not a flag");
 }
@@ -321,17 +337,20 @@ fn collect(
                 const vprefix = prefixed(long, vplace.name orelse text.kebab(vn));
                 const vpath = join(sub, vn);
                 out.groups = out.groups ++ .{Group{ .path = vpath, .prefix = vprefix }};
-                collect(Root, P, S, vplace.fields, vprefix, vpath, long, vn, hide or vplace.hidden, out);
+                const vhide = hide or vplace.hidden;
+                collect(Root, P, S, vplace.fields, vprefix, vpath, long, vn, vhide, out);
             }
             continue;
         }
         const list = field.isList(C);
         const Elem = values.Element(F);
         if (place.count and @typeInfo(C) != .int) {
-            @compileError("cli: --" ++ long ++ ": .count needs an integer field, found " ++ @typeName(F));
+            @compileError("cli: --" ++ long ++ ": .count needs an integer field, found " ++
+                @typeName(F));
         }
         if (place.split != null and !list) {
-            @compileError("cli: --" ++ long ++ ": .split needs a list field, found " ++ @typeName(F));
+            @compileError("cli: --" ++ long ++ ": .split needs a list field, found " ++
+                @typeName(F));
         }
         _ = values.checker(Elem); // Rejects unsupported types here.
         flag.kind = if (Elem == bool and !list) .bool else if (place.count) .count else .value;
@@ -342,12 +361,14 @@ fn collect(
         const one_of = oneOf(checks);
         flag.choices = if (one_of.len > 0) one_of else values.choices(Elem);
         flag.value_name = if (flag.kind == .value)
-            place.value_name orelse (if (one_of.len > 0) field.join(one_of, "|") else values.label(Elem))
+            place.value_name orelse
+                (if (one_of.len > 0) field.join(one_of, "|") else values.label(Elem))
         else
             "";
         flag.about = abouts(field_spec.checks) ++ abouts(field_spec.each);
         flag.validate = validator(Elem, checks);
-        flag.required = field.isRequired(Root, sub) and flag.kind == .value and !list and choice == null;
+        flag.required = field.isRequired(Root, sub) and flag.kind == .value and !list and
+            choice == null;
         flag.check = if (flag.kind == .count) values.checker(bool) else values.checker(Elem);
         if (place.complete) |c| flag.complete = c.call;
         var requires: []const []const u8 = &.{};
@@ -449,7 +470,8 @@ fn typedArgs(comptime T: type, comptime S: type, comptime options: ArgOptions(T)
                 @compileError(where ++ "only the last positional may be a list: " ++ name);
             }
             if (!optional and optional_seen) {
-                @compileError(where ++ "required positional " ++ name ++ " follows an optional one");
+                @compileError(where ++ "required positional " ++ name ++
+                    " follows an optional one");
             }
             if (optional) optional_seen = true else min += 1;
             if (list) max = null;
@@ -474,7 +496,8 @@ fn typedArgs(comptime T: type, comptime S: type, comptime options: ArgOptions(T)
                 .value_name = values.label(values.Element(Field)),
                 .check = values.checker(values.Element(Field)),
             };
-            if (place.complete != null or values.choices(values.Element(Field)).len > 0) any_complete = true;
+            const has_choices = values.choices(values.Element(Field)).len > 0;
+            if (place.complete != null or has_choices) any_complete = true;
         }
         const final = positionals;
         return .{
@@ -496,7 +519,8 @@ fn typedCompleter(comptime T: type, comptime options: ArgOptions(T)) Command.Com
             inline for (info.field_names, info.field_types, 0..) |name, Field, i| {
                 const last = i + 1 == info.field_names.len;
                 if (index == i or (last and index > i and values.isList(Field))) {
-                    if (comptime @field(options.fields, name).complete) |c| return c.call(ctx, prefix);
+                    const place = comptime @field(options.fields, name);
+                    if (comptime place.complete) |c| return c.call(ctx, prefix);
                     const names = comptime values.choices(values.Element(Field));
                     const out = try ctx.arena.alloc(Command.Candidate, names.len);
                     for (out, names) |*candidate, choice| candidate.* = .{ .value = choice };
@@ -514,7 +538,11 @@ const Tls = struct { cert: []const u8 = "", key: []const u8 = "" };
 const Listener = struct { host: []const u8 = "0.0.0.0", port: u16 = 8080, tls: ?Tls = null };
 const Example = struct {
     public: Listener = .{},
-    storage: union(enum) { disk: struct { path: []const u8 = "/var" }, s3: struct { bucket: []const u8 }, memory } = .memory,
+    storage: union(enum) {
+        disk: struct { path: []const u8 = "/var" },
+        s3: struct { bucket: []const u8 },
+        memory,
+    } = .memory,
     mirrors: []const Listener = &.{},
     tags: []const []const u8 = &.{},
     verbose: u8 = 0,
@@ -577,7 +605,11 @@ test "a value's checks, as typed" {
     try testing.expectEqual(null, example.list[0].validate);
 }
 
-const Copy = struct { source: []const u8, dest: ?[]const u8 = null, rest: []const []const u8 = &.{} };
+const Copy = struct {
+    source: []const u8,
+    dest: ?[]const u8 = null,
+    rest: []const []const u8 = &.{},
+};
 
 test "positionals from a struct" {
     const copy = args(Copy, field.Set(.{field.Spec(Copy){ .fields = .{

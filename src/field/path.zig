@@ -152,7 +152,11 @@ pub fn ptrAt(comptime T: type, comptime path: []const u8, root: *T) *PathType(T,
 
 /// The field at `path`, or null when an unset optional group or another variant is in the
 /// way.
-pub fn getAt(comptime T: type, comptime path: []const u8, root: *const T) ?*const PathType(T, path) {
+pub fn getAt(
+    comptime T: type,
+    comptime path: []const u8,
+    root: *const T,
+) ?*const PathType(T, path) {
     if (comptime std.mem.indexOfScalar(u8, path, '.')) |dot| {
         const head = comptime path[0..dot];
         if (comptime isChoice(T)) {

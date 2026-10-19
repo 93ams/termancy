@@ -88,7 +88,11 @@ const SetArgs = struct {
     key: []const u8,
     value: []const u8,
 };
-const set_args = cli.args(SetArgs, field.none, .{ .fields = .{ .key = .{ .complete = .from(completeKey) } } });
+const set_args = cli.args(
+    SetArgs,
+    field.none,
+    .{ .fields = .{ .key = .{ .complete = .from(completeKey) } } },
+);
 
 fn set(ctx: *cli.Context, args: SetArgs) !void {
     if (!Store.isValidName(args.key)) return ctx.usageError("\"{s}\" cannot be a key", .{args.key});
@@ -100,7 +104,11 @@ fn set(ctx: *cli.Context, args: SetArgs) !void {
 const GetArgs = struct {
     key: []const u8,
 };
-const get_args = cli.args(GetArgs, field.none, .{ .fields = .{ .key = .{ .complete = .from(completeKey) } } });
+const get_args = cli.args(
+    GetArgs,
+    field.none,
+    .{ .fields = .{ .key = .{ .complete = .from(completeKey) } } },
+);
 
 fn get(ctx: *cli.Context, args: GetArgs) !void {
     if (!Store.isValidName(args.key)) return ctx.usageError("\"{s}\" cannot be a key", .{args.key});
@@ -114,7 +122,11 @@ fn get(ctx: *cli.Context, args: GetArgs) !void {
 const DelArgs = struct {
     keys: []const []const u8,
 };
-const del_args = cli.args(DelArgs, field.none, .{ .fields = .{ .keys = .{ .name = "key", .complete = .from(completeKey) } } });
+const del_args = cli.args(
+    DelArgs,
+    field.none,
+    .{ .fields = .{ .keys = .{ .name = "key", .complete = .from(completeKey) } } },
+);
 
 fn del(ctx: *cli.Context, args: DelArgs) !void {
     const store = try openStore(ctx);

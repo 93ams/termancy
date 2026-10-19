@@ -673,7 +673,11 @@ const test_root = spec.command(.{
         const T = struct {
             config: ?[]const u8 = null,
         };
-        break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .config = .{ .help = "Config file" } } }}), .{ .fields = .{ .config = .{ .short = 'c', .value_name = "path" } } });
+        break :flags sets.flags(
+            T,
+            field.Set(.{field.Spec(T){ .fields = .{ .config = .{ .help = "Config file" } } }}),
+            .{ .fields = .{ .config = .{ .short = 'c', .value_name = "path" } } },
+        );
     },
     .subcommands = .{
         spec.command(.{
@@ -689,7 +693,19 @@ const test_root = spec.command(.{
                     name: []const u8,
                     old: bool = false,
                 };
-                break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .port = .{ .help = "Port to listen on" }, .mode = .{ .help = "Run mode" }, .old = .{ .deprecated = "gone" } } }}), .{ .fields = .{ .port = .{ .short = 'p', .env = "PORT" } } });
+                break :flags sets.flags(
+                    T,
+                    field.Set(
+                        .{
+                            field.Spec(T){ .fields = .{
+                                .port = .{ .help = "Port to listen on" },
+                                .mode = .{ .help = "Run mode" },
+                                .old = .{ .deprecated = "gone" },
+                            } },
+                        },
+                    ),
+                    .{ .fields = .{ .port = .{ .short = 'p', .env = "PORT" } } },
+                );
             },
             .run = noop,
         }),
@@ -796,7 +812,11 @@ const shape_root = spec.command(.{
         const T = struct {
             output: []const u8 = "text",
         };
-        break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .output = .{ .help = "Root output" } } }}), .{ .fields = .{ .output = .{ .short = 'o' } } });
+        break :flags sets.flags(
+            T,
+            field.Set(.{field.Spec(T){ .fields = .{ .output = .{ .help = "Root output" } } }}),
+            .{ .fields = .{ .output = .{ .short = 'o' } } },
+        );
     },
     .args = .{ .max = null },
     .run = noop,
@@ -815,7 +835,19 @@ const shape_root = spec.command(.{
                     secret: bool = false,
                     legacy: bool = false,
                 };
-                break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .output = .{ .help = "Show output" }, .host = .{ .help = "Show the host" }, .legacy = .{ .deprecated = "gone" } } }}), .{ .fields = .{ .host = .{ .short = 'h' }, .secret = .{ .hidden = true } } });
+                break :flags sets.flags(
+                    T,
+                    field.Set(
+                        .{
+                            field.Spec(T){ .fields = .{
+                                .output = .{ .help = "Show output" },
+                                .host = .{ .help = "Show the host" },
+                                .legacy = .{ .deprecated = "gone" },
+                            } },
+                        },
+                    ),
+                    .{ .fields = .{ .host = .{ .short = 'h' }, .secret = .{ .hidden = true } } },
+                );
             },
             .run = noop,
         }),
@@ -904,8 +936,11 @@ test "long flag help wraps under its column" {
             const T = struct {
                 name: []const u8 = "",
             };
-            break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .name = .{ .help = "The name of the thing that this command operates on, which is " ++
-                "given here in a deliberately long sentence so that it has to wrap" } } }}), .{ .fields = .{ .name = .{ .env = "APP_NAME" } } });
+            const specs = field.Set(.{field.Spec(T){ .fields = .{ .name = .{
+                .help = "The name of the thing that this command operates on, which is " ++
+                    "given here in a deliberately long sentence so that it has to wrap",
+            } } }});
+            break :flags sets.flags(T, specs, .{ .fields = .{ .name = .{ .env = "APP_NAME" } } });
         },
         .run = noop,
     });
@@ -980,7 +1015,18 @@ test "a flag too wide for the column gets a line of its own" {
                 format: enum { text, json, yaml, toml, zon, env, ini, systemd } = .text,
                 all: bool = false,
             };
-            break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .format = .{ .help = "Output format" }, .all = .{ .help = "All" } } }}), .{});
+            break :flags sets.flags(
+                T,
+                field.Set(
+                    .{
+                        field.Spec(T){ .fields = .{
+                            .format = .{ .help = "Output format" },
+                            .all = .{ .help = "All" },
+                        } },
+                    },
+                ),
+                .{},
+            );
         },
         .run = noop,
     });
@@ -1045,8 +1091,11 @@ test "wide and accented text wraps by its display width" {
             const T = struct {
                 name: []const u8 = "",
             };
-            break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .name = .{ .help = "Größe änderung überall Größe änderung überall Größe änderung " ++
-                "überall Größe änderung überall 名前を設定する 名前を設定する" } } }}), .{});
+            const specs = field.Set(.{field.Spec(T){ .fields = .{ .name = .{
+                .help = "Größe änderung überall Größe änderung überall Größe änderung " ++
+                    "überall Größe änderung überall 名前を設定する 名前を設定する",
+            } } }});
+            break :flags sets.flags(T, specs, .{});
         },
         .run = noop,
     });

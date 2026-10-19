@@ -383,7 +383,10 @@ pub fn flags(ctx: *Context, comptime X: type) FlagsError!sets.FlagSet(X).Value {
             const Field = @TypeOf(slot.*);
             if (last.flag.kind == .count) {
                 if (@typeInfo(Field) == .int) {
-                    slot.* = std.math.cast(Field, ctx.countOf(last.flag)) orelse std.math.maxInt(Field);
+                    slot.* = std.math.cast(
+                        Field,
+                        ctx.countOf(last.flag),
+                    ) orelse std.math.maxInt(Field);
                 }
             } else {
                 slot.* = try ctx.decodeField(Field, last.flag);
@@ -819,7 +822,21 @@ test secretValues {
                 debug: bool = false,
                 user: []const u8 = "",
             };
-            break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .token = .{ .secret = true }, .keys = .{ .secret = true }, .password = .{ .secret = true }, .empty = .{ .secret = true }, .debug = .{ .secret = true } } }}), .{ .fields = .{ .keys = .{ .split = ',' }, .password = .{ .env = "PASSWORD" } } });
+            break :flags sets.flags(
+                T,
+                field.Set(
+                    .{
+                        field.Spec(T){ .fields = .{
+                            .token = .{ .secret = true },
+                            .keys = .{ .secret = true },
+                            .password = .{ .secret = true },
+                            .empty = .{ .secret = true },
+                            .debug = .{ .secret = true },
+                        } },
+                    },
+                ),
+                .{ .fields = .{ .keys = .{ .split = ',' }, .password = .{ .env = "PASSWORD" } } },
+            );
         },
         .run = noop,
     });

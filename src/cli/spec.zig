@@ -336,7 +336,14 @@ fn checker(
             if (Positionals) |A| {
                 const value = try ctx.positionals(A.Value);
                 const report: Report = .{ .ctx = ctx, .arg_names = comptime argNames(A) };
-                failures += try field_.validateExcept(A.Value, A.Specs, .every, value, report, &.{});
+                failures += try field_.validateExcept(
+                    A.Value,
+                    A.Specs,
+                    .every,
+                    value,
+                    report,
+                    &.{},
+                );
             }
             if (failures > 0) return ctx.usageFailed();
         }
@@ -400,28 +407,56 @@ const Report = struct {
     /// For positionals: each field's name and the name usage shows.
     arg_names: []const [2][]const u8 = &.{},
 
-    pub fn fail(r: Report, at: []const field_.Segment, message: []const u8, about: ?field_.About) !void {
+    pub fn fail(
+        r: Report,
+        at: []const field_.Segment,
+        message: []const u8,
+        about: ?field_.About,
+    ) !void {
         var path_buffer: [256]u8 = undefined;
         var path: std.Io.Writer = .fixed(&path_buffer);
         var index: ?usize = null;
         for (at) |segment| switch (segment) {
-            .field => |name| path.print("{s}{s}", .{ if (path.end == 0) "" else ".", name }) catch {},
+            .field => |name| path.print(
+                "{s}{s}",
+                .{ if (path.end == 0) "" else ".", name },
+            ) catch {},
             .index => |i| index = i,
         };
         if (path.end == 0) return r.ctx.invalid("{s}", .{message});
         var label_buffer: [256]u8 = undefined;
         var label = r.labelOf(path.buffered(), &label_buffer);
-        if (index) |i| label = try std.fmt.allocPrint(r.ctx.arena, "{s} ({f} value)", .{ label, field_.ordinal(i + 1) });
+        if (index) |i| label = try std.fmt.allocPrint(
+            r.ctx.arena,
+            "{s} ({f} value)",
+            .{ label, field_.ordinal(i + 1) },
+        );
         const m = r.ctx.messages;
         const a = about orelse return r.ctx.invalid("{s}: {s}", .{ label, message });
         const arena = r.ctx.arena;
         const line = switch (a) {
             .min => |b| try Messages.allocRender(arena, m.value_at_least, &.{ label, b.text }),
             .max => |b| try Messages.allocRender(arena, m.value_at_most, &.{ label, b.text }),
-            .min_len => |n| try Messages.allocRender(arena, m.value_too_short, &.{ label, try std.fmt.allocPrint(arena, "{d}", .{n}) }),
-            .max_len => |n| try Messages.allocRender(arena, m.value_too_long, &.{ label, try std.fmt.allocPrint(arena, "{d}", .{n}) }),
-            .one_of => |choices| try Messages.allocRender(arena, m.value_one_of, &.{ label, try std.mem.join(arena, ", ", choices) }),
-            .glob => |pattern| try Messages.allocRender(arena, m.value_must_match, &.{ label, pattern }),
+            .min_len => |n| try Messages.allocRender(
+                arena,
+                m.value_too_short,
+                &.{ label, try std.fmt.allocPrint(arena, "{d}", .{n}) },
+            ),
+            .max_len => |n| try Messages.allocRender(
+                arena,
+                m.value_too_long,
+                &.{ label, try std.fmt.allocPrint(arena, "{d}", .{n}) },
+            ),
+            .one_of => |choices| try Messages.allocRender(
+                arena,
+                m.value_one_of,
+                &.{ label, try std.mem.join(arena, ", ", choices) },
+            ),
+            .glob => |pattern| try Messages.allocRender(
+                arena,
+                m.value_must_match,
+                &.{ label, pattern },
+            ),
         };
         r.ctx.invalid("{s}", .{line});
     }

@@ -65,7 +65,8 @@ pub fn Set(comptime specs: anytype) type {
             const T = @TypeOf(s).Target;
             for (path.fieldNames(T), path.fieldTypes(T)) |name, F| {
                 if (@field(s.fields, name).each.len > 0 and !path.isList(path.Unwrap(F))) {
-                    @compileError(@typeName(T) ++ "." ++ name ++ ": .each is for lists; use .checks");
+                    @compileError(@typeName(T) ++ "." ++ name ++
+                        ": .each is for lists; use .checks");
                 }
             }
         }
@@ -138,7 +139,17 @@ pub fn validateExcept(
         if (!skipped) {
             at[0] = .{ .field = name };
             const f = @field(spec.fields, name);
-            failures += try walk(@FieldType(T, name), S, scope, f.checks, f.each, @field(value, name), &at, 1, report);
+            failures += try walk(
+                @FieldType(T, name),
+                S,
+                scope,
+                f.checks,
+                f.each,
+                @field(value, name),
+                &at,
+                1,
+                report,
+            );
         }
     }
     return failures + try run(T, spec.checks, value, at[0..0], report);
@@ -164,13 +175,29 @@ fn walk(
     }
     // A single value's checks ran when it was given, under `.whole`.
     const whole = path.isList(V) or path.isGroup(V) or path.isChoice(V);
-    var failures = if (scope == .every or whole) try run(V, checks, value, at[0..depth], report) else 0;
+    var failures = if (scope == .every or whole) try run(
+        V,
+        checks,
+        value,
+        at[0..depth],
+        report,
+    ) else 0;
     if (comptime path.isGroup(V)) {
         const spec = comptime S.of(V);
         inline for (@typeInfo(V).@"struct".field_names) |name| {
             at[depth] = .{ .field = name };
             const f = @field(spec.fields, name);
-            failures += try walk(@FieldType(V, name), S, scope, f.checks, f.each, @field(value, name), at, depth + 1, report);
+            failures += try walk(
+                @FieldType(V, name),
+                S,
+                scope,
+                f.checks,
+                f.each,
+                @field(value, name),
+                at,
+                depth + 1,
+                report,
+            );
         }
         failures += try run(V, spec.checks, value, at[0..depth], report);
     } else if (comptime path.isChoice(V)) {
@@ -180,7 +207,17 @@ fn walk(
                 const name = @tagName(tag);
                 at[depth] = .{ .field = name };
                 const f = @field(spec.fields, name);
-                failures += try walk(@TypeOf(payload), S, scope, f.checks, f.each, payload, at, depth + 1, report);
+                failures += try walk(
+                    @TypeOf(payload),
+                    S,
+                    scope,
+                    f.checks,
+                    f.each,
+                    payload,
+                    at,
+                    depth + 1,
+                    report,
+                );
             },
         }
         failures += try run(V, spec.checks, value, at[0..depth], report);

@@ -197,9 +197,11 @@ pub fn settingsZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\}};
         \\
         \\/// What the settings mean: help for the schema, checks for decoding.
-        \\pub const settings = cfg.settings(Settings, field.Set(.{{field.Spec(Settings){{ .fields = .{{
+        \\pub const settings = cfg.settings(Settings, Specs, .{{}});
+        \\
+        \\const Specs = field.Set(.{{field.Spec(Settings){{ .fields = .{{
         \\    .log_level = .{{ .help = "How much to log" }},
-        \\}} }}}}), .{{}});
+        \\}} }}}});
         \\
         \\/// For `zig build schema`: prints the JSON Schema of `Settings`.
         \\pub fn main(init: std.process.Init) !void {{
@@ -338,9 +340,13 @@ fn flagsStruct(w: *Writer, name: []const u8, flags: []const Spec) Writer.Error!v
     }
     try w.writeAll("};\n\n");
     if (hasHelp(flags)) {
-        try w.print("/// What the flags mean.\nconst Specs = field.Set(.{{field.Spec({s}){{ .fields = .{{\n", .{name});
+        try w.writeAll("/// What the flags mean.\n");
+        try w.print("const Specs = field.Set(.{{field.Spec({s}){{ .fields = .{{\n", .{name});
         for (flags) |s| if (s.help.len > 0) {
-            try w.print("    .{s} = .{{ .help = \"{f}\" }},\n", .{ s.field, std.zig.fmtString(s.help) });
+            try w.print(
+                "    .{s} = .{{ .help = \"{f}\" }},\n",
+                .{ s.field, std.zig.fmtString(s.help) },
+            );
         };
         try w.writeAll("} }});\n\n");
     }

@@ -64,7 +64,9 @@ fn boundedWait(flags: SendFlags, w: *std.Io.Writer) !void {
         .{ flags.timeout, flags.retries, cfg.Duration{ .ns = worst } },
     );
 }
-const send_flags = cli.flags(SendFlags, field_.Set(.{field_.Spec(SendFlags){ .checks = &.{.from(boundedWait)}, .fields = .{
+const send_flags = cli.flags(SendFlags, field_.Set(.{field_.Spec(SendFlags){ .checks = &.{
+    .from(boundedWait),
+}, .fields = .{
     .header = .{ .help = "A header, `Name: value`; repeat for more" },
     .accept = .{ .help = "Media types to accept, comma-separated" },
     .json = .{ .help = "Send the body fields as JSON" },

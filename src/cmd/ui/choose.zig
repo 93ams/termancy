@@ -22,7 +22,9 @@ const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
     .limit = .{ .help = "The most items to choose; above 1, space chooses each" },
     .no_limit = .{ .help = "Choose any number of items" },
     .header = .{ .help = "Text above the items" },
-    .selected = .{ .help = "An item highlighted (or, with a limit, chosen) at the start; repeatable" },
+    .selected = .{
+        .help = "An item highlighted (or, with a limit, chosen) at the start; repeatable",
+    },
     .height = .{ .help = "Items shown at once" },
     .cursor = .{ .help = "Written before the highlighted item" },
 } }}), .{ .fields = .{

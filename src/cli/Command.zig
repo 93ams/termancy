@@ -92,11 +92,11 @@ pub const Positional = struct {
     required: bool,
     /// Takes every remaining word.
     repeatable: bool = false,
-    /// What it is, from `.help` in the struct's `meta`; help and documentation list the
+    /// What it is, from `.help` in the field's spec; help and documentation list the
     /// positionals under "Arguments" when any has some.
     help: []const u8 = "",
     /// When the positional is required and missing in an interactive run, ask for it with
-    /// this label instead of failing (`.prompt` in the struct's `meta`; see `App.prompter`).
+    /// this label instead of failing (`.prompt` in `cli.args`' options; see `App.prompter`).
     prompt: ?[]const u8 = null,
     /// The placeholder for one value in messages: `int`, `fast|safe`.
     value_name: []const u8 = "",

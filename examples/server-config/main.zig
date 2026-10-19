@@ -136,6 +136,8 @@ test "help says where else each setting can be set" {
     const result = try cli.testing.run(app, &.{"--help"}, .{});
     defer result.deinit();
     // Wrapped to the width, so in two pieces.
-    try std.testing.expect(std.mem.indexOf(u8, result.out, "(also workers in server.toml,") != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, result.out, "(also workers in server.toml,") != null,
+    );
     try std.testing.expect(std.mem.indexOf(u8, result.out, "$APP_WORKERS)") != null);
 }

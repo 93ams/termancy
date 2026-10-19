@@ -16,14 +16,22 @@ const Io = std.Io;
 
 const Authenticator = enum { any, platform, @"security-key" };
 
+/// What `--origin` and `--authenticator` mean, for both commands.
+const origin_spec: field.Field([]const u8) = .{
+    .help = "The relying party's origin, such as https://example.com",
+};
+const authenticator_spec: field.Field(Authenticator) = .{
+    .help = "Windows: which authenticator may answer (platform: Windows Hello itself)",
+};
+
 const GetFlags = struct {
     origin: []const u8,
     authenticator: Authenticator = .any,
     pin: []const u8 = "",
 };
 const get_flags = cli.flags(GetFlags, field.Set(.{field.Spec(GetFlags){ .fields = .{
-    .origin = .{ .help = "The relying party's origin, such as https://example.com" },
-    .authenticator = .{ .help = "Windows: which authenticator may answer (platform: Windows Hello itself)" },
+    .origin = origin_spec,
+    .authenticator = authenticator_spec,
     .pin = .{ .help = "Linux: the key's PIN, when the relying party requires user " ++
         "verification; better given through $TERMANCY_FIDO_PIN", .secret = true },
 } }}), .{ .fields = .{
@@ -35,8 +43,8 @@ const CreateFlags = struct {
     authenticator: Authenticator = .any,
 };
 const create_flags = cli.flags(CreateFlags, field.Set(.{field.Spec(CreateFlags){ .fields = .{
-    .origin = .{ .help = "The relying party's origin, such as https://example.com" },
-    .authenticator = .{ .help = "Windows: which authenticator may answer (platform: Windows Hello itself)" },
+    .origin = origin_spec,
+    .authenticator = authenticator_spec,
 } }}), .{});
 
 pub const command = cli.command(.{
@@ -91,7 +99,10 @@ fn runCreate(ctx: *cli.Context, flags: CreateFlags) !void {
     const options = webauthn.CreationOptions.parseJson(ctx.arena, try readOptions(ctx)) catch |err|
         return badOptions(ctx, err);
     if (builtin.os.tag != .windows) {
-        return ctx.fail("passkey create needs Windows Hello; not supported on this system yet", .{});
+        return ctx.fail(
+            "passkey create needs Windows Hello; not supported on this system yet",
+            .{},
+        );
     }
     const registration = windows_hello.register(ctx.arena, options, flags.origin, .{
         .attachment = attachmentOf(flags.authenticator),
@@ -136,7 +147,10 @@ fn helloFailed(ctx: *cli.Context, err: windows_hello.Error) error{ CommandFailed
         error.OutOfMemory => error.OutOfMemory,
         error.NotAllowed => ctx.fail("not allowed: cancelled, timed out, or no authenticator " ++
             "has a credential for it", .{}),
-        error.Excluded => ctx.fail("this authenticator already has a credential for the account", .{}),
+        error.Excluded => ctx.fail(
+            "this authenticator already has a credential for the account",
+            .{},
+        ),
         error.InvalidOrigin => ctx.fail("--origin names no host, and the options no RP ID", .{}),
         error.Unavailable => ctx.fail("Windows Hello is not available here (webauthn.dll)", .{}),
         error.Failed => ctx.fail("Windows Hello refused the request", .{}),

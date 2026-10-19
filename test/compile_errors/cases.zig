@@ -78,7 +78,8 @@ const cases = [_]Case{
     },
     .{
         .name = "args_list_not_last",
-        .message = "cli.args(args_list_not_last.Args): only the last positional may be a list: files",
+        .message = "cli.args(args_list_not_last.Args): " ++
+            "only the last positional may be a list: files",
     },
     .{
         .name = "completer_signature",

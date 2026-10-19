@@ -67,7 +67,11 @@ pub fn Check(comptime V: type) type {
         pub fn min(comptime n: NumberOrOrdered(V)) Self {
             return .{ .about = .{ .min = bound(n) }, .run = struct {
                 fn run(v: V, w: *std.Io.Writer) Error!void {
-                    if (less(v, n)) return fail(w, "must be at least {s}", .{comptime bound(n).text});
+                    if (less(v, n)) return fail(
+                        w,
+                        "must be at least {s}",
+                        .{comptime bound(n).text},
+                    );
                 }
             }.run };
         }
@@ -76,7 +80,11 @@ pub fn Check(comptime V: type) type {
         pub fn max(comptime n: NumberOrOrdered(V)) Self {
             return .{ .about = .{ .max = bound(n) }, .run = struct {
                 fn run(v: V, w: *std.Io.Writer) Error!void {
-                    if (less(n, v)) return fail(w, "must be at most {s}", .{comptime bound(n).text});
+                    if (less(n, v)) return fail(
+                        w,
+                        "must be at most {s}",
+                        .{comptime bound(n).text},
+                    );
                 }
             }.run };
         }
@@ -219,13 +227,22 @@ test "built-in checks pass, fail with a reason, and describe themselves" {
     try testing.expectEqualStrings("", try runs(u16, .min(1), 1));
     try testing.expectEqualStrings("must be at least 1", try runs(u16, .min(1), 0));
     try testing.expectEqualStrings("must be at most 64", try runs(u8, .max(64), 65));
-    try testing.expectEqualStrings("must be at least 3 long", try runs([]const u8, .minLen(3), "né"));
-    try testing.expectEqualStrings("must be at most 1 long", try runs([]const u32, .maxLen(1), &.{ 1, 2 }));
+    try testing.expectEqualStrings(
+        "must be at least 3 long",
+        try runs([]const u8, .minLen(3), "né"),
+    );
+    try testing.expectEqualStrings(
+        "must be at most 1 long",
+        try runs([]const u32, .maxLen(1), &.{ 1, 2 }),
+    );
     try testing.expectEqualStrings(
         "must be one of eu-west-1, us-east-1 (did you mean eu-west-1?)",
         try runs([]const u8, .oneOf(&.{ "eu-west-1", "us-east-1" }), "eu-wset-1"),
     );
-    try testing.expectEqualStrings("must match *.pem", try runs([]const u8, .glob("*.pem"), "k.txt"));
+    try testing.expectEqualStrings(
+        "must match *.pem",
+        try runs([]const u8, .glob("*.pem"), "k.txt"),
+    );
     const check: Check(u16) = .max(10);
     try testing.expectEqual(10, check.about.?.max.number.?);
     try testing.expectEqualStrings("10", check.about.?.max.text);
@@ -242,7 +259,10 @@ const Millis = struct {
 };
 
 test "min and max on an ordered type, shown with its format" {
-    try testing.expectEqualStrings("must be at least 10ms", try runs(Millis, .min(.{ .n = 10 }), .{ .n = 9 }));
+    try testing.expectEqualStrings(
+        "must be at least 10ms",
+        try runs(Millis, .min(.{ .n = 10 }), .{ .n = 9 }),
+    );
     try testing.expectEqualStrings("", try runs(Millis, .max(.{ .n = 10 }), .{ .n = 10 }));
 }
 

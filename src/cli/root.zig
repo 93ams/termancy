@@ -36,9 +36,9 @@
 //! ```
 //!
 //! The module imports `std`, `term` (for display widths, color detection, and the styles
-//! of `Theme`), and `field` (specs, shared with `cfg`). Flag types may follow the `parse` convention shared with `cfg`
-//! (`pub fn parse(text: []const u8) !T`), and `Context.changedFlags` returns records that
-//! `cfg.Config.bindFlags` accepts.
+//! of `Theme`), and `field` (specs, shared with `cfg`). Flag types may follow the `parse`
+//! convention shared with `cfg` (`pub fn parse(text: []const u8) !T`), and
+//! `Context.changedFlags` returns records that `cfg.Config.bindFlags` accepts.
 
 const std = @import("std");
 

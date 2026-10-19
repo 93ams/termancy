@@ -21,7 +21,10 @@ pub fn parse(comptime T: type, text: []const u8) Error!T {
         .int => std.fmt.parseInt(T, text, 0) catch error.InvalidValue,
         .float => std.fmt.parseFloat(T, text) catch error.InvalidValue,
         .@"enum" => parseEnum(T, text),
-        .@"union" => if (comptime field.isChoice(T)) parseChoice(T, text) else @compileError(unsupported(T)),
+        .@"union" => if (comptime field.isChoice(T)) parseChoice(
+            T,
+            text,
+        ) else @compileError(unsupported(T)),
         .pointer => if (T == []const u8) text else @compileError(unsupported(T)),
         else => @compileError(unsupported(T)),
     };
