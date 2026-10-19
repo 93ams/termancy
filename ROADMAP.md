@@ -141,7 +141,7 @@ against these libraries. Shipped from that list:
   progress; SVG screenshots; the `multiprogress`, `chart`, and `markdown` components;
   `termancy ui demo`; plain prompts for screen readers (`ACCESSIBLE=1`).
 
-Then Charm's open-source libraries and tools, which the README maps one by one: the `term`
+Then Charm's open-source libraries and tools, which [docs/coming-from-charm.md](docs/coming-from-charm.md) maps one by one: the `term`
 module (lipgloss, ultraviolet, x/ansi, x/vt, colorprofile, glamour, sequin, mosaic and the
 image protocols), the cell renderer, motion, and SSH serving in `tui` (Bubble Tea,
 harmonica, wish), the huh-style `form` and more components (Bubbles), golden files
