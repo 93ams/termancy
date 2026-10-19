@@ -10,7 +10,7 @@ and a patch release only fixes. These are the stable declarations:
 
 | `cli` | |
 |---|---|
-| Building a tree | `command`, `Command`, `Flag`, `Candidate`, `flagsOf`, `Defaults`, and the spec fields and `meta` options the README and `spec.zig` document (`.key` and `.internal` among them) |
+| Building a tree | `command`, `Command`, `Flag`, `Candidate`, `flagsOf`, `Defaults`, and the spec fields and `meta` options [cli.md](cli.md) and `spec.zig` document (`.key` and `.internal` among them) |
 | Running it | `App` (its fields and `run`, `execute`, `executeLine`, `exit_*` statuses), `Context` (its fields and methods, `FlagRecord`) |
 | Output | `Context.render` and `text_columns`, `help`, `docs` (formats, `write`, `writeManTree`, `Options`), `complete` (scripts and the `__complete2` protocol), `json`, `Messages`, `Theme`, `version` |
 | Interaction | `flow` and `Flow` (steps, `Ask`, `Asker`, `Question`, `Script`), `prompt`, `repl`, `plugins`, `interrupt`, `terminal`, `pager`, `i18n`, `defaults` |

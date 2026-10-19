@@ -6,8 +6,8 @@ and its first section what is left out on purpose, and why.
 
 ## Building
 
-Zig **0.17.0**, nothing else. `zig build` builds `zig-out/bin/termancy`; the README's "Building
-and testing" table lists the other steps. Before a pull request, run what CI runs:
+Zig **0.17.0**, nothing else. `zig build` builds `zig-out/bin/termancy`;
+[docs/development.md](docs/development.md) lists the other steps. Before a pull request, run what CI runs:
 
 ```sh
 zig build test check

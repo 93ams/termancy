@@ -16,7 +16,8 @@ const builtin = @import("builtin");
 const Io = std.Io;
 
 const setup =
-    \\termancy=$1
+    \\# Absolute, since the script moves to a scratch directory.
+    \\case $1 in /*) termancy=$1 ;; *) termancy=$PWD/$1 ;; esac
     \\dir=$(mktemp -d) || exit 90
     \\pid=
     \\trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; rm -rf "$dir"' EXIT

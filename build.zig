@@ -450,6 +450,8 @@ pub fn build(b: *std.Build) void {
         check.addArg("--");
         check.addArtifactArg(console_app);
         check.addArgs(case.args);
+        // Under CI `cli` never prompts; these cases are about the console, so ask for it.
+        check.setEnvironmentVariable("CI", "false");
         check.expectExitCode(0);
         console.dependOn(&check.step);
     }
