@@ -53,7 +53,15 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - run: sudo apt-get install -y kcov
+      # Ubuntu 24.04 dropped the kcov package; build a pinned release instead.
+      - name: Install kcov
+        run: |
+          sudo apt-get install -y cmake binutils-dev libcurl4-openssl-dev libdw-dev \
+            libiberty-dev libssl-dev zlib1g-dev
+          git clone --depth 1 --branch v43 https://github.com/SimonKagstrom/kcov /tmp/kcov
+          cmake -S /tmp/kcov -B /tmp/kcov/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/kcov/build -j"$(nproc)"
+          sudo cmake --install /tmp/kcov/build
       - run: zig build coverage --summary failures
       - name: Summary
         run: |

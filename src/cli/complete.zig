@@ -394,9 +394,10 @@ const bash_script =
     \\            :dirs | :files | ":file "*)
     \\                paths=1
     \\                case $line in
-    \\                    :dirs) found=($(compgen -d -- "$value")) ;;
-    \\                    :files) found=($(compgen -f -- "$value")) ;;
-    \\                    *) found=($(compgen -f -X "!*.${line#:file }" -- "$value")) ;;
+    \\                    :dirs) found=($(compgen -d -- "$value" | LC_ALL=C sort)) ;;
+    \\                    :files) found=($(compgen -f -- "$value" | LC_ALL=C sort)) ;;
+    \\                    *) found=($(compgen -f -X "!*.${line#:file }" -- "$value" \
+    \\                        | LC_ALL=C sort)) ;;
     \\                esac
     \\                for path in "${found[@]}"; do
     \\                    # Behind a prefix, bash cannot tell a directory: mark it here.
