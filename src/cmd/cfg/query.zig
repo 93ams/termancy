@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 const load = @import("load.zig");
 
@@ -15,7 +16,7 @@ pub const get = cli.command(.{
     \\the --output format (YAML for text).
     ,
     .group = group,
-    .flags = GetFlags,
+    .flags = get_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<key>", .complete = load.completeKeys },
     .examples =
     \\termancy cfg get server.port --default 8080
@@ -32,18 +33,15 @@ const GetFlags = struct {
     default: ?[]const u8 = null,
     raw: bool = false,
     as: ?Kind = null,
-    pub const meta = .{
-        .as = .{
-            .help = "Fail unless the value is one of these, and print it as one",
-            .value_name = "type",
-        },
-        .default = .{
-            .help = "Print this instead of failing when the key is unset",
-            .value_name = "value",
-        },
-        .raw = .{ .help = "Print a scalar bare, without the output format's quoting" },
-    };
 };
+const get_flags = cli.flags(GetFlags, field.Set(.{field.Spec(GetFlags){ .fields = .{
+    .as = .{ .help = "Fail unless the value is one of these, and print it as one" },
+    .default = .{ .help = "Print this instead of failing when the key is unset" },
+    .raw = .{ .help = "Print a scalar bare, without the output format's quoting" },
+} }}), .{ .fields = .{
+    .as = .{ .value_name = "type" },
+    .default = .{ .value_name = "value" },
+} });
 
 fn runGet(ctx: *cli.Context, flags: GetFlags) !void {
     const global = try ctx.flags(load.Global);
@@ -96,17 +94,19 @@ pub const keys = cli.command(.{
     .name = "keys",
     .summary = "List every key that has a value",
     .group = group,
-    .flags = KeysFlags,
+    .flags = keys_flags,
     .args = .{ .max = 1, .usage = "[prefix]", .complete = load.completeKeys },
     .run = runKeys,
 });
 
 const KeysFlags = struct {
     null: bool = false,
-    pub const meta = .{
-        .null = .{ .short = '0', .help = "End lines with NUL, not newline (for xargs -0)" },
-    };
 };
+const keys_flags = cli.flags(KeysFlags, field.Set(.{field.Spec(KeysFlags){ .fields = .{
+    .null = .{ .help = "End lines with NUL, not newline (for xargs -0)" },
+} }}), .{ .fields = .{
+    .null = .{ .short = '0' },
+} });
 
 fn runKeys(ctx: *cli.Context, flags: KeysFlags) !void {
     const global = try ctx.flags(load.Global);
@@ -154,22 +154,20 @@ const ShowFlags = struct {
     secret: []const []const u8 = &.{},
     reveal: bool = false,
     layer: ?cfg.Config.Layer = null,
-
-    pub const meta = .{
-        .secret = .{
-            .help = "Treat this key as secret and redact it; repeatable",
-            .value_name = "key",
-        },
-        .reveal = .{ .help = "Do not redact secrets" },
-        .layer = .{ .help = "Show one layer instead of the effective configuration" },
-    };
 };
+const show_flags = cli.flags(ShowFlags, field.Set(.{field.Spec(ShowFlags){ .fields = .{
+    .secret = .{ .help = "Treat this key as secret and redact it; repeatable" },
+    .reveal = .{ .help = "Do not redact secrets" },
+    .layer = .{ .help = "Show one layer instead of the effective configuration" },
+} }}), .{ .fields = .{
+    .secret = .{ .value_name = "key" },
+} });
 
 pub const show = cli.command(.{
     .name = "show",
     .summary = "Print the whole effective configuration",
     .group = group,
-    .flags = ShowFlags,
+    .flags = show_flags,
     .examples =
     \\termancy cfg show -c base.toml -c local.yaml -o toml
     \\termancy cfg show --secret db.password
@@ -223,7 +221,7 @@ pub const explain = cli.command(.{
     \\(from encrypted files, ${secret:...}, or --secret) are redacted unless --reveal.
     ,
     .group = group,
-    .flags = ExplainFlags,
+    .flags = explain_flags,
     .args = .{ .max = 1, .usage = "[prefix]", .complete = load.completeKeys },
     .run = runExplain,
 });
@@ -231,12 +229,13 @@ pub const explain = cli.command(.{
 const ExplainFlags = struct {
     secret: []const []const u8 = &.{},
     reveal: bool = false,
-
-    pub const meta = .{
-        .secret = ShowFlags.meta.secret,
-        .reveal = ShowFlags.meta.reveal,
-    };
 };
+const explain_flags = cli.flags(ExplainFlags, field.Set(.{field.Spec(ExplainFlags){ .fields = .{
+    .secret = .{ .help = "Treat this key as secret and redact it; repeatable" },
+    .reveal = .{ .help = "Do not redact secrets" },
+} }}), .{ .fields = .{
+    .secret = .{ .value_name = "key" },
+} });
 
 fn runExplain(ctx: *cli.Context, flags: ExplainFlags) !void {
     const global = try ctx.flags(load.Global);
@@ -283,14 +282,13 @@ const Shell = enum { sh, fish, powershell };
 const EnvFlags = struct {
     prefix: ?[]const u8 = null,
     shell: Shell = .sh,
-    pub const meta = .{
-        .prefix = .{
-            .help = "Prepend this and _ to every name, as --env-prefix reads them",
-            .value_name = "prefix",
-        },
-        .shell = .{ .help = "Write commands for this shell" },
-    };
 };
+const env_flags = cli.flags(EnvFlags, field.Set(.{field.Spec(EnvFlags){ .fields = .{
+    .prefix = .{ .help = "Prepend this and _ to every name, as --env-prefix reads them" },
+    .shell = .{ .help = "Write commands for this shell" },
+} }}), .{ .fields = .{
+    .prefix = .{ .value_name = "prefix" },
+} });
 
 pub const env = cli.command(.{
     .name = "env",
@@ -305,7 +303,7 @@ pub const env = cli.command(.{
     \\valid variable name.
     ,
     .group = group,
-    .flags = EnvFlags,
+    .flags = env_flags,
     .examples =
     \\eval "$(termancy cfg env --prefix APP)"
     \\termancy cfg env --prefix APP --shell fish | source

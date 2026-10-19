@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 
@@ -10,12 +11,12 @@ const Flags = struct {
     vertical: bool = false,
     horizontal: bool = false,
     @"align": Align = .left,
-    pub const meta = .{
-        .vertical = .{ .help = "One above another" },
-        .horizontal = .{ .help = "Side by side (the default)" },
-        .@"align" = .{ .help = "Where narrower (or shorter) blocks sit" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .vertical = .{ .help = "One above another" },
+    .horizontal = .{ .help = "Side by side (the default)" },
+    .@"align" = .{ .help = "Where narrower (or shorter) blocks sit" },
+} }}), .{});
 
 const Align = enum { left, center, right, top, middle, bottom };
 
@@ -28,7 +29,7 @@ pub const command = cli.command(.{
     \\termancy ui style join cleanly.
     ,
     .args = .{ .min = 1, .max = null, .usage = "<text>..." },
-    .flags = Flags,
+    .flags = flags_flags,
     .examples =
     \\termancy ui join "$(termancy ui style --border rounded A)" "$(termancy ui style --border rounded B)"
     \\termancy ui join --vertical --align center "Title" "a longer line"

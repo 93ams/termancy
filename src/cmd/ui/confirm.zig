@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const plain = @import("plain.zig");
@@ -13,13 +14,12 @@ pub const Flags = struct {
     default: Answer = .yes,
     affirmative: []const u8 = "Yes",
     negative: []const u8 = "No",
-
-    pub const meta = .{
-        .default = .{ .help = "The button highlighted at the start" },
-        .affirmative = .{ .help = "The label of the yes button" },
-        .negative = .{ .help = "The label of the no button" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .default = .{ .help = "The button highlighted at the start" },
+    .affirmative = .{ .help = "The label of the yes button" },
+    .negative = .{ .help = "The label of the no button" },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "confirm",
@@ -31,7 +31,7 @@ pub const command = cli.command(.{
     \\Keys: left/right or tab switch buttons, enter answers, y and n answer directly,
     \\esc cancels (status 1), Ctrl-C interrupts (status 130).
     ,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .max = 1, .usage = "[prompt]" },
     .exit_statuses = &.{
         .{ .code = 0, .meaning = "Yes" },

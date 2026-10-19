@@ -55,6 +55,7 @@ pub const specAt = spec.specAt;
 pub const Segment = spec.Segment;
 pub const validate = spec.validate;
 pub const validateExcept = spec.validateExcept;
+pub const Scope = spec.Scope;
 pub const checkOne = spec.checkOne;
 pub const max_depth = spec.max_depth;
 

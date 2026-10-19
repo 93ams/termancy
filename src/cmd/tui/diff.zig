@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const catalog = @import("project/catalog.zig");
 const term = @import("tui").term;
 const manifest = @import("project/manifest.zig");
@@ -12,10 +13,12 @@ const group = @import("init.zig").group;
 
 const DiffFlags = struct {
     project: []const u8 = ".",
-    pub const meta = .{
-        .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-    };
 };
+const diff_flags = cli.flags(DiffFlags, field.Set(.{field.Spec(DiffFlags){ .fields = .{
+    .project = .{ .help = "The project directory" },
+} }}), .{ .fields = .{
+    .project = .{ .short = 'C', .value_name = "path" },
+} });
 
 pub const command = cli.command(.{
     .name = "diff",
@@ -27,7 +30,7 @@ pub const command = cli.command(.{
     \\unknown or not installed.
     ,
     .group = group,
-    .flags = DiffFlags,
+    .flags = diff_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<component>" },
     .examples =
     \\termancy tui diff select

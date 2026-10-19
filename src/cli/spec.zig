@@ -4,14 +4,19 @@
 //! const serve = cli.command(.{
 //!     .name = "serve",
 //!     .summary = "Start the server",
-//!     .flags = ServeFlags,
+//!     .flags = cli.flags(ServeFlags, Specs, .{ .fields = .{ .port = .{ .short = 'p' } } }),
 //!     .args = .{ .max = 1, .usage = "[dir]" },
 //!     .run = runServe, // fn (ctx: *cli.Context, flags: ServeFlags) !void
 //! });
 //! ```
 //!
+//! `.flags` and `.persistent_flags` are a flag set (`cli.flags`, see `sets.zig`) or a plain
+//! struct, every field a flag under its own name. What each field means comes from
+//! `field` specs; how it is spelled, from the set's options.
+//!
 //! `.args` is either `.{ .min, .max, .usage, ... }` (see `Command.Args`), with the words in
-//! `ctx.args`, or a struct type with one field per positional, decoded like flags:
+//! `ctx.args`, or a positional set (`cli.args`) or plain struct, one field per positional,
+//! decoded like flags:
 //!
 //! ```zig
 //! const SetArgs = struct { key: []const u8, value: ?[]const u8 = null };
@@ -20,44 +25,21 @@
 //!
 //! Fields without a default (or `?`) are required and come first; the last field may be a
 //! list (`[]const T`) taking the remaining words. The usage line (`<key> [value]`), the
-//! counts, and completion of enum fields follow from the struct; `meta` may give a field a
-//! `.name` for usage, a `.help` for the "Arguments" section of help, a `.complete`
-//! function, and a `.prompt` to ask for a missing required one with, as for flags. A
-//! handler may take the arguments after the flags, or alone after the context;
-//! `ctx.positionals(T)` decodes them anywhere.
+//! counts, and completion of enum fields follow from the struct. A handler may take the
+//! arguments after the flags, or alone after the context; `ctx.positionals(T)` decodes
+//! them anywhere.
 //!
-//! Every field of the flags struct becomes a flag, unless its meta says `.internal`. The
-//! struct may refine its fields with `pub const meta`:
+//! A value given for a flag is checked as it is parsed, against its type and its field's
+//! checks; checks across a struct's fields run before the command's hooks
+//! (`Command.check`), and every failure is reported, not just the first.
 //!
-//! | option        | effect                                                      |
-//! |---------------|-------------------------------------------------------------|
-//! | `.short`      | single-letter spelling, `'p'` for `-p`                      |
-//! | `.help`       | text in help                                                |
-//! | `.name`       | long name, instead of the field name in kebab case          |
-//! | `.value_name` | placeholder in help, instead of one derived from the type   |
-//! | `.env`        | environment variable used when the flag is absent           |
-//! | `.count`      | on an integer field: count occurrences (`-vvv`)             |
-//! | `.split`      | on a list field: also split each value on this byte         |
-//! | `.hidden`     | accepted but not shown in help or completion                |
-//! | `.deprecated` | accepted, with this notice printed when used                |
-//! | `.aliases`    | other long names accepted, such as a name before a rename   |
-//! | `.min`, `.max`| inclusive bounds on a numeric value                         |
-//! | `.min_len`, `.max_len` | inclusive bounds on a string's length, in characters |
-//! | `.requires`   | other flags (long names) that must be given with this one   |
-//! | `.feature`    | the flag exists only while the feature is on (`App.feature_enabled`) |
-//! | `.one_of`     | the values a string accepts, checked, completed, and in help |
-//! | `.complete`   | `fn (*Context, prefix) ![]const Candidate`: values for completion |
-//! | `.prompt`     | label to ask with when the required flag is missing interactively |
-//! | `.secret`     | never shown: not echoed, redacted in help, docs, errors, and `cfg` |
-//! | `.key`        | the configuration key `App.defaults` reads and `bindFlags` sets |
-//! | `.internal`   | not a flag: the field is state only (a `cli.Flow`'s), keeping its default |
-//!
-//! The flags struct may also declare `pub fn validate(flags: T, ctx: *Context) !void` for
-//! checks across fields; `ctx.flags(T)` calls it after decoding, and it reports problems
-//! with `ctx.usageError`.
-//!
-//! Options this module does not know are ignored, so one struct can carry metadata for both
-//! `cli` and `cfg`. Entries naming no field are a compile error.
+//! `.settings = .{ .field = .config, .load = load }` names a field of the flags struct
+//! that holds settings read from configuration too: its flags are never required on the
+//! command line (a file may set them), its checks are left to whatever `load` decodes
+//! them with (`cfg`, say), and the handler gets what `load` returns in that field. `load`
+//! is `fn (*cli.Context) !T`; the flags given are in `ctx.changedFlags()`, each with the
+//! field's path under the settings as its `key`. `.sources` may say, for help, where else
+//! each can be set: `.{ .{ "port", "$PORT, port in app.toml" } }`.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -67,16 +49,17 @@ const Flag = @import("Flag.zig");
 const values = @import("values.zig");
 const text = @import("text.zig");
 const Messages = @import("Messages.zig");
+const sets = @import("sets.zig");
+const field_ = @import("field");
 
 const spec_fields = [_][]const u8{
-    "name",          "summary",          "description",        "aliases",
-    "examples",      "group",            "hidden",             "deprecated",
-    "flags",         "persistent_flags", "args",               "exclusive",
-    "together",      "one_required",     "subcommands",        "run",
-    "pre_run",       "post_run",         "persistent_pre_run", "persistent_post_run",
-    "topic",         "cleanup",          "confirm",            "dry_run",
-    "output",        "feature",          "logging",            "repl",
-    "exit_statuses",
+    "name",               "summary",             "description",   "aliases",
+    "examples",           "group",               "hidden",        "deprecated",
+    "flags",              "persistent_flags",    "args",          "settings",
+    "subcommands",        "run",                 "pre_run",       "post_run",
+    "persistent_pre_run", "persistent_post_run", "topic",         "cleanup",
+    "confirm",            "dry_run",             "output",        "feature",
+    "logging",            "repl",                "exit_statuses",
 };
 
 /// The flags `.confirm`, `.dry_run`, `.output`, and `.logging` add, and `App.color_flag`.
@@ -87,16 +70,22 @@ const Builtins = struct {
     verbose: u8 = 0,
     log_level: ?LogLevel = null,
     color: ColorChoice = .auto,
-
-    pub const meta = .{
-        .yes = .{ .short = 'y', .help = Messages.english.yes_flag },
-        .dry_run = .{ .help = Messages.english.dry_run_flag },
-        .output = .{ .short = 'o', .help = Messages.english.output_flag },
-        .verbose = .{ .short = 'v', .count = true, .help = Messages.english.verbose_flag },
-        .log_level = .{ .help = Messages.english.log_level_flag, .value_name = "level" },
-        .color = .{ .help = Messages.english.color_flag, .value_name = "when" },
-    };
 };
+
+const builtin_set = sets.flags(Builtins, field_.Set(.{field_.Spec(Builtins){ .fields = .{
+    .yes = .{ .help = Messages.english.yes_flag },
+    .dry_run = .{ .help = Messages.english.dry_run_flag },
+    .output = .{ .help = Messages.english.output_flag },
+    .verbose = .{ .help = Messages.english.verbose_flag },
+    .log_level = .{ .help = Messages.english.log_level_flag },
+    .color = .{ .help = Messages.english.color_flag },
+} }}), .{ .fields = .{
+    .yes = .{ .short = 'y' },
+    .output = .{ .short = 'o' },
+    .verbose = .{ .short = 'v', .count = true },
+    .log_level = .{ .value_name = "level" },
+    .color = .{ .value_name = "when" },
+} });
 
 /// What `--log-level` chooses, least severe first; see `Context.log`.
 pub const LogLevel = enum { trace, debug, info, warn, @"error" };
@@ -108,7 +97,7 @@ pub const Output = enum { text, json, yaml, jsonl };
 /// terminal; `always` and `never` override them.
 pub const ColorChoice = enum { auto, always, never };
 
-const builtin_flags = flagsOf(Builtins);
+const builtin_flags = builtin_set.list;
 
 /// `--color`, which `App.color_flag` adds to the root.
 pub const color_flag = builtin_flags[5];
@@ -152,10 +141,22 @@ pub fn command(comptime spec: anytype) Command {
         }
         if (@hasField(S, "args")) result.args = argsOf(spec.name, spec.args);
         const Positionals: ?type = if (@hasField(S, "args") and @TypeOf(spec.args) == type)
-            spec.args
+            sets.ArgSet(spec.args)
         else
             null;
-        if (@hasField(S, "flags")) result.flags = flagsIn(where, spec.flags);
+        const settings: ?[]const u8 = if (@hasField(S, "settings")) blk: {
+            if (!@hasField(S, "flags")) @compileError(where ++ ".settings needs .flags");
+            break :blk @tagName(spec.settings.field);
+        } else null;
+        const Flags: ?type = if (@hasField(S, "flags")) sets.FlagSet(spec.flags) else null;
+        const Persistent: ?type = if (@hasField(S, "persistent_flags"))
+            sets.FlagSet(spec.persistent_flags)
+        else
+            null;
+        if (Flags) |F| {
+            result.flags = if (settings) |name| settled(F.list, name, sourcesOf(spec)) else F.list;
+            result.constraints = F.constraints;
+        }
         for ([_]struct { []const u8, usize }{
             .{ "confirm", 0 },
             .{ "dry_run", 1 },
@@ -167,14 +168,16 @@ pub fn command(comptime spec: anytype) Command {
             };
             if (wanted) result.flags = result.flags ++ .{builtin_flags[pair[1]]};
         }
-        if (@hasField(S, "persistent_flags")) {
-            result.persistent_flags = flagsIn(where, spec.persistent_flags);
+        if (Persistent) |P| {
+            result.persistent_flags = P.list;
+            result.constraints = merge(result.constraints, P.constraints);
         }
         // `-v` and `--log-level`, for this command and every one under it.
         if (@hasField(S, "logging") and spec.logging) {
             result.persistent_flags = result.persistent_flags ++ builtin_flags[3..5].*;
         }
         if (@hasField(S, "subcommands")) result.subcommands = listOf(spec.subcommands);
+        const load = if (@hasField(S, "settings")) spec.settings.load else {};
         for ([_][]const u8{
             "run",
             "pre_run",
@@ -184,15 +187,18 @@ pub fn command(comptime spec: anytype) Command {
             "cleanup",
         }) |hook| {
             if (@hasField(S, hook)) {
-                @field(result, hook) = handler(spec.name, @field(spec, hook), Positionals);
+                @field(result, hook) = handler(
+                    spec.name,
+                    @field(spec, hook),
+                    Positionals,
+                    Flags,
+                    settings,
+                    load,
+                );
             }
         }
-        for ([_][]const u8{ "exclusive", "together", "one_required" }) |kind| {
-            if (@hasField(S, kind)) {
-                const groups: []const []const []const u8 = @field(spec, kind);
-                for (groups) |group| for (group) |name| checkFlagName(result, name);
-                @field(result.constraints, kind) = groups;
-            }
+        if (Flags != null or Persistent != null or Positionals != null) {
+            result.check = checker(Flags, Persistent, Positionals, settings);
         }
         checkDuplicates(result);
         const final = result;
@@ -216,7 +222,7 @@ fn coerce(comptime T: type, comptime value: anytype) T {
 /// `coerce` for `.args`, accepting `.complete` as a function or a pointer to one, or a
 /// struct type of typed positionals.
 fn argsOf(comptime name: []const u8, comptime args: anytype) Command.Args {
-    if (@TypeOf(args) == type) return typedArgs(name, args);
+    if (@TypeOf(args) == type) return sets.ArgSet(args).command_args;
     if (@TypeOf(args) == Command.Args) return args;
     var result: Command.Args = .{};
     for (@typeInfo(@TypeOf(args)).@"struct".field_names) |field| {
@@ -233,122 +239,8 @@ fn argsOf(comptime name: []const u8, comptime args: anytype) Command.Args {
     return result;
 }
 
-/// The `Args` of a struct of typed positionals.
-fn typedArgs(comptime name: []const u8, comptime T: type) Command.Args {
-    const where = "cli.command(\"" ++ name ++ "\"): ";
-    if (@typeInfo(T) != .@"struct") @compileError(where ++ ".args must be a struct type");
-    checkMeta(where, T);
-    const info = @typeInfo(T).@"struct";
-    var min: usize = 0;
-    var max: ?usize = info.field_names.len;
-    var usage: []const u8 = "";
-    var optional_seen = false;
-    var positionals: [info.field_names.len]Command.Positional = undefined;
-    for (info.field_names, info.field_types, info.field_attrs, 0..) |field, Field, attrs, i| {
-        const label = positionalName(T, field);
-        const optional = @typeInfo(Field) == .optional or attrs.default_value_ptr != null;
-        const list = values.isList(if (@typeInfo(Field) == .optional)
-            @typeInfo(Field).optional.child
-        else
-            Field);
-        _ = values.checker(values.Element(Field)); // Rejects unsupported types here.
-        if (list and i + 1 != info.field_names.len) {
-            @compileError(where ++ "only the last positional may be a list: " ++ field);
-        }
-        if (!optional and optional_seen) {
-            @compileError(where ++ "required positional " ++ field ++ " follows an optional one");
-        }
-        if (optional) optional_seen = true else min += 1;
-        if (list) max = null;
-        const piece = if (list and optional)
-            "[" ++ label ++ "...]"
-        else if (list)
-            "<" ++ label ++ ">..."
-        else if (optional)
-            "[" ++ label ++ "]"
-        else
-            "<" ++ label ++ ">";
-        usage = usage ++ (if (i > 0) " " else "") ++ piece;
-        positionals[i] = .{
-            .name = label,
-            .value_type = values.valueType(values.Element(Field)),
-            .choices = values.choices(values.Element(Field)),
-            .required = !optional,
-            .repeatable = list,
-            .help = option(T, field, "help", @as([]const u8, "")),
-            .prompt = option(T, field, "prompt", @as(?[]const u8, null)),
-            .value_name = values.label(values.Element(Field)),
-            .check = values.checker(values.Element(Field)),
-        };
-    }
-    const final = positionals;
-    return .{
-        .min = min,
-        .max = max,
-        .usage = usage,
-        .complete = typedCompleter(T),
-        .positionals = &final,
-    };
-}
-
-/// The name a positional field shows in usage and messages.
-pub fn positionalName(comptime T: type, comptime field: []const u8) []const u8 {
-    return option(T, field, "name", text.kebab(field));
-}
-
-/// Completes each typed positional from its `.complete`, or from its enum's names.
-fn typedCompleter(comptime T: type) ?Command.Completer {
-    const info = @typeInfo(T).@"struct";
-    const any = for (info.field_names, info.field_types) |field, Field| {
-        if (hasOption(T, field, "complete") or values.choices(values.Element(Field)).len > 0) {
-            break true;
-        }
-    } else false;
-    if (!any) return null;
-    return &struct {
-        fn call(ctx: *Context, prefix: []const u8) anyerror![]const Command.Candidate {
-            const index = ctx.args.len;
-            inline for (info.field_names, info.field_types, 0..) |field, Field, i| {
-                const last = i + 1 == info.field_names.len;
-                if (index == i or (last and index > i and values.isList(Field))) {
-                    if (comptime hasOption(T, field, "complete")) {
-                        const function = comptime completer(
-                            @typeName(T) ++ ".meta." ++ field,
-                            @field(T.meta, field).complete,
-                        );
-                        return function(ctx, prefix);
-                    }
-                    const names = comptime values.choices(values.Element(Field));
-                    const out = try ctx.arena.alloc(Command.Candidate, names.len);
-                    for (out, names) |*candidate, choice| candidate.* = .{ .value = choice };
-                    return out;
-                }
-            }
-            return &.{};
-        }
-    }.call;
-}
-
-/// Checks a completer's signature and returns a pointer to it.
 fn completer(comptime where: []const u8, comptime function: anytype) Command.Completer {
-    const F = @TypeOf(function);
-    const Fn = switch (@typeInfo(F)) {
-        .@"fn" => F,
-        .pointer => |pointer| pointer.child,
-        else => @compileError(where ++ ": .complete must be a function"),
-    };
-    const info = @typeInfo(Fn).@"fn";
-    const ok = info.param_types.len == 2 and info.param_types[0] == *Context and
-        info.param_types[1] == []const u8;
-    if (!ok) {
-        @compileError(where ++
-            ": .complete must be fn (*cli.Context, []const u8) ![]const cli.Candidate");
-    }
-    return &struct {
-        fn call(ctx: *Context, prefix: []const u8) anyerror![]const Command.Candidate {
-            return function(ctx, prefix);
-        }
-    }.call;
+    return sets.completer(where, function);
 }
 
 fn listOf(comptime list: anytype) []const Command {
@@ -360,11 +252,15 @@ fn listOf(comptime list: anytype) []const Command {
 
 /// Wraps `function` as a `Handler`: `fn (*Context) !void`, `fn (*Context, Flags) !void`,
 /// or, with typed positionals `Positionals`, `fn (*Context, Positionals) !void` and
-/// `fn (*Context, Flags, Positionals) !void`. Flags and positionals are decoded first.
+/// `fn (*Context, Flags, Positionals) !void`. Flags and positionals are decoded first; the
+/// command's own flags get their `.settings` from `load`.
 fn handler(
     comptime name: []const u8,
     comptime function: anytype,
     comptime Positionals: ?type,
+    comptime Flags: ?type,
+    comptime settings: ?[]const u8,
+    comptime load: anytype,
 ) Command.Handler {
     const info = @typeInfo(@TypeOf(function)).@"fn";
     const where = "cli.command(\"" ++ name ++ "\"): ";
@@ -376,27 +272,28 @@ fn handler(
             @compileError(where ++ "a handler's flags parameter needs a concrete type");
         }
     }
+    const Args = if (Positionals) |P| P.Value else void;
     return switch (info.param_types.len) {
         1 => &struct {
             fn call(ctx: *Context) anyerror!void {
                 return function(ctx);
             }
         }.call,
-        2 => if (Positionals != null and info.param_types[1] == Positionals) &struct {
+        2 => if (Positionals != null and info.param_types[1] == Args) &struct {
             fn call(ctx: *Context) anyerror!void {
-                return function(ctx, try ctx.positionals(Positionals.?));
+                return function(ctx, try ctx.positionals(Args));
             }
         }.call else &struct {
-            const Flags = info.param_types[1].?;
+            const Param = info.param_types[1].?;
             fn call(ctx: *Context) anyerror!void {
-                return function(ctx, try ctx.flags(Flags));
+                return function(ctx, try decodeFlags(ctx, Param, Flags, settings, load));
             }
         }.call,
-        3 => if (Positionals != null and info.param_types[2] == Positionals) &struct {
-            const Flags = info.param_types[1].?;
+        3 => if (Positionals != null and info.param_types[2] == Args) &struct {
+            const Param = info.param_types[1].?;
             fn call(ctx: *Context) anyerror!void {
-                const flags = try ctx.flags(Flags);
-                return function(ctx, flags, try ctx.positionals(Positionals.?));
+                const flags = try decodeFlags(ctx, Param, Flags, settings, load);
+                return function(ctx, flags, try ctx.positionals(Args));
             }
         }.call else @compileError(where ++
             "a handler's third parameter must be the .args struct type"),
@@ -406,176 +303,183 @@ fn handler(
     };
 }
 
-/// The flags of a flags struct, one per field that is not `.internal`.
-pub fn flagsOf(comptime T: type) []const Flag {
-    return flagsIn("cli: ", T);
-}
-
-/// `flagsOf`, with compile errors starting with `where`.
-fn flagsIn(comptime where: []const u8, comptime T: type) []const Flag {
-    comptime {
-        if (@typeInfo(T) != .@"struct") {
-            @compileError("cli: flags must be a struct, found " ++ @typeName(T));
-        }
-        @setEvalBranchQuota(1000 + 5000 * @typeInfo(T).@"struct".field_names.len);
-        checkMeta(where, T);
-        const info = @typeInfo(T).@"struct";
-        var out: [info.field_names.len]Flag = undefined;
-        var n: usize = 0;
-        for (info.field_names, info.field_types, info.field_attrs) |name, Field, attrs| {
-            if (option(T, name, "internal", false)) continue;
-            out[n] = flagOf(T, name, Field, attrs);
-            n += 1;
-        }
-        const final = out[0..n].*;
-        return &final;
-    }
-}
-
-fn flagOf(
-    comptime T: type,
-    comptime field: []const u8,
-    comptime Field: type,
-    comptime attrs: std.builtin.Type.Struct.FieldAttributes,
-) Flag {
-    const Elem = values.Element(Field);
-    const is_count = option(T, field, "count", false);
-    if (is_count and @typeInfo(Field) != .int) {
-        @compileError("cli: .count needs an integer field: " ++ field);
-    }
-    const kind: Flag.Kind = if (Elem == bool and !values.isList(Field))
-        .bool
-    else if (is_count)
-        .count
-    else
-        .value;
-    const default: ?*const Field = if (attrs.default_value_ptr) |p|
-        @ptrCast(@alignCast(p))
-    else
-        null;
-    const optional = @typeInfo(Field) == .optional;
-    const list = values.isList(if (optional) @typeInfo(Field).optional.child else Field);
-    const one_of = option(T, field, "one_of", @as([]const []const u8, &.{}));
-    if (one_of.len > 0 and Elem != []const u8) {
-        @compileError("cli: .one_of needs a string field: " ++ field);
-    }
-    const has_length = hasOption(T, field, "min_len") or hasOption(T, field, "max_len");
-    if (has_length and Elem != []const u8) {
-        @compileError("cli: .min_len and .max_len need a string field: " ++ field);
-    }
-    const numeric = @typeInfo(Elem) == .int or @typeInfo(Elem) == .float;
-    const has_bounds = hasOption(T, field, "min") or hasOption(T, field, "max");
-    if (has_bounds and (!numeric or kind != .value)) {
-        @compileError("cli: .min and .max need a numeric field: " ++ field);
-    }
-    return .{
-        .name = option(T, field, "name", text.kebab(field)),
-        .aliases = option(T, field, "aliases", @as([]const []const u8, &.{})),
-        .field = field,
-        .kind = kind,
-        .short = option(T, field, "short", @as(?u8, null)),
-        .help = option(T, field, "help", @as([]const u8, "")),
-        .value_name = if (kind == .value)
-            option(T, field, "value_name", if (one_of.len > 0)
-                joinChoices(one_of)
-            else
-                values.label(Elem))
-        else
-            "",
-        .repeatable = list or kind == .count,
-        .split = option(T, field, "split", @as(?u8, null)),
-        .required = default == null and !optional and kind == .value and !list,
-        .env = option(T, field, "env", @as(?[]const u8, null)),
-        .hidden = option(T, field, "hidden", false),
-        .deprecated = option(T, field, "deprecated", @as(?[]const u8, null)),
-        .prompt = option(T, field, "prompt", @as(?[]const u8, null)),
-        .secret = option(T, field, "secret", false),
-        .key = option(T, field, "key", @as(?[]const u8, null)),
-        .value_type = values.valueType(Elem),
-        .choices = if (one_of.len > 0) one_of else values.choices(Elem),
-        .min = if (hasOption(T, field, "min")) @as(f64, @field(T.meta, field).min) else null,
-        .max = if (hasOption(T, field, "max")) @as(f64, @field(T.meta, field).max) else null,
-        .min_len = option(T, field, "min_len", @as(?usize, null)),
-        .max_len = option(T, field, "max_len", @as(?usize, null)),
-        .requires = option(T, field, "requires", @as([]const []const u8, &.{})),
-        .feature = option(T, field, "feature", @as(?[]const u8, null)),
-        .complete = if (hasOption(T, field, "complete"))
-            completer(@typeName(T) ++ ".meta." ++ field, @field(T.meta, field).complete)
-        else
-            null,
-        .check = if (kind == .count) values.checker(bool) else values.checker(Elem),
-        .write_default = if (default) |d| defaultWriter(Field, d.*) else null,
+/// The flags struct `Param`, with the settings `load` reads when it is the command's own.
+fn decodeFlags(
+    ctx: *Context,
+    comptime Param: type,
+    comptime Flags: ?type,
+    comptime settings: ?[]const u8,
+    comptime load: anytype,
+) !Param {
+    var flags = try ctx.flags(Param);
+    if (settings) |name| if (Flags) |F| if (F.Value == Param) {
+        @field(flags, name) = try load(ctx);
     };
+    return flags;
 }
 
-fn defaultWriter(
-    comptime Field: type,
-    comptime value: Field,
-) ?*const fn (*std.Io.Writer) std.Io.Writer.Error!void {
-    if (!values.isInteresting(Field, value)) return null;
-    if (@typeInfo(Field) == .int and value == 0) return null;
+/// The command's check pass: decodes its flags and positionals and runs the checks that
+/// need a whole value, reporting each failure; the settings' are left to `load`.
+fn checker(
+    comptime Flags: ?type,
+    comptime Persistent: ?type,
+    comptime Positionals: ?type,
+    comptime settings: ?[]const u8,
+) Command.Handler {
     return &struct {
-        fn write(writer: *std.Io.Writer) std.Io.Writer.Error!void {
-            try values.write(Field, value, writer);
+        fn call(ctx: *Context) anyerror!void {
+            var failures: usize = 0;
+            if (Flags) |F| {
+                failures += try checkFlags(F, ctx, if (settings) |name| &.{name} else &.{});
+            }
+            if (Persistent) |P| failures += try checkFlags(P, ctx, &.{});
+            if (Positionals) |A| {
+                const value = try ctx.positionals(A.Value);
+                const report: Report = .{ .ctx = ctx, .arg_names = comptime argNames(A) };
+                failures += try field_.validateExcept(A.Value, A.Specs, .every, value, report, &.{});
+            }
+            if (failures > 0) return ctx.usageFailed();
         }
-    }.write;
+    }.call;
 }
 
-/// The value of `T.meta.<field>.<name>`, or `default`.
-pub fn option(
-    comptime T: type,
-    comptime field: []const u8,
-    comptime name: []const u8,
-    comptime default: anytype,
-) @TypeOf(default) {
-    if (!@hasDecl(T, "meta")) return default;
-    if (!@hasField(@TypeOf(T.meta), field)) return default;
-    const entry = @field(T.meta, field);
-    if (!@hasField(@TypeOf(entry), name)) return default;
-    return @field(entry, name);
-}
-
-/// `a|b|c`, the label of a string flag with `.one_of`.
-fn joinChoices(comptime choices: []const []const u8) []const u8 {
-    var out: []const u8 = "";
-    for (choices, 0..) |choice, i| out = out ++ (if (i == 0) "" else "|") ++ choice;
+fn argNames(comptime A: type) []const [2][]const u8 {
+    var out: []const [2][]const u8 = &.{};
+    for (@typeInfo(A.Value).@"struct".field_names, A.command_args.positionals) |name, p| {
+        out = out ++ .{[2][]const u8{ name, p.name }};
+    }
     return out;
 }
 
-/// Whether `T.meta.<field>` sets `name`.
-fn hasOption(comptime T: type, comptime field: []const u8, comptime name: []const u8) bool {
-    if (!@hasDecl(T, "meta")) return false;
-    if (!@hasField(@TypeOf(T.meta), field)) return false;
-    return @hasField(@TypeOf(@field(T.meta, field)), name);
-}
-
-/// The long name a field of `T` is spelled with.
-pub fn longName(comptime T: type, comptime field: []const u8) []const u8 {
-    return option(T, field, "name", text.kebab(field));
-}
-
-fn checkMeta(comptime where: []const u8, comptime T: type) void {
-    if (!@hasDecl(T, "meta")) return;
-    const fields = @typeInfo(T).@"struct".field_names;
-    for (@typeInfo(@TypeOf(T.meta)).@"struct".field_names) |name| {
-        if (!@hasField(T, name)) {
-            var list: []const u8 = "";
-            for (fields, 0..) |field, i| list = list ++ (if (i == 0) "" else ", ") ++ field;
-            @compileError(where ++ @typeName(T) ++ ".meta names no field '" ++ name ++ "'" ++
-                didYouMean(name, fields) ++ " (fields: " ++ list ++ ")");
+fn checkFlags(comptime F: type, ctx: *Context, comptime skip: []const []const u8) !usize {
+    const T = F.Value;
+    const value = try ctx.flags(T);
+    var failures: usize = 0;
+    // A choice's variant may need a flag only once it is picked.
+    inline for (F.list) |flag| {
+        if (comptime flag.choice != null and field_.isRequired(T, flag.field) and
+            !skipped(skip, flag.field))
+        {
+            if (field_.getAt(T, flag.field, &value) != null and !wasGiven(ctx, &flag)) {
+                failures += 1;
+                const message = try Messages.allocRender(
+                    ctx.arena,
+                    ctx.messages.required_flag,
+                    &.{flag.name},
+                );
+                ctx.invalid("{s}", .{message});
+            }
         }
     }
+    if (failures > 0) return failures;
+    const report: Report = .{ .ctx = ctx, .flags = F.list, .groups = F.groups };
+    // A value given was checked as it was parsed; defaults are the program's own.
+    return field_.validateExcept(T, F.Specs, .whole, value, report, skip);
 }
 
-fn checkFlagName(comptime cmd: Command, comptime name: []const u8) void {
-    const all = cmd.flags ++ cmd.persistent_flags;
-    var names: [all.len][]const u8 = undefined;
-    for (&names, all) |*out, flag| {
-        if (std.mem.eql(u8, flag.name, name)) return;
-        out.* = flag.name;
+fn skipped(comptime skip: []const []const u8, comptime path: []const u8) bool {
+    for (skip) |s| if (std.mem.startsWith(u8, path, s) and
+        (path.len == s.len or path[s.len] == '.')) return true;
+    return false;
+}
+
+fn wasGiven(ctx: *const Context, flag: *const Flag) bool {
+    for (ctx.occurrences) |occurrence| {
+        if (std.mem.eql(u8, occurrence.flag.field, flag.field) and
+            std.mem.eql(u8, occurrence.flag.owner, flag.owner)) return true;
     }
-    @compileError("cli.command(\"" ++ cmd.name ++ "\"): constraint names unknown flag '" ++
-        name ++ "'" ++ didYouMean(name, &names));
+    return false;
+}
+
+/// Names a failed check by what the user typed: `--public-port: must be at least 1`,
+/// `--public-*: ...` for a group, `<src>: ...` for a positional, `--tag (2nd value): ...`.
+const Report = struct {
+    ctx: *Context,
+    flags: []const Flag = &.{},
+    groups: []const sets.Group = &.{},
+    /// For positionals: each field's name and the name usage shows.
+    arg_names: []const [2][]const u8 = &.{},
+
+    pub fn fail(r: Report, at: []const field_.Segment, message: []const u8, about: ?field_.About) !void {
+        var path_buffer: [256]u8 = undefined;
+        var path: std.Io.Writer = .fixed(&path_buffer);
+        var index: ?usize = null;
+        for (at) |segment| switch (segment) {
+            .field => |name| path.print("{s}{s}", .{ if (path.end == 0) "" else ".", name }) catch {},
+            .index => |i| index = i,
+        };
+        if (path.end == 0) return r.ctx.invalid("{s}", .{message});
+        var label_buffer: [256]u8 = undefined;
+        var label = r.labelOf(path.buffered(), &label_buffer);
+        if (index) |i| label = try std.fmt.allocPrint(r.ctx.arena, "{s} ({f} value)", .{ label, field_.ordinal(i + 1) });
+        const m = r.ctx.messages;
+        const a = about orelse return r.ctx.invalid("{s}: {s}", .{ label, message });
+        const arena = r.ctx.arena;
+        const line = switch (a) {
+            .min => |b| try Messages.allocRender(arena, m.value_at_least, &.{ label, b.text }),
+            .max => |b| try Messages.allocRender(arena, m.value_at_most, &.{ label, b.text }),
+            .min_len => |n| try Messages.allocRender(arena, m.value_too_short, &.{ label, try std.fmt.allocPrint(arena, "{d}", .{n}) }),
+            .max_len => |n| try Messages.allocRender(arena, m.value_too_long, &.{ label, try std.fmt.allocPrint(arena, "{d}", .{n}) }),
+            .one_of => |choices| try Messages.allocRender(arena, m.value_one_of, &.{ label, try std.mem.join(arena, ", ", choices) }),
+            .glob => |pattern| try Messages.allocRender(arena, m.value_must_match, &.{ label, pattern }),
+        };
+        r.ctx.invalid("{s}", .{line});
+    }
+
+    fn labelOf(r: Report, path: []const u8, buffer: []u8) []const u8 {
+        for (r.flags) |flag| if (std.mem.eql(u8, flag.field, path)) {
+            return std.fmt.bufPrint(buffer, "--{s}", .{flag.name}) catch path;
+        };
+        for (r.groups) |group| if (std.mem.eql(u8, group.path, path)) {
+            if (group.prefix.len == 0) return path;
+            return std.fmt.bufPrint(buffer, "--{s}-*", .{group.prefix}) catch path;
+        };
+        for (r.arg_names) |pair| if (std.mem.eql(u8, pair[0], path)) {
+            return std.fmt.bufPrint(buffer, "<{s}>", .{pair[1]}) catch path;
+        };
+        return path;
+    }
+};
+
+/// The flags of a `.settings` field: never required on the command line, each with its
+/// field's path below the settings as its configuration key, and where else it is set.
+fn settled(
+    comptime list: []const Flag,
+    comptime name: []const u8,
+    comptime sources: []const [2][]const u8,
+) []const Flag {
+    var out: [list.len]Flag = list[0..list.len].*;
+    for (&out) |*flag| {
+        if (!std.mem.startsWith(u8, flag.field, name ++ ".")) continue;
+        flag.required = false;
+        flag.key = flag.field[name.len + 1 ..];
+        for (sources) |source| if (std.mem.eql(u8, source[0], flag.key.?)) {
+            flag.also = source[1];
+        };
+    }
+    const final = out;
+    return &final;
+}
+
+fn sourcesOf(comptime spec: anytype) []const [2][]const u8 {
+    if (!@hasField(@TypeOf(spec.settings), "sources")) return &.{};
+    var out: []const [2][]const u8 = &.{};
+    for (spec.settings.sources) |source| out = out ++ .{[2][]const u8{ source[0], source[1] }};
+    return out;
+}
+
+fn merge(comptime a: Command.Constraints, comptime b: Command.Constraints) Command.Constraints {
+    return .{
+        .exclusive = a.exclusive ++ b.exclusive,
+        .together = a.together ++ b.together,
+        .one_required = a.one_required ++ b.one_required,
+    };
+}
+
+/// The flags of a plain flags struct, for building a `Command` by hand; with specs and
+/// options, `cli.flags(T, Specs, options).list`.
+pub fn flagsOf(comptime T: type) []const Flag {
+    return sets.FlagSet(T).list;
 }
 
 /// `; did you mean 'x'?` for the candidate `text.suggest` picks for `input`, or nothing.
@@ -629,23 +533,26 @@ test flagsOf {
         verbose: u8 = 0,
         force: bool = false,
         limit: ?u32 = null,
-
-        pub const meta = .{
-            .port = .{ .short = 'p', .help = "Port", .env = "PORT" },
-            .verbose = .{ .short = 'v', .count = true },
-            .tag = .{ .split = ',', .secret = true },
-        };
     };
-    const flags = comptime flagsOf(Flags);
+    const Specs = field_.Set(.{field_.Spec(Flags){ .fields = .{
+        .port = .{ .help = "Port" },
+        .tag = .{ .secret = true },
+    } }});
+    const flags = comptime sets.flags(Flags, Specs, .{ .fields = .{
+        .port = .{ .short = 'p', .env = "PORT" },
+        .verbose = .{ .short = 'v', .count = true },
+        .tag = .{ .split = ',' },
+    } }).list;
     try testing.expectEqual(7, flags.len);
     try testing.expectEqualStrings("port", flags[0].name);
+    try testing.expectEqualStrings("Port", flags[0].help);
     try testing.expectEqual('p', flags[0].short.?);
     try testing.expectEqualStrings("PORT", flags[0].env.?);
     try testing.expect(!flags[0].required);
     try testing.expect(flags[1].required);
     try testing.expectEqualStrings("dev|prod", flags[2].value_name);
     try testing.expectEqual(2, flags[2].choices.len);
-    try testing.expect(flags[3].repeatable);
+    try testing.expect(flags[3].repeatable and flags[3].secret);
     try testing.expectEqual(Flag.Kind.count, flags[4].kind);
     try testing.expectEqual(Flag.Kind.bool, flags[5].kind);
     try testing.expect(!flags[6].required);
@@ -658,6 +565,9 @@ test flagsOf {
     try testing.expectEqualStrings("8080", writer.buffered());
     try testing.expectEqual(null, flags[3].write_default);
     try testing.expectEqual(null, flags[5].write_default);
+    // A plain struct: every field a flag under its own name.
+    try testing.expectEqualStrings("verbose", flagsOf(Flags)[4].name);
+    try testing.expectEqual(Flag.Kind.value, flagsOf(Flags)[4].kind);
 }
 
 fn noop(_: *Context) !void {}
@@ -667,8 +577,7 @@ test command {
     const root = comptime command(.{
         .name = "app",
         .summary = "An app",
-        .flags = Flags,
-        .exclusive = &.{&.{ "json", "yaml" }},
+        .flags = sets.flags(Flags, field_.none, .{ .exclusive = &.{&.{ .json, .yaml }} }),
         .subcommands = .{
             command(.{ .name = "a", .aliases = &.{"x"}, .run = noop }),
             command(.{ .name = "b", .run = noop }),
@@ -679,6 +588,7 @@ test command {
     try testing.expectEqualStrings("x", root.subcommands[0].aliases[0]);
     try testing.expect(root.subcommands[0].run != null);
     try testing.expectEqual(1, root.constraints.exclusive.len);
+    try testing.expect(root.check != null);
 }
 
 fn hookA(_: *Context) !void {}
@@ -696,11 +606,12 @@ test "command copies every spec field" {
         .group = "Query",
         .hidden = true,
         .deprecated = "use show",
-        .flags = Flags,
+        .flags = sets.flags(Flags, field_.none, .{
+            .together = &.{&.{.all}},
+            .one_required = &.{&.{.all}},
+        }),
         .persistent_flags = Global,
         .args = Command.Args{ .max = null, .usage = "[x...]" },
-        .together = &.{&.{ "all", "quiet" }},
-        .one_required = &.{&.{"all"}},
         .run = hookA,
         .pre_run = hookA,
         .post_run = hookB,
@@ -725,9 +636,10 @@ test "command copies every spec field" {
     try testing.expectEqualStrings("Only a summary", bare.about());
     try testing.expectEqual(0, bare.args.max.?);
     try testing.expectEqual(null, bare.run);
+    try testing.expectEqual(null, bare.check);
 }
 
-test "meta overrides and derived flag properties" {
+test "options override names; specs give help and deprecation" {
     const Flags = struct {
         dry_run: bool = true,
         out: []const u8 = "",
@@ -735,21 +647,23 @@ test "meta overrides and derived flag properties" {
         level: u8 = 2,
         quiet: u8 = 0,
         ratio: f32,
-        pub const meta = .{
-            .dry_run = .{ .help = "Only print", .hidden = true },
-            .out = .{ .name = "output", .value_name = "file" },
-            .level = .{ .count = true },
-            .quiet = .{ .count = true, .deprecated = "gone" },
-            .ratio = .{ .cfg_only_option = 1 },
-        };
     };
-    const flags = comptime flagsOf(Flags);
+    const Specs = field_.Set(.{field_.Spec(Flags){ .fields = .{
+        .dry_run = .{ .help = "Only print" },
+        .quiet = .{ .deprecated = "gone" },
+    } }});
+    const flags = comptime sets.flags(Flags, Specs, .{ .fields = .{
+        .dry_run = .{ .hidden = true },
+        .out = .{ .name = "output", .value_name = "file" },
+        .level = .{ .count = true },
+        .quiet = .{ .count = true },
+    } }).list;
     try testing.expectEqualStrings("dry-run", flags[0].name);
     try testing.expectEqualStrings("dry_run", flags[0].field);
     try testing.expect(flags[0].hidden);
+    try testing.expectEqualStrings("Only print", flags[0].help);
     try testing.expectEqualStrings("", flags[0].value_name);
     try testing.expectEqualStrings("output", flags[1].name);
-    try testing.expectEqualStrings("output", longName(Flags, "out"));
     try testing.expectEqualStrings("file", flags[1].value_name);
     try testing.expect(!flags[1].required);
     try testing.expectEqual(null, flags[1].write_default);
@@ -771,25 +685,38 @@ test "meta overrides and derived flag properties" {
     try writer.writeByte(' ');
     try flags[3].write_default.?(&writer);
     try testing.expectEqualStrings("true 2", writer.buffered());
-
-    try testing.expectEqual(1, option(Flags, "ratio", "cfg_only_option", @as(u8, 7)));
-    try testing.expectEqual(false, option(Flags, "quiet", "hidden", false));
-    try testing.expectEqual(false, option(struct { a: bool }, "a", "hidden", false));
 }
 
-test "an .internal field is state, not a flag; .key names the configuration key" {
+test "an .internal field is state, not a flag; .settings give keys and never require" {
+    const Config = struct { jobs: u8, region: []const u8 = "eu" };
     const State = struct {
-        jobs: u8 = 4,
+        config: Config = .{ .jobs = 4 },
         found: usize = 0,
-        pub const meta = .{
-            .jobs = .{ .key = "fetch.concurrency" },
-            .found = .{ .internal = true },
-        };
     };
-    const flags = comptime flagsOf(State);
-    try testing.expectEqual(1, flags.len);
-    try testing.expectEqualStrings("jobs", flags[0].name);
-    try testing.expectEqualStrings("fetch.concurrency", flags[0].key.?);
+    const set = sets.flags(State, field_.none, .{ .fields = .{
+        .config = .{ .name = "" },
+        .found = .{ .internal = true },
+    } });
+    try testing.expectEqual(2, set.list.len);
+    const loadConfig = struct {
+        fn load(_: *Context) !Config {
+            return .{ .jobs = 1 };
+        }
+    }.load;
+    const cmd = comptime command(.{
+        .name = "app",
+        .flags = set,
+        .settings = .{
+            .field = .config,
+            .load = loadConfig,
+            .sources = .{.{ "jobs", "$JOBS" }},
+        },
+        .run = noop,
+    });
+    try testing.expectEqualStrings("jobs", cmd.flags[0].name);
+    try testing.expectEqualStrings("jobs", cmd.flags[0].key.?);
+    try testing.expectEqualStrings("$JOBS", cmd.flags[0].also);
+    try testing.expect(!cmd.flags[0].required);
 }
 
 /// 48 fields named f0..f47, all `u8 = 0`.

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 const info = @import("info.zig");
 
@@ -11,11 +12,13 @@ const Kind = sys.dirs.Kind;
 const DirsFlags = struct {
     search: bool = false,
     null: bool = false,
-    pub const meta = .{
-        .search = .{ .help = "Print the configuration search path instead" },
-        .null = .{ .short = '0', .help = "End lines with NUL, not newline (for xargs -0)" },
-    };
 };
+const dirs_flags = cli.flags(DirsFlags, field.Set(.{field.Spec(DirsFlags){ .fields = .{
+    .search = .{ .help = "Print the configuration search path instead" },
+    .null = .{ .help = "End lines with NUL, not newline (for xargs -0)" },
+} }}), .{ .fields = .{
+    .null = .{ .short = '0' },
+} });
 
 pub const command = cli.command(.{
     .name = "dirs",
@@ -35,7 +38,7 @@ pub const command = cli.command(.{
     \\or, with --search:
     \\  {"app": string, "os": string, "search": [string, ...]}
     ,
-    .flags = DirsFlags,
+    .flags = dirs_flags,
     .output = true,
     .args = .{ .max = 1, .usage = "[app]" },
     .examples =

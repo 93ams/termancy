@@ -14,6 +14,8 @@
 //! specific handler errors to other statuses, and `exit_statuses` document them.
 
 const std = @import("std");
+const sets = @import("sets.zig");
+const field_ = @import("field");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -46,6 +48,8 @@ pub const exit_success: u8 = 0;
 pub const exit_failure: u8 = 1;
 /// The command line was wrong.
 pub const exit_usage: u8 = 2;
+/// The configuration was wrong (`Context.configError`): `EX_CONFIG` from `sysexits.h`.
+pub const exit_config: u8 = 78;
 /// A write to standard output failed, almost always because the reader went away
 /// (`app | head`). 128 + SIGPIPE, the status a process killed by that signal reports.
 pub const exit_broken_pipe: u8 = 141;
@@ -765,6 +769,8 @@ const max_response_file = 1 << 20;
 fn runHandlers(ctx: *Context) anyerror!void {
     const path = ctx.path;
     const leaf = path[path.len - 1];
+    // Checks across each command's flags and positionals, every problem at once.
+    for (path) |cmd| if (cmd.check) |check| try check(ctx);
     for (path) |cmd| if (cmd.persistent_pre_run) |hook| try hook(ctx);
     if (leaf.pre_run) |hook| try hook(ctx);
     try leaf.run.?(ctx);
@@ -856,6 +862,7 @@ fn reportFailure(app: App, env: Environment, ctx: *Context, err: anyerror) u8 {
     // Nothing useful can be said on a closed pipe, and the reader has what it wanted.
     if (err == error.WriteFailed) return exit_broken_pipe;
     if (err == error.UsageFailed) return exit_usage;
+    if (err == error.ConfigFailed) return exit_config;
     if (app.exit_status) |map| {
         if (map(err)) |status| return status;
     }
@@ -1061,8 +1068,10 @@ fn leafPost(ctx: *Context) !void {
 const GreetFlags = struct {
     name: []const u8 = "world",
     shout: bool = false,
-    pub const meta = .{ .name = .{ .short = 'n' } };
 };
+const greet_flags = sets.flags(GreetFlags, field_.none, .{ .fields = .{
+    .name = .{ .short = 'n' },
+} });
 
 fn greet(ctx: *Context, flags: GreetFlags) !void {
     try Recorder.record(ctx, "run");
@@ -1104,7 +1113,7 @@ const test_root = spec.command(.{
         spec.command(.{
             .name = "greet",
             .summary = "Say hello",
-            .flags = GreetFlags,
+            .flags = greet_flags,
             .pre_run = leafPre,
             .post_run = leafPost,
             .run = greet,
@@ -1273,8 +1282,10 @@ test "help_command off, help for unknown commands, no version" {
 
 const LegacyFlags = struct {
     legacy: bool = false,
-    pub const meta = .{ .legacy = .{ .deprecated = "drop it" } };
 };
+const legacy_flags = sets.flags(LegacyFlags, field_.Set(.{field_.Spec(LegacyFlags){ .fields = .{
+    .legacy = .{ .deprecated = "drop it" },
+} }}), .{});
 
 test "deprecated flags and commands warn on stderr and still run" {
     const root = comptime spec.command(.{
@@ -1282,7 +1293,7 @@ test "deprecated flags and commands warn on stderr and still run" {
         .subcommands = .{spec.command(.{
             .name = "old",
             .deprecated = "use new",
-            .flags = LegacyFlags,
+            .flags = legacy_flags,
             .run = struct {
                 fn run(ctx: *Context, flags: LegacyFlags) !void {
                     try ctx.out.print("legacy={}\n", .{flags.legacy});
@@ -1479,22 +1490,30 @@ test "ctx.exit ends with that status and keeps the output" {
 const RangeFlags = struct {
     low: u32 = 0,
     high: u32 = 10,
-
-    pub fn validate(flags: RangeFlags, ctx: *Context) !void {
-        if (flags.low > flags.high) {
-            const values = .{ flags.low, flags.high };
-            return ctx.usageError("--low ({d}) must not exceed --high ({d})", values);
-        }
-    }
+    tags: []const []const u8 = &.{},
 };
+
+fn ordered(flags: RangeFlags, w: *std.Io.Writer) !void {
+    if (flags.low > flags.high) {
+        return field_.fail(w, "--low ({d}) must not exceed --high ({d})", .{ flags.low, flags.high });
+    }
+}
+
+const range_flags = sets.flags(RangeFlags, field_.Set(.{field_.Spec(RangeFlags){
+    .fields = .{
+        .high = .{ .checks = &.{.max(100)} },
+        .tags = .{ .checks = &.{.maxLen(1)}, .each = &.{.minLen(2)} },
+    },
+    .checks = &.{.from(ordered)},
+}}), .{ .fields = .{ .tags = .{ .name = "tag" } } });
 
 fn printRange(ctx: *Context, flags: RangeFlags) !void {
     try ctx.out.print("{d}..{d}\n", .{ flags.low, flags.high });
 }
 
-const range_root = spec.command(.{ .name = "app", .flags = RangeFlags, .run = printRange });
+const range_root = spec.command(.{ .name = "app", .flags = range_flags, .run = printRange });
 
-test "a flags struct's validate runs before the handler" {
+test "checks across a flags struct's fields run before the handler, every failure at once" {
     const app: App = .{ .root = &range_root };
     const ok = try cli_testing.run(app, &.{ "--low", "2" }, .{});
     defer ok.deinit();
@@ -1502,6 +1521,16 @@ test "a flags struct's validate runs before the handler" {
     const bad = try cli_testing.run(app, &.{ "--low", "20" }, .{});
     defer bad.deinit();
     try bad.expect(2, "", "app: --low (20) must not exceed --high (10)\n" ++
+        "Run 'app --help' for usage.\n");
+    // A value's own check fails as it is parsed; a list's, once it is whole.
+    const high = try cli_testing.run(app, &.{ "--high", "200" }, .{});
+    defer high.deinit();
+    try high.expect(2, "", "app: invalid value \"200\" for flag --high: must be at most 100\n" ++
+        "Run 'app --help' for usage.\n");
+    const tags = try cli_testing.run(app, &.{ "--tag", "ab", "--tag", "cd", "--low", "20" }, .{});
+    defer tags.deinit();
+    try tags.expect(2, "", "app: --tag: must be at most 1 long\n" ++
+        "app: --low (20) must not exceed --high (10)\n" ++
         "Run 'app --help' for usage.\n");
 }
 
@@ -1611,8 +1640,8 @@ const CopyArgs = struct {
     mode: enum { fast, safe },
     count: u8 = 1,
     files: []const []const u8 = &.{},
-    pub const meta = .{ .files = .{ .name = "file" } };
 };
+const copy_args = sets.args(CopyArgs, field_.none, .{ .fields = .{ .files = .{ .name = "file" } } });
 
 fn copy(ctx: *Context, flags: EchoFlags, args: CopyArgs) !void {
     try ctx.out.print("{t} x{d}{s}", .{ args.mode, args.count, if (flags.loud) " loud" else "" });
@@ -1627,8 +1656,8 @@ fn copyArgsOnly(ctx: *Context, args: CopyArgs) !void {
 const typed_root = spec.command(.{
     .name = "app",
     .subcommands = .{
-        spec.command(.{ .name = "copy", .flags = EchoFlags, .args = CopyArgs, .run = copy }),
-        spec.command(.{ .name = "mode", .args = CopyArgs, .run = copyArgsOnly }),
+        spec.command(.{ .name = "copy", .flags = EchoFlags, .args = copy_args, .run = copy }),
+        spec.command(.{ .name = "mode", .args = copy_args, .run = copyArgsOnly }),
     },
 });
 
@@ -1767,17 +1796,19 @@ const LoginFlags = struct {
     user: []const u8,
     port: u16,
     mode: enum { fast, safe } = .fast,
-    pub const meta = .{
-        .user = .{ .prompt = "User" },
-        .port = .{ .prompt = "Port", .min = 1 },
-    };
 };
+const login_flags = sets.flags(LoginFlags, field_.Set(.{field_.Spec(LoginFlags){ .fields = .{
+    .port = .{ .checks = &.{.min(1)} },
+} }}), .{ .fields = .{
+    .user = .{ .prompt = "User" },
+    .port = .{ .prompt = "Port" },
+} });
 
 fn login(ctx: *Context, flags: LoginFlags) !void {
     try ctx.out.print("{s}@{d}\n", .{ flags.user, flags.port });
 }
 
-const login_root = spec.command(.{ .name = "app", .flags = LoginFlags, .run = login });
+const login_root = spec.command(.{ .name = "app", .flags = login_flags, .run = login });
 
 test "missing flags are asked for in an interactive run" {
     const app: App = .{ .root = &login_root };
@@ -1806,8 +1837,8 @@ const RenameArgs = struct {
     mode: enum { fast, safe },
     count: u8,
     rest: []const []const u8 = &.{},
-    pub const meta = .{ .mode = .{ .prompt = "Mode" }, .count = .{ .prompt = "Count" } };
 };
+const rename_args = sets.args(RenameArgs, field_.none, .{ .fields = .{ .mode = .{ .prompt = "Mode" }, .count = .{ .prompt = "Count" } } });
 
 fn rename(ctx: *Context, args: RenameArgs) !void {
     try ctx.out.print("{t} {d} {d}\n", .{ args.mode, args.count, args.rest.len });
@@ -1816,8 +1847,8 @@ fn rename(ctx: *Context, args: RenameArgs) !void {
 const PartlyArgs = struct {
     first: []const u8,
     second: []const u8,
-    pub const meta = .{ .second = .{ .prompt = "Second" } };
 };
+const partly_args = sets.args(PartlyArgs, field_.none, .{ .fields = .{ .second = .{ .prompt = "Second" } } });
 
 fn partly(ctx: *Context, args: PartlyArgs) !void {
     try ctx.out.print("{s} {s}\n", .{ args.first, args.second });
@@ -1826,8 +1857,8 @@ fn partly(ctx: *Context, args: PartlyArgs) !void {
 const asking_root = spec.command(.{
     .name = "app",
     .subcommands = .{
-        spec.command(.{ .name = "rename", .args = RenameArgs, .run = rename }),
-        spec.command(.{ .name = "partly", .args = PartlyArgs, .run = partly }),
+        spec.command(.{ .name = "rename", .args = rename_args, .run = rename }),
+        spec.command(.{ .name = "partly", .args = partly_args, .run = partly }),
     },
 });
 
@@ -1957,8 +1988,12 @@ test "help taller than the terminal goes through the pager" {
 
 const I18nFlags = struct {
     count: u32 = 1,
-    pub const meta = .{ .count = .{ .short = 'n', .help = "How many files" } };
 };
+const i18n_flags = sets.flags(I18nFlags, field_.Set(.{field_.Spec(I18nFlags){ .fields = .{
+    .count = .{ .help = "How many files" },
+} }}), .{ .fields = .{
+    .count = .{ .short = 'n' },
+} });
 
 fn i18nClean(ctx: *Context, flags: I18nFlags) !void {
     const line = try ctx.plural(
@@ -1976,7 +2011,7 @@ const i18n_root = spec.command(.{
     .subcommands = &.{spec.command(.{
         .name = "clean",
         .summary = "Remove old files",
-        .flags = I18nFlags,
+        .flags = i18n_flags,
         .run = i18nClean,
     })},
 });
@@ -2045,12 +2080,13 @@ const ToolFlags = struct {
     key: ?[]const u8 = null,
     cert: ?[]const u8 = null,
     beta: bool = false,
-    pub const meta = .{
-        .name = .{ .min_len = 2, .max_len = 5 },
-        .key = .{ .requires = &[_][]const u8{"cert"} },
-        .beta = .{ .feature = "APP_BETA" },
-    };
 };
+const tool_flags = sets.flags(ToolFlags, field_.Set(.{field_.Spec(ToolFlags){ .fields = .{
+    .name = .{ .checks = &.{ .minLen(2), .maxLen(5) } },
+} }}), .{ .fields = .{
+    .key = .{ .requires = &.{.cert} },
+    .beta = .{ .feature = "APP_BETA" },
+} });
 
 const Row = struct { name: []const u8, size: u32 };
 
@@ -2076,7 +2112,7 @@ const tool_root = spec.command(.{
         spec.command(.{
             .name = "wipe",
             .summary = "Wipe it",
-            .flags = ToolFlags,
+            .flags = tool_flags,
             .confirm = "Wipe everything?",
             .dry_run = true,
             .run = toolWipe,
@@ -2266,12 +2302,11 @@ const ServeFlags = struct {
     port: u16 = 80,
     host: []const u8 = "localhost",
     tag: []const []const u8 = &.{},
-    pub const meta = .{
-        .port = .{ .env = "PORT" },
-        .host = .{ .key = "net.host" },
-        .tag = .{ .split = ',' },
-    };
 };
+const serve_flags = sets.flags(ServeFlags, field_.none, .{ .fields = .{
+    .port = .{ .env = "PORT" },
+    .tag = .{ .split = ',' },
+} });
 
 const VerboseFlags = struct { verbose: bool = false };
 
@@ -2286,7 +2321,7 @@ const configured_root = spec.command(.{
     .name = "tool",
     .persistent_flags = VerboseFlags,
     .subcommands = .{
-        spec.command(.{ .name = "serve", .flags = ServeFlags, .run = serveConfigured }),
+        spec.command(.{ .name = "serve", .flags = serve_flags, .run = serveConfigured }),
     },
 });
 
@@ -2294,7 +2329,7 @@ test "parse.Defaults.from reads <prefix>.<command path>.<flag>, below argv and e
     const config: FakeConfig = .{ .pairs = &.{
         .{ "tool.serve.port", "9000" },
         .{ "tool.verbose", "yes" },
-        .{ "net.host", "example.org" },
+        .{ "tool.serve.host", "example.org" },
         .{ "tool.serve.tag", "a,b,c" },
         .{ "serve.port", "1" },
     } };
@@ -2310,7 +2345,7 @@ test "parse.Defaults.from reads <prefix>.<command path>.<flag>, below argv and e
     try expectRun(app, &given, 0, "h:8 verbose=true tags=3\n", "");
 
     const unprefixed: App = .{ .root = &configured_root, .defaults = .from(&config, .{}) };
-    try expectRun(unprefixed, &.{"serve"}, 0, "example.org:1 verbose=false tags=0\n", "");
+    try expectRun(unprefixed, &.{"serve"}, 0, "localhost:1 verbose=false tags=0\n", "");
 
     const bad: FakeConfig = .{ .pairs = &.{.{ "serve.port", "lots" }} };
     const refused: App = .{ .root = &configured_root, .defaults = .from(&bad, .{}) };

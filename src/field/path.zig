@@ -64,7 +64,8 @@ pub fn fieldTypes(comptime T: type) []const type {
 }
 
 /// A value of `T` with every default set, groups without defaults filled with theirs.
-/// Fields that must be set are left undefined: read them only once something set them.
+/// Fields that must be set and have no default are zero (`null`, `false`, `0`, empty), or
+/// left undefined for a type with no zero: read them only once something set them.
 pub fn initDefaults(comptime T: type) T {
     var value: T = undefined;
     const info = @typeInfo(T).@"struct";
@@ -73,9 +74,23 @@ pub fn initDefaults(comptime T: type) T {
             @field(value, name) = @as(*const F, @ptrCast(@alignCast(d))).*;
         } else if (comptime isGroup(F)) {
             @field(value, name) = initDefaults(F);
+        } else if (comptime zero(F)) |z| {
+            @field(value, name) = z;
         }
     }
     return value;
+}
+
+/// The value a field without a default holds until it is set, when its type has one.
+fn zero(comptime F: type) ?F {
+    return switch (@typeInfo(F)) {
+        // Some null of `F`, not "no zero".
+        .optional => @as(F, null),
+        .bool => false,
+        .int, .float => 0,
+        .pointer => |p| if (p.size == .slice) &.{} else null,
+        else => null,
+    };
 }
 
 /// The variant `name` of the choice `U`, its fields at their defaults.

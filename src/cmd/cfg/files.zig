@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 const load = @import("load.zig");
 const query = @import("query.zig");
@@ -37,17 +38,20 @@ const FileFormat = enum {
 const ConvertFlags = struct {
     to: FileFormat,
     from: ?FileFormat = null,
-    pub const meta = .{
-        .to = .{ .short = 't', .help = "Format to write" },
-        .from = .{ .short = 'f', .help = "Format to read (default: from the extension)" },
-    };
 };
+const convert_flags = cli.flags(ConvertFlags, field.Set(.{field.Spec(ConvertFlags){ .fields = .{
+    .to = .{ .help = "Format to write" },
+    .from = .{ .help = "Format to read (default: from the extension)" },
+} }}), .{ .fields = .{
+    .to = .{ .short = 't' },
+    .from = .{ .short = 'f' },
+} });
 
 pub const convert = cli.command(.{
     .name = "convert",
     .summary = "Convert a file to another format",
     .group = group,
-    .flags = ConvertFlags,
+    .flags = convert_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<file|->", .complete = load.completeConfigFiles },
     .examples =
     \\termancy cfg convert app.toml --to yaml
@@ -71,14 +75,12 @@ fn runConvert(ctx: *cli.Context, flags: ConvertFlags) !void {
 
 const ValidateFlags = struct {
     schema: ?[]const u8 = null,
-    pub const meta = .{
-        .schema = .{
-            .help = "Also check each file against this JSON Schema (in any format)",
-            .value_name = "file",
-            .complete = load.completeConfigFiles,
-        },
-    };
 };
+const validate_flags = cli.flags(ValidateFlags, field.Set(.{field.Spec(ValidateFlags){ .fields = .{
+    .schema = .{ .help = "Also check each file against this JSON Schema (in any format)" },
+} }}), .{ .fields = .{
+    .schema = .{ .value_name = "file", .complete = .from(load.completeConfigFiles) },
+} });
 
 pub const validate = cli.command(.{
     .name = "validate",
@@ -107,7 +109,7 @@ pub const validate = cli.command(.{
         .{ .code = 0, .meaning = "Every file is valid" },
         .{ .code = 1, .meaning = "A file does not parse or does not match the schema" },
     },
-    .flags = ValidateFlags,
+    .flags = validate_flags,
     .args = .{
         .max = null,
         .usage = "[<file>...]",
@@ -318,12 +320,14 @@ const FmtFlags = struct {
     check: bool = false,
     null: bool = false,
     sort: bool = false,
-    pub const meta = .{
-        .sort = .{ .help = "Sort keys, at every level (TOML keeps its comments)" },
-        .check = .{ .help = "Report files that are not formatted, without changing them" },
-        .null = .{ .short = '0', .help = "End lines with NUL, not newline (for xargs -0)" },
-    };
 };
+const fmt_flags = cli.flags(FmtFlags, field.Set(.{field.Spec(FmtFlags){ .fields = .{
+    .sort = .{ .help = "Sort keys, at every level (TOML keeps its comments)" },
+    .check = .{ .help = "Report files that are not formatted, without changing them" },
+    .null = .{ .help = "End lines with NUL, not newline (for xargs -0)" },
+} }}), .{ .fields = .{
+    .null = .{ .short = '0' },
+} });
 
 pub const fmt = cli.command(.{
     .name = "fmt",
@@ -343,7 +347,7 @@ pub const fmt = cli.command(.{
         .{ .code = 0, .meaning = "The files were rewritten, or with --check, none would change" },
         .{ .code = 1, .meaning = "With --check, some file would change" },
     },
-    .flags = FmtFlags,
+    .flags = fmt_flags,
     .args = .{
         .min = 1,
         .max = null,
@@ -384,14 +388,14 @@ fn runFmt(ctx: *cli.Context, flags: FmtFlags) !void {
 const RedactFlags = struct {
     from: ?FileFormat = null,
     secret: []const []const u8 = &.{},
-    pub const meta = .{
-        .from = .{ .short = 'f', .help = "Format to read (default: from the extension)" },
-        .secret = .{
-            .help = "Also redact this key, or everything under it; repeatable",
-            .value_name = "key",
-        },
-    };
 };
+const redact_flags = cli.flags(RedactFlags, field.Set(.{field.Spec(RedactFlags){ .fields = .{
+    .from = .{ .help = "Format to read (default: from the extension)" },
+    .secret = .{ .help = "Also redact this key, or everything under it; repeatable" },
+} }}), .{ .fields = .{
+    .from = .{ .short = 'f' },
+    .secret = .{ .value_name = "key" },
+} });
 
 pub const redact = cli.command(.{
     .name = "redact",
@@ -408,7 +412,7 @@ pub const redact = cli.command(.{
     \\file is written as termancy writes it, losing its comments, with a warning.
     ,
     .group = group,
-    .flags = RedactFlags,
+    .flags = redact_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<file|->", .complete = load.completeConfigFiles },
     .examples =
     \\termancy cfg redact app.toml > app-redacted.toml
@@ -502,10 +506,10 @@ fn gives(value: cfg.Value) bool {
 
 const DiffFlags = struct {
     layer: []const cfg.Config.Layer = &.{},
-    pub const meta = .{
-        .layer = .{ .help = "Compare two layers of the configuration instead; give it twice" },
-    };
 };
+const diff_flags = cli.flags(DiffFlags, field.Set(.{field.Spec(DiffFlags){ .fields = .{
+    .layer = .{ .help = "Compare two layers of the configuration instead; give it twice" },
+} }}), .{});
 
 pub const diff = cli.command(.{
     .name = "diff",
@@ -528,7 +532,7 @@ pub const diff = cli.command(.{
         .{ .code = 0, .meaning = "The configurations are the same" },
         .{ .code = 1, .meaning = "They differ" },
     },
-    .flags = DiffFlags,
+    .flags = diff_flags,
     .args = .{ .max = 2, .usage = "<old> <new>", .complete = load.completeConfigFiles },
     .examples =
     \\termancy cfg diff base.toml prod.yaml
@@ -578,16 +582,12 @@ fn runDiff(ctx: *cli.Context, flags: DiffFlags) !void {
 
 const SecretFlags = struct {
     passphrase: []const u8,
-    pub const meta = .{
-        .passphrase = .{
-            .help = "The passphrase; better given through the environment than here",
-            .env = "TERMANCY_PASSPHRASE",
-            .prompt = "Passphrase",
-            .secret = true,
-            .hidden = true,
-        },
-    };
 };
+const secret_flags = cli.flags(SecretFlags, field.Set(.{field.Spec(SecretFlags){ .fields = .{
+    .passphrase = .{ .help = "The passphrase; better given through the environment than here", .secret = true },
+} }}), .{ .fields = .{
+    .passphrase = .{ .env = "TERMANCY_PASSPHRASE", .prompt = "Passphrase", .hidden = true },
+} });
 
 pub const encrypt = cli.command(.{
     .name = "encrypt",
@@ -599,7 +599,7 @@ pub const encrypt = cli.command(.{
     \\$TERMANCY_PASSPHRASE is set, treating all of its values as secret.
     ,
     .group = group,
-    .flags = SecretFlags,
+    .flags = secret_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<file>", .complete = load.completeConfigFiles },
     .examples =
     \\TERMANCY_PASSPHRASE=... termancy cfg encrypt secrets.toml
@@ -634,7 +634,7 @@ pub const decrypt = cli.command(.{
     \\$TERMANCY_PASSPHRASE, or is asked for at a terminal.
     ,
     .group = group,
-    .flags = SecretFlags,
+    .flags = secret_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<file>" },
     .examples =
     \\termancy cfg decrypt secrets.toml.enc > secrets.toml

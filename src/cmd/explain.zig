@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const term = @import("term");
 const Writer = std.Io.Writer;
 
@@ -11,12 +12,12 @@ const Flags = struct {
     text: bool = true,
     width: u16 = 80,
     height: u16 = 24,
-    pub const meta = .{
-        .text = .{ .help = "Show the text between sequences (--no-text: sequences only)" },
-        .width = .{ .help = "Columns of the terminal a command runs on", .min = 1 },
-        .height = .{ .help = "Rows of the terminal a command runs on", .min = 1 },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .text = .{ .help = "Show the text between sequences (--no-text: sequences only)" },
+    .width = .{ .help = "Columns of the terminal a command runs on", .checks = &.{.min(1)} },
+    .height = .{ .help = "Rows of the terminal a command runs on", .checks = &.{.min(1)} },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "explain",
@@ -30,7 +31,7 @@ pub const command = cli.command(.{
     \\questions to the terminal (colors, cursor position, modes) are answered.
     ,
     .args = .{ .max = null, .usage = "[file...] [-- command...]", .passthrough = true },
-    .flags = Flags,
+    .flags = flags_flags,
     .output = true,
     .examples =
     \\printf '\033[1;31mred\033[0m\n' | termancy explain

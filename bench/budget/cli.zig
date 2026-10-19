@@ -2,11 +2,16 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 
 const Flags = struct {
     name: []const u8 = "world",
-    pub const meta = .{ .name = .{ .short = 'n', .help = "Who to greet" } };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .name = .{ .help = "Who to greet" },
+} }}), .{ .fields = .{
+    .name = .{ .short = 'n' },
+} });
 
 fn hello(ctx: *cli.Context, flags: Flags) !void {
     try ctx.out.print("hello, {s}\n", .{flags.name});
@@ -15,7 +20,7 @@ fn hello(ctx: *cli.Context, flags: Flags) !void {
 const root = cli.command(.{
     .name = "hello",
     .summary = "Says hello",
-    .flags = Flags,
+    .flags = flags_flags,
     .run = hello,
 });
 

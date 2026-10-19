@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const term = @import("term");
 const components = @import("components");
 
@@ -37,17 +38,19 @@ const Deploy = struct {
     break_release: bool = false,
     /// What `check` found: state, not a flag.
     pending: u32 = 0,
-
-    pub const meta = .{
-        .service = .{ .short = 's', .help = "The service to deploy", .min_len = 1 },
-        .env = .{ .short = 'e', .help = "Where to deploy" },
-        .version = .{ .help = "The version to release" },
-        .migrate = .{ .help = "Run the pending database migrations" },
-        .canary = .{ .help = "Release to one replica first (production only)" },
-        .break_release = .{ .hidden = true },
-        .pending = .{ .internal = true },
-    };
 };
+const deploy_flags = cli.flags(Deploy, field.Set(.{field.Spec(Deploy){ .fields = .{
+    .service = .{ .help = "The service to deploy", .checks = &.{.minLen(1)} },
+    .env = .{ .help = "Where to deploy" },
+    .version = .{ .help = "The version to release" },
+    .migrate = .{ .help = "Run the pending database migrations" },
+    .canary = .{ .help = "Release to one replica first (production only)" },
+} }}), .{ .fields = .{
+    .service = .{ .short = 's' },
+    .env = .{ .short = 'e' },
+    .break_release = .{ .hidden = true },
+    .pending = .{ .internal = true },
+} });
 
 const Step = enum { target, check, ask_migrate, build, migrate, ask_canary, canary, release };
 
@@ -170,7 +173,7 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "run",
             .summary = "Deploy, asking for anything not given as a flag",
-            .flags = Deploy,
+            .flags = deploy_flags,
             .dry_run = true,
             .output = true,
             .examples =

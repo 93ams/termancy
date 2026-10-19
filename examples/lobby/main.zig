@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term");
 const sys = @import("sys");
@@ -180,14 +181,17 @@ const ServeFlags = struct {
     authorized_keys: ?[]const u8 = null,
     anyone: bool = false,
     web: ?[]const u8 = null,
-    pub const meta = .{
-        .listen = .{ .short = 'l', .help = "The address and port to listen on" },
-        .web = .{ .help = "Open it to browsers too, on this address and port (they need " ++
-            "the link it prints, token and all)" },
-        .authorized_keys = .{ .short = 'k', .help = "Who may come in (an authorized_keys file)" },
-        .anyone = .{ .help = "Let anyone in, without a key" },
-    };
 };
+const serve_flags = cli.flags(ServeFlags, field.Set(.{field.Spec(ServeFlags){ .fields = .{
+    .listen = .{ .help = "The address and port to listen on" },
+    .web = .{ .help = "Open it to browsers too, on this address and port (they need " ++
+        "the link it prints, token and all)" },
+    .authorized_keys = .{ .help = "Who may come in (an authorized_keys file)" },
+    .anyone = .{ .help = "Let anyone in, without a key" },
+} }}), .{ .fields = .{
+    .listen = .{ .short = 'l' },
+    .authorized_keys = .{ .short = 'k' },
+} });
 
 const Served = struct {
     book: *Guestbook,
@@ -290,8 +294,10 @@ fn welcome(served: *Served, session: anytype, user: []const u8) !void {
 
 const PreviewFlags = struct {
     user: []const u8 = "ada",
-    pub const meta = .{ .user = .{ .help = "Who is visiting" } };
 };
+const preview_flags = cli.flags(PreviewFlags, field.Set(.{field.Spec(PreviewFlags){ .fields = .{
+    .user = .{ .help = "Who is visiting" },
+} }}), .{});
 
 fn preview(ctx: *cli.Context, flags: PreviewFlags) !void {
     var book: Guestbook = .{ .gpa = ctx.gpa, .io = ctx.io };
@@ -315,13 +321,13 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "serve",
             .summary = "Open the lobby to SSH",
-            .flags = ServeFlags,
+            .flags = serve_flags,
             .run = serve,
         }),
         cli.command(.{
             .name = "preview",
             .summary = "Print what a visitor sees first",
-            .flags = PreviewFlags,
+            .flags = preview_flags,
             .run = preview,
         }),
     },

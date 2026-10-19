@@ -23,6 +23,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field_ = @import("field");
 const cfg = @import("cfg");
 
 const Method = enum { get, head, post, put, patch, delete };
@@ -31,12 +32,11 @@ const SendArgs = struct {
     method: Method,
     url: []const u8,
     items: []const []const u8 = &.{},
-
-    pub const meta = .{
-        .url = .{ .complete = completeUrl },
-        .items = .{ .name = "item" },
-    };
 };
+const send_args = cli.args(SendArgs, field_.none, .{ .fields = .{
+    .url = .{ .complete = .from(completeUrl) },
+    .items = .{ .name = "item" },
+} });
 
 const SendFlags = struct {
     header: []const []const u8 = &.{},
@@ -53,39 +53,41 @@ const SendFlags = struct {
     insecure: bool = false,
     proxy: ?[]const u8 = null,
     trace: bool = false,
-
-    pub const meta = .{
-        .header = .{ .short = 'H', .help = "A header, `Name: value`; repeat for more" },
-        .accept = .{ .split = ',', .help = "Media types to accept, comma-separated" },
-        .json = .{ .help = "Send the body fields as JSON" },
-        .form = .{ .short = 'f', .help = "Send the body fields as a form" },
-        .timeout = .{ .short = 't', .help = "Give up on a try after this long" },
-        .max_size = .{ .help = "The largest response to read" },
-        .retries = .{ .max = 10, .help = "Tries after the first that fails" },
-        .http_version = .{ .one_of = &.{ "1.0", "1.1", "2" }, .help = "The HTTP version" },
-        .token = .{ .env = "HTTPC_TOKEN", .secret = true, .help = "A bearer token" },
-        .user = .{ .short = 'u', .requires = &.{"password"}, .help = "The user, for basic auth" },
-        .password = .{ .secret = true, .help = "The password of --user" },
-        .insecure = .{
-            .short = 'k',
-            .aliases = &.{"no-verify"},
-            .help = "Do not verify the server's certificate",
-        },
-        .proxy = .{ .deprecated = "set HTTPS_PROXY instead", .help = "A proxy to go through" },
-        .trace = .{ .hidden = true },
-    };
-
-    /// Checks across fields, after each flag was checked alone.
-    pub fn validate(flags: SendFlags, ctx: *cli.Context) !void {
-        const worst = flags.timeout.ns * (@as(u64, flags.retries) + 1);
-        if (worst > 5 * std.time.ns_per_min) {
-            return ctx.usageError(
-                "--timeout {f} with --retries {d} could take {f}; at most 5m is allowed",
-                .{ flags.timeout, flags.retries, cfg.Duration{ .ns = worst } },
-            );
-        }
-    }
 };
+
+/// A check across fields, after each flag was checked alone.
+fn boundedWait(flags: SendFlags, w: *std.Io.Writer) !void {
+    const worst = flags.timeout.ns * (@as(u64, flags.retries) + 1);
+    if (worst > 5 * std.time.ns_per_min) return field_.fail(
+        w,
+        "--timeout {f} with --retries {d} could take {f}; at most 5m is allowed",
+        .{ flags.timeout, flags.retries, cfg.Duration{ .ns = worst } },
+    );
+}
+const send_flags = cli.flags(SendFlags, field_.Set(.{field_.Spec(SendFlags){ .checks = &.{.from(boundedWait)}, .fields = .{
+    .header = .{ .help = "A header, `Name: value`; repeat for more" },
+    .accept = .{ .help = "Media types to accept, comma-separated" },
+    .json = .{ .help = "Send the body fields as JSON" },
+    .form = .{ .help = "Send the body fields as a form" },
+    .timeout = .{ .help = "Give up on a try after this long" },
+    .max_size = .{ .help = "The largest response to read" },
+    .retries = .{ .help = "Tries after the first that fails", .checks = &.{.max(10)} },
+    .http_version = .{ .help = "The HTTP version", .checks = &.{.oneOf(&.{ "1.0", "1.1", "2" })} },
+    .token = .{ .secret = true, .help = "A bearer token" },
+    .user = .{ .help = "The user, for basic auth" },
+    .password = .{ .secret = true, .help = "The password of --user" },
+    .insecure = .{ .help = "Do not verify the server's certificate" },
+    .proxy = .{ .deprecated = "set HTTPS_PROXY instead", .help = "A proxy to go through" },
+} }}), .{ .fields = .{
+    .header = .{ .short = 'H' },
+    .accept = .{ .split = ',' },
+    .form = .{ .short = 'f' },
+    .timeout = .{ .short = 't' },
+    .token = .{ .env = "HTTPC_TOKEN" },
+    .user = .{ .short = 'u', .requires = &.{.password} },
+    .insecure = .{ .short = 'k', .aliases = &.{"no-verify"} },
+    .trace = .{ .hidden = true },
+}, .exclusive = &.{&.{ .json, .form }} });
 
 /// What `send` prints: as `field: value` lines, or as JSON with `-o json`.
 const Request = struct {
@@ -181,10 +183,12 @@ fn completeUrl(ctx: *cli.Context, prefix: []const u8) ![]const cli.Candidate {
 
 const LoginFlags = struct {
     token: []const u8,
-    pub const meta = .{
-        .token = .{ .prompt = "Token", .secret = true, .help = "The token to save" },
-    };
 };
+const login_flags = cli.flags(LoginFlags, field_.Set(.{field_.Spec(LoginFlags){ .fields = .{
+    .token = .{ .secret = true, .help = "The token to save" },
+} }}), .{ .fields = .{
+    .token = .{ .prompt = "Token" },
+} });
 
 fn login(ctx: *cli.Context, flags: LoginFlags) !void {
     try ctx.out.print("saved a token of {d} characters\n", .{flags.token.len});
@@ -208,9 +212,8 @@ pub const root = cli.command(.{
             \\parameter, Name:value a header, name=value a body field.
             ,
             .group = "Requests",
-            .flags = SendFlags,
-            .args = SendArgs,
-            .exclusive = &.{&.{ "json", "form" }},
+            .flags = send_flags,
+            .args = send_args,
             .output = true,
             .examples =
             \\httpc send get https://api.example.com/users page==2 --accept json,html
@@ -227,7 +230,7 @@ pub const root = cli.command(.{
                 cli.command(.{
                     .name = "login",
                     .summary = "Save a token, asking for it when not given",
-                    .flags = LoginFlags,
+                    .flags = login_flags,
                     .run = login,
                 }),
                 cli.command(.{

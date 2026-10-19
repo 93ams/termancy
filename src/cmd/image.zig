@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = tui.term;
 const explain = @import("explain.zig");
@@ -13,17 +14,17 @@ const Flags = struct {
     protocol: []const u8 = "auto",
     width: ?u16 = null,
     height: ?u16 = null,
-    pub const meta = .{
-        .protocol = .{ .short = 'p', .help = "auto, kitty, iterm, sixel, or mosaic" },
-        .width = .{ .short = 'w', .help = "Columns to draw it in (default: its size, at most " ++
-            "the terminal's)", .min = 1 },
-        .height = .{
-            .short = 'H',
-            .help = "Rows to draw it in (default: from the width)",
-            .min = 1,
-        },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .protocol = .{ .help = "auto, kitty, iterm, sixel, or mosaic" },
+    .width = .{ .help = "Columns to draw it in (default: its size, at most " ++
+        "the terminal's)", .checks = &.{.min(1)} },
+    .height = .{ .help = "Rows to draw it in (default: from the width)", .checks = &.{.min(1)} },
+} }}), .{ .fields = .{
+    .protocol = .{ .short = 'p' },
+    .width = .{ .short = 'w' },
+    .height = .{ .short = 'H' },
+} });
 
 pub const command = cli.command(.{
     .name = "image",
@@ -37,7 +38,7 @@ pub const command = cli.command(.{
     \\device attributes), waiting at most 200 ms.
     ,
     .args = .{ .min = 1, .max = 1, .usage = "<file>" },
-    .flags = Flags,
+    .flags = flags_flags,
     .examples =
     \\termancy image logo.png
     \\termancy image photo.jpg

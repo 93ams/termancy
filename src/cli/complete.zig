@@ -14,6 +14,8 @@
 //! candidates alone.
 
 const std = @import("std");
+const sets = @import("sets.zig");
+const field = @import("field");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -566,8 +568,10 @@ pub const command = spec.command(.{
 
 const InstallArgs = struct {
     shell: ?Shell = null,
-    pub const meta = .{ .shell = .{ .help = "The shell (default: the one $SHELL names)" } };
 };
+const install_args = sets.args(InstallArgs, field.Set(.{field.Spec(InstallArgs){ .fields = .{
+    .shell = .{ .help = "The shell (default: the one $SHELL names)" },
+} }}), .{});
 
 const install_command = spec.command(.{
     .name = "install",
@@ -582,7 +586,7 @@ const install_command = spec.command(.{
     \\Without a shell, uses the one $SHELL names. PowerShell has no such place; the
     \\command says what to add to $PROFILE instead. Run it again after an update.
     ,
-    .args = InstallArgs,
+    .args = install_args,
     .dry_run = true,
     .run = runInstall,
 });
@@ -678,19 +682,20 @@ fn noop(_: *Context) !void {}
 
 const test_root = spec.command(.{
     .name = "app",
-    .persistent_flags = struct {
-        output: enum { text, json } = .text,
-        pub const meta = .{ .output = .{ .short = 'o', .help = "Output format" } };
+    .persistent_flags = flags: {
+        const T = struct {
+            output: enum { text, json } = .text,
+        };
+        break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .output = .{ .help = "Output format" } } }}), .{ .fields = .{ .output = .{ .short = 'o' } } });
     },
     .subcommands = .{
         spec.command(.{
             .name = "serve",
             .summary = "Start",
-            .flags = struct {
+            .flags = sets.flags(struct {
                 port: u16 = 1,
                 hidden_one: bool = false,
-                pub const meta = .{ .hidden_one = .{ .hidden = true } };
-            },
+            }, field.none, .{ .fields = .{ .hidden_one = .{ .hidden = true } } }),
             .args = .{ .max = 1 },
             .run = noop,
         }),
@@ -766,11 +771,10 @@ test "short flags: a value in the next word or in the same one" {
 test "a bundle ending in a flag that takes a value completes the value" {
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
+        .flags = sets.flags(struct {
             verbose: bool = false,
             output: enum { text, json } = .text,
-            pub const meta = .{ .verbose = .{ .short = 'v' }, .output = .{ .short = 'o' } };
-        },
+        }, field.none, .{ .fields = .{ .verbose = .{ .short = 'v' }, .output = .{ .short = 'o' } } }),
         .run = noop,
     });
     var out: Writer.Allocating = .init(testing.allocator);
@@ -789,9 +793,11 @@ test "hidden flags are not offered, a shadowed one is offered once" {
         .persistent_flags = struct { name: []const u8 = "" },
         .subcommands = .{spec.command(.{
             .name = "sub",
-            .flags = struct {
-                name: []const u8 = "",
-                pub const meta = .{ .name = .{ .help = "Sub name" } };
+            .flags = flags: {
+                const T = struct {
+                    name: []const u8 = "",
+                };
+                break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .name = .{ .help = "Sub name" } } }}), .{});
             },
             .run = noop,
         })},
@@ -805,10 +811,12 @@ test "hidden flags are not offered, a shadowed one is offered once" {
 test "deprecated commands and flags are not offered" {
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
-            colour: bool = false,
-            color: bool = false,
-            pub const meta = .{ .colour = .{ .deprecated = "use --color" } };
+        .flags = flags: {
+            const T = struct {
+                colour: bool = false,
+                color: bool = false,
+            };
+            break :flags sets.flags(T, field.Set(.{field.Spec(T){ .fields = .{ .colour = .{ .deprecated = "use --color" } } }}), .{});
         },
         .subcommands = .{
             spec.command(.{ .name = "remove", .deprecated = "use delete", .run = noop }),
@@ -884,8 +892,10 @@ test "a lone dash offers flags; an unknown --flag= offers nothing" {
 const ColorFlags = struct {
     palette: []const u8 = "warm",
     color: ?[]const u8 = null,
-    pub const meta = .{ .color = .{ .complete = completeColor } };
 };
+const color_flags = sets.flags(ColorFlags, field.none, .{ .fields = .{
+    .color = .{ .complete = .from(completeColor) },
+} });
 
 /// Offers colors from the palette chosen earlier on the line.
 fn completeColor(ctx: *Context, prefix: []const u8) ![]const Command.Candidate {
@@ -918,12 +928,12 @@ fn paint(ctx: *Context) !void {
 const completer_root = spec.command(.{
     .name = "app",
     .subcommands = .{
-        spec.command(.{ .name = "paint", .flags = ColorFlags, .run = paint }),
+        spec.command(.{ .name = "paint", .flags = color_flags, .run = paint }),
         spec.command(.{
             .name = "greet",
             .args = .{ .min = 2, .max = 2, .complete = completeName },
             .run = paint,
-            .flags = ColorFlags,
+            .flags = color_flags,
         }),
         // `.complete` may also be a pointer to the function.
         spec.command(.{

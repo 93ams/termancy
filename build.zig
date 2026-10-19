@@ -430,6 +430,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "cli", .module = windows_libs[library("cli")] },
                 .{ .name = "tui", .module = windows_libs[library("tui")] },
+                .{ .name = "field", .module = windows_libs[library("field")] },
             },
         }),
     });
@@ -594,7 +595,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = .ReleaseSmall,
             .strip = true,
-            .imports = &.{.{ .name = name, .module = small.libs[library(name)] }},
+            .imports = &.{
+                .{ .name = name, .module = small.libs[library(name)] },
+                .{ .name = "field", .module = small.libs[library("field")] },
+            },
         }) });
         budget_run.addPrefixedArtifactArg(name ++ "=", app);
     }

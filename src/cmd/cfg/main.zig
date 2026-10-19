@@ -21,7 +21,7 @@ pub const command = cli.command(.{
     \\~/.config/termancy is loaded.
     ,
     .aliases = &.{"config"},
-    .persistent_flags = load.Global,
+    .persistent_flags = load.global_flags,
     .logging = true,
     .subcommands = .{
         query.get,

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const project = @import("../cli/project.zig");
 const cli_init = @import("../cli/init.zig");
 const manifest = @import("project/manifest.zig");
@@ -13,19 +14,17 @@ const InitFlags = struct {
     project: []const u8 = ".",
     wire: bool = false,
     dependency: ?[]const u8 = null,
-    pub const meta = .{
-        .dir = .{
-            .help = "Where components go, relative to the project",
-            .value_name = "path",
-        },
-        .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-        .wire = .{ .help = "Add the tui module to a build.zig made by termancy cli init" },
-        .dependency = .{
-            .help = "Add termancy as a dependency (zig fetch --save=termancy) and wire build.zig",
-            .value_name = "url",
-        },
-    };
 };
+const init_flags = cli.flags(InitFlags, field.Set(.{field.Spec(InitFlags){ .fields = .{
+    .dir = .{ .help = "Where components go, relative to the project" },
+    .project = .{ .help = "The project directory" },
+    .wire = .{ .help = "Add the tui module to a build.zig made by termancy cli init" },
+    .dependency = .{ .help = "Add termancy as a dependency (zig fetch --save=termancy) and wire build.zig" },
+} }}), .{ .fields = .{
+    .dir = .{ .value_name = "path" },
+    .project = .{ .short = 'C', .value_name = "path" },
+    .dependency = .{ .value_name = "url" },
+} });
 
 pub const command = cli.command(.{
     .name = "init",
@@ -45,7 +44,7 @@ pub const command = cli.command(.{
     \\project directory or a parent of it, so a subdirectory of a monorepo works too.
     ,
     .group = group,
-    .flags = InitFlags,
+    .flags = init_flags,
     .examples =
     \\termancy tui init
     \\termancy tui init --dir src/components -C demo --wire

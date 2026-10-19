@@ -1,7 +1,8 @@
 //! One flag's descriptor. Plain data, normally produced at compile time from a field of a
-//! flags struct by `cli.command`; see `spec.zig`.
+//! flags struct (`cli.flags`) by `cli.command`; see `spec.zig`.
 
 const std = @import("std");
+const field_ = @import("field");
 const Command = @import("Command.zig");
 
 const Flag = @This();
@@ -33,8 +34,12 @@ name: []const u8,
 /// Other long names the flag accepts, such as its name before a rename. Not shown in help
 /// or offered by completion.
 aliases: []const []const u8 = &.{},
-/// The struct field the flag decodes into.
+/// The field the flag decodes into: its dotted path in the flags struct, such as
+/// `public.port` for `--public-port`, or `storage.s3.bucket` for a choice's variant.
 field: []const u8,
+/// The flags struct the field is in (its `@typeName`), so `Context.flags` finds the flags
+/// of a struct among a command path's.
+owner: []const u8 = "",
 kind: Kind,
 short: ?u8 = null,
 help: []const u8 = "",
@@ -55,12 +60,19 @@ value_type: ValueType = .string,
 /// The accepted values, for an enum or a string with `.one_of`; offered by completion and
 /// shown in help.
 choices: []const []const u8 = &.{},
-/// Inclusive bounds on a numeric value (`.min`, `.max`).
-min: ?f64 = null,
-max: ?f64 = null,
-/// Inclusive bounds on a string's length in characters (`.min_len`, `.max_len`).
-min_len: ?usize = null,
-max_len: ?usize = null,
+/// What the field's built-in checks are (`field.Check`'s `about`), for help and docs:
+/// bounds, lengths, patterns. For a list, its elements' (`.each`).
+about: []const field_.About = &.{},
+/// Runs the field's checks on one value as typed (one element, for a list): writes why it
+/// is invalid to `w`, sets `about` when a built-in check failed, and returns
+/// `error.Invalid`. Null when the field has no checks. Run on each value given, and on an
+/// answer to a prompt; checks across fields wait for `Command.check`.
+validate: ?*const fn (text: []const u8, w: *std.Io.Writer, about: *?field_.About) field_.Error!void = null,
+/// For a flag of a choice's variant (`--storage-s3-bucket`): the flag naming the choice
+/// (`storage`, its long name) and the variant (`s3`). Naming another variant there is an
+/// error.
+choice: ?[]const u8 = null,
+variant: []const u8 = "",
 /// Other flags (long names) that must be given when this one is (`.requires`).
 requires: []const []const u8 = &.{},
 /// The flag exists only when this feature is on (see `App.feature_enabled`).
@@ -73,9 +85,12 @@ prompt: ?[]const u8 = null,
 /// The value is a secret: a prompter should not echo it, and help, documentation, and
 /// error messages show `redacted` in place of its default or a value given for it.
 secret: bool = false,
-/// The configuration key of the flag (`.key`), in full: `App.defaults` reads its default
-/// from it instead of the command path and the flag's name, and `cfg.Config.bindFlags`
-/// sets it.
+/// Where else the value can be set, for help: `$PORT, port in app.toml` (a command's
+/// `.settings` `.sources`).
+also: []const u8 = "",
+/// The configuration key of the flag, in full, for a flag of a command's `.settings`: the
+/// field's path below the settings, which `cfg.Config.bindFlags` sets (and translates to
+/// the key `cfg.settings` gives it) and `App.defaults` reads its default from.
 key: ?[]const u8 = null,
 /// Whether `text` is a valid value (for `value` flags, one element of it).
 check: *const fn (text: []const u8) bool,
@@ -96,6 +111,18 @@ pub fn writeDefault(flag: Flag, writer: *std.Io.Writer) std.Io.Writer.Error!void
     const write = flag.write_default orelse return;
     if (flag.secret) return writer.writeAll(redacted);
     try write(writer);
+}
+
+/// The lower bound of the field's `.min` check, if it has one.
+pub fn minimum(flag: Flag) ?field_.Bound {
+    for (flag.about) |a| if (a == .min) return a.min;
+    return null;
+}
+
+/// The upper bound of the field's `.max` check, if it has one.
+pub fn maximum(flag: Flag) ?field_.Bound {
+    for (flag.about) |a| if (a == .max) return a.max;
+    return null;
 }
 
 /// Whether `name` is the flag's long name or one of its aliases.

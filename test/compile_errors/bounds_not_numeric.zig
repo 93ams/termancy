@@ -1,16 +1,13 @@
-//! Must not compile: `.min` on a field that is not a number.
+//! Must not compile: `.min` on a field that is neither a number nor ordered.
 
-const cli = @import("cli");
+const field = @import("field");
 
-const Flags = struct {
-    name: []const u8 = "x",
-    pub const meta = .{ .name = .{ .min = 1 } };
-};
+const Flags = struct { name: []const u8 = "x" };
 
-fn run(_: *cli.Context, _: Flags) !void {}
-
-const bad = cli.command(.{ .name = "app", .flags = Flags, .run = run });
+const Specs = field.Set(.{field.Spec(Flags){ .fields = .{
+    .name = .{ .checks = &.{.min(1)} },
+} }});
 
 comptime {
-    _ = bad;
+    _ = Specs;
 }

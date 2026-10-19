@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const Writer = std.Io.Writer;
@@ -15,15 +16,19 @@ const Flags = struct {
     language: []const u8 = "",
     theme: []const u8 = "",
     width: ?u16 = null,
-    pub const meta = .{
-        .type = .{ .short = 't', .help = "What the text is" },
-        .language = .{ .short = 'l', .help = "The language of code (--type code)" },
-        .theme = .{ .help = "Markdown's style sheet (dark, light, dracula, tokyo-night, " ++
-            "pink, ascii, notty, or a JSON file), or code's theme (charm, dracula, monokai, " ++
-            "tokyo-night, github, ansi)" },
-        .width = .{ .short = 'w', .help = "Columns to wrap Markdown to (default: the terminal's)" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .type = .{ .help = "What the text is" },
+    .language = .{ .help = "The language of code (--type code)" },
+    .theme = .{ .help = "Markdown's style sheet (dark, light, dracula, tokyo-night, " ++
+        "pink, ascii, notty, or a JSON file), or code's theme (charm, dracula, monokai, " ++
+        "tokyo-night, github, ansi)" },
+    .width = .{ .help = "Columns to wrap Markdown to (default: the terminal's)" },
+} }}), .{ .fields = .{
+    .type = .{ .short = 't' },
+    .language = .{ .short = 'l' },
+    .width = .{ .short = 'w' },
+} });
 
 const Kind = enum { markdown, code, emoji, template };
 
@@ -41,7 +46,7 @@ pub const command = cli.command(.{
     \\shows them (as for termancy ui style).
     ,
     .args = .{ .max = null, .usage = "[text...]" },
-    .flags = Flags,
+    .flags = flags_flags,
     .examples =
     \\termancy ui format "# Done" "Everything **passed**."
     \\termancy ui format < CHANGELOG.md

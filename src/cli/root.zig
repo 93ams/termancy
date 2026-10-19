@@ -6,11 +6,16 @@
 //! const ServeFlags = struct {
 //!     port: u16 = 8080,
 //!     verbose: u8 = 0,
-//!     pub const meta = .{
-//!         .port = .{ .short = 'p', .help = "Port to listen on", .env = "PORT" },
-//!         .verbose = .{ .short = 'v', .count = true },
-//!     };
 //! };
+//!
+//! // What the fields mean (shared with `cfg`), then how they are spelled here.
+//! const Specs = field.Set(.{field.Spec(ServeFlags){ .fields = .{
+//!     .port = .{ .help = "Port to listen on", .checks = &.{.min(1)} },
+//! } }});
+//! const serve_flags = cli.flags(ServeFlags, Specs, .{ .fields = .{
+//!     .port = .{ .short = 'p', .env = "PORT" },
+//!     .verbose = .{ .short = 'v', .count = true },
+//! } });
 //!
 //! fn serve(ctx: *cli.Context, flags: ServeFlags) !void {
 //!     try ctx.out.print("listening on {d}\n", .{flags.port});
@@ -20,7 +25,7 @@
 //!     .name = "app",
 //!     .summary = "An example",
 //!     .subcommands = .{
-//!         cli.command(.{ .name = "serve", .flags = ServeFlags, .run = serve }),
+//!         cli.command(.{ .name = "serve", .flags = serve_flags, .run = serve }),
 //!     },
 //! });
 //!
@@ -30,8 +35,8 @@
 //! }
 //! ```
 //!
-//! The module imports `std` and `term` (for display widths, color detection, and the
-//! styles of `Theme`). Flag types may follow the `parse` convention shared with `cfg`
+//! The module imports `std`, `term` (for display widths, color detection, and the styles
+//! of `Theme`), and `field` (specs, shared with `cfg`). Flag types may follow the `parse` convention shared with `cfg`
 //! (`pub fn parse(text: []const u8) !T`), and `Context.changedFlags` returns records that
 //! `cfg.Config.bindFlags` accepts.
 
@@ -49,12 +54,23 @@ pub const Flag = @import("Flag.zig");
 pub const Messages = @import("Messages.zig");
 /// How help and the runner's messages look: `App.theme`.
 pub const Theme = @import("Theme.zig");
-/// What a completer (`.complete` in `meta` or `.args`) returns.
+/// What a completer (`.complete` of a flag or positional, or of `.args`) returns.
 pub const Candidate = Command.Candidate;
 
 /// Builds a `Command` from a declarative spec at compile time. See `spec.zig`.
 pub const command = spec.command;
-/// The flags of a flags struct, for building a `Command` by hand.
+/// The flags a struct's fields become: what they mean from `field` specs, how they are
+/// spelled from per-place options. A command's `.flags`. See `sets.zig`.
+pub const flags = sets.flags;
+/// The positionals a struct's fields become, in order. A command's `.args`.
+pub const args = sets.args;
+/// The options `flags` takes: per field, its spelling; flag groups.
+pub const FlagOptions = sets.FlagOptions;
+/// The options `args` takes: per field, its name, completion, and prompt.
+pub const ArgOptions = sets.ArgOptions;
+/// A completer for a flag's or positional's `.complete`: `.from(fn)`.
+pub const Complete = sets.Complete;
+/// The flags of a plain flags struct, for building a `Command` by hand.
 pub const flagsOf = spec.flagsOf;
 
 /// Where flag defaults come from besides the command line and the environment, such as a
@@ -97,6 +113,7 @@ pub const testing = @import("testing.zig");
 /// they change in any release (see docs/stability.md).
 pub const internal = struct {
     pub const spec = @import("spec.zig");
+    pub const sets = @import("sets.zig");
     pub const parse = @import("parse.zig");
     pub const values = @import("values.zig");
     pub const text = @import("text.zig");
@@ -105,6 +122,7 @@ pub const internal = struct {
 };
 
 const spec = internal.spec;
+const sets = internal.sets;
 const parse = internal.parse;
 
 test {

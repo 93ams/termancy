@@ -96,6 +96,11 @@ env_prefix: []const u8 = "",
 env_bindings: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 /// Key path -> the flag that sets it, from `nameFlags`: for saying how to set a missing key.
 flag_names: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
+/// Asks for a required key nothing set, before `decode` reports it missing (`askWith`).
+ask: ?Ask = null,
+/// Field path -> key, where a settings type's keys rename a field: registered by
+/// `setDefaults` and `decode`, used for flags' keys (`bindFlags`).
+path_keys: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 /// Key paths that have no value in any layer but should still be looked up in the
 /// environment: registered by `decode` and `registerKeys`.
 known_keys: std.StringArrayHashMapUnmanaged(void) = .empty,
@@ -217,13 +222,41 @@ fn invalidate(config: *Config) void {
 
 // -- Sources ---------------------------------------------------------------------------
 
+/// Something that can ask for a value: `context`, and `ask`, which returns the text typed
+/// for the field at `path` (its field path in the settings type), or null to give up.
+pub const Ask = struct {
+    context: *anyopaque,
+    ask: *const fn (context: *anyopaque, path: []const u8) ?[]const u8,
+};
+
+/// Lets `decode` ask for a required key no source set, instead of failing at once:
+/// `config.askWith(ctx.settingsAsker())` asks at a terminal, with the `.prompt` of the
+/// key's flag. `asker` is anything with `context` and `ask` as `Ask` has them.
+pub fn askWith(config: *Config, asker: anytype) void {
+    config.ask = .{ .context = asker.context, .ask = asker.ask };
+}
+
+/// The field path a key is for: its own, unless a settings type renamed the field.
+fn pathOfKey(config: *const Config, key: []const u8) []const u8 {
+    var it = config.path_keys.iterator();
+    while (it.next()) |entry| if (std.mem.eql(u8, entry.value_ptr.*, key)) return entry.key_ptr.*;
+    return key;
+}
+
+/// The key a field path is under, where a settings type renamed it; the path itself
+/// otherwise.
+fn keyOfPath(config: *const Config, path_: ?[]const u8) ?[]const u8 {
+    const p = path_ orelse return null;
+    return config.path_keys.get(p) orelse p;
+}
+
 /// Records which flag sets each key, given or not, so a missing required key's message can
 /// name it: `records` is any slice whose elements have `name` (without `--`) and an
 /// optional `key` field, such as `cli.Context.flagKeys()`. `bindFlags` names its records too.
 pub fn nameFlags(config: *Config, records: anytype, options: BindOptions) Allocator.Error!void {
     const a = config.arena.allocator();
     for (records) |record| {
-        const named: ?[]const u8 = if (@hasField(@TypeOf(record), "key")) record.key else null;
+        const named = config.keyOfPath(if (@hasField(@TypeOf(record), "key")) record.key else null);
         const key = named orelse try flagKey(a, options, record.name);
         const gop = try config.flag_names.getOrPut(a, key);
         if (!gop.found_existing) {
@@ -262,7 +295,15 @@ pub fn setDefaults(config: *Config, comptime X: type, value: settings_.Of(X).Typ
     for (comptime settings_.secretKeys(X)) |key| try config.markSecret(key);
     try config.bindEnvs(X);
     try config.registerKeys(comptime settings_.structKeys(X));
+    try config.registerPaths(X);
     config.invalidate();
+}
+
+/// Records which keys the settings type `X` renames, so a flag's field path finds its key.
+fn registerPaths(config: *Config, comptime X: type) Allocator.Error!void {
+    for (comptime settings_.pathKeys(X)) |pair| {
+        try config.path_keys.put(config.arena.allocator(), pair[0], pair[1]);
+    }
 }
 
 /// Sets `key_path` in the highest layer: it wins over every other source.
@@ -1108,22 +1149,26 @@ pub const BindOptions = struct {
 /// have `name` and `value` text fields, such as `cli.Context.changedFlags()`. A name that
 /// occurs more than once becomes an array. Values are typed by `cfg.infer`.
 ///
-/// A record's key is its optional `key` field when set (a `cli` flag's `.key` meta, such
-/// as `"fetch.concurrency"`), else its name. Once the configuration knows its keys
-/// (`setDefaults`, `decode`, or `registerKeys`), a record whose key is none of them is
-/// left out unless it names its `key`: `--config` or `--verbose` do not become settings.
+/// A record's key is its optional `key` field when set (for a `cli` flag, its field's path
+/// below a command's `.settings` or in its group, such as `"fetch.concurrency"`; a key a
+/// settings type renamed is followed to its new name), else its name. Once the
+/// configuration knows its keys (`setDefaults`, `decode`, or `registerKeys`), a record
+/// whose key is none of them is left out: `--config` or `--verbose` do not become settings.
 pub fn bindFlags(config: *Config, records: anytype, options: BindOptions) SetError!void {
     try config.nameFlags(records, options);
+    try config.bindRecords(records, options, config.known_keys.count() > 0);
+}
+
+fn bindRecords(config: *Config, records: anytype, options: BindOptions, filter: bool) SetError!void {
     const a = config.arena.allocator();
     var flags: Value = .empty_table;
-    const filter = config.known_keys.count() > 0;
     for (records) |record| {
-        const named: ?[]const u8 = if (@hasField(@TypeOf(record), "key")) record.key else null;
+        const named = config.keyOfPath(if (@hasField(@TypeOf(record), "key")) record.key else null);
         const key = if (named) |k|
             try a.dupe(u8, k)
         else
             try flagKey(a, options, record.name);
-        if (filter and named == null and !config.isKnown(key)) continue;
+        if (filter and !config.isKnown(key)) continue;
         const value = scalar.infer(try a.dupe(u8, record.value));
         if (flags.lookup(key)) |existing| {
             var array: Array = if (existing == .array) existing.array else .empty;
@@ -1147,7 +1192,8 @@ pub fn bindFlags(config: *Config, records: anytype, options: BindOptions) SetErr
 pub fn setFlag(config: *Config, key_path: []const u8, text: []const u8) SetError!void {
     const Record = struct { name: []const u8, value: []const u8, key: ?[]const u8 };
     const record = [_]Record{.{ .name = key_path, .value = text, .key = key_path }};
-    try config.bindFlags(&record, .{ .snake_case = false });
+    // It names its key, so it binds whether or not the key is known.
+    try config.bindRecords(&record, .{ .snake_case = false }, false);
 }
 
 /// Whether `key` is a registered key or the table above some.
@@ -1867,7 +1913,7 @@ pub fn getStringList(config: *Config, key_path: []const u8) GetError!?[]const []
 /// anything else. The text lives until `deinit`, so it may outlive changes, as flag values
 /// must; this is the method `cli.Defaults.from` calls.
 pub fn flagText(config: *Config, key_path: []const u8) Allocator.Error!?[]const u8 {
-    const value = try config.get(key_path) orelse return null;
+    const value = try config.get(config.keyOfPath(key_path).?) orelse return null;
     const a = config.arena.allocator();
     switch (value) {
         .array => |array| {
@@ -1905,12 +1951,38 @@ pub fn decode(
 ) GetError!settings_.Of(X).Type {
     const T = X;
     try config.registerKeys(comptime settings_.structKeys(T));
+    try config.registerPaths(T);
     for (comptime settings_.secretKeys(T)) |key| try config.markSecret(key);
     try config.bindEnvs(T);
     const a = config.arena.allocator();
-    const copy = try (try config.resolve()).clone(a);
     if (options.warnings) |list| try config.duplicateKeys(a, list);
     defer if (options.warnings) |list| config.locateAll(list.items);
+    // Asked-for values go in the flag layer, and decoding starts again: a few times at most.
+    for (0..max_asks) |_| {
+        if (config.ask == null) break;
+        var probe: Diagnostic = .{};
+        var problems: std.ArrayList(Diagnostic) = .empty;
+        const copy = try (try config.resolve()).clone(a);
+        const tried: decoding.Options = .{ .strict = options.strict, .errors = &problems };
+        if (decoding.decode(T, a, copy, tried, &probe)) |_| break else |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        }
+        var answered = false;
+        for (problems.items) |problem| {
+            if (!std.mem.eql(u8, problem.message, decoding.missing_message)) continue;
+            const asker = config.ask.?;
+            const text = asker.ask(asker.context, config.pathOfKey(problem.key)) orelse continue;
+            config.setFlag(problem.key, text) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // A key that cannot hold it (under a value, say) stays missing.
+                else => continue,
+            };
+            answered = true;
+        }
+        if (!answered) break;
+    }
+    const copy = try (try config.resolve()).clone(a);
     return decoding.decode(T, a, copy, options, diag) catch |err| {
         if (diag) |d| {
             config.locateDiagnostic(d);
@@ -1995,6 +2067,9 @@ fn joinSegments(a: Allocator, segments: []const []const u8) Allocator.Error![]co
     for (segments) |segment| out = try path.join(a, out, segment);
     return out;
 }
+
+/// How many times `decode` asks for missing keys (`askWith`) before reporting them.
+const max_asks = 3;
 
 fn locateAll(config: *Config, diagnostics: []Diagnostic) void {
     for (diagnostics) |*d| config.locateDiagnostic(d);
@@ -3156,6 +3231,28 @@ test "a missing key's message names its variable and its flag" {
         errors.items[0].message,
     );
     try testing.expectEqualStrings("required key is missing", errors.items[1].message);
+}
+
+test "a missing required key is asked for, by its field path" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    const Settings = cfg_settings.settings(struct { token: []const u8, port: u16 = 1 }, field.none, .{
+        .fields = .{ .token = .{ .key = "api_token" } },
+    });
+    const Asker = struct {
+        asked: []const u8 = "",
+        fn ask(context: *anyopaque, path_: []const u8) ?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.asked = path_;
+            return "s3cret";
+        }
+    };
+    var asker: Asker = .{};
+    config.askWith(Ask{ .context = &asker, .ask = Asker.ask });
+    const settings = try config.decode(Settings, .{}, null);
+    try testing.expectEqualStrings("s3cret", settings.token);
+    try testing.expectEqualStrings("token", asker.asked);
+    try testing.expectEqual(Layer.flag, (try config.explain("api_token")).?.layer);
 }
 
 test "a check across a table's fields points at the table in its file" {

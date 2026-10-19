@@ -7,6 +7,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 const webauthn = sys.webauthn;
 const windows_hello = sys.windows_hello;
@@ -15,34 +16,28 @@ const Io = std.Io;
 
 const Authenticator = enum { any, platform, @"security-key" };
 
-const origin_meta = .{
-    .help = "The relying party's origin, such as https://example.com",
-};
-const authenticator_meta = .{
-    .help = "Windows: which authenticator may answer (platform: Windows Hello itself)",
-};
-
 const GetFlags = struct {
     origin: []const u8,
     authenticator: Authenticator = .any,
     pin: []const u8 = "",
-    pub const meta = .{
-        .origin = origin_meta,
-        .authenticator = authenticator_meta,
-        .pin = .{
-            .help = "Linux: the key's PIN, when the relying party requires user " ++
-                "verification; better given through $TERMANCY_FIDO_PIN",
-            .env = "TERMANCY_FIDO_PIN",
-            .secret = true,
-        },
-    };
 };
+const get_flags = cli.flags(GetFlags, field.Set(.{field.Spec(GetFlags){ .fields = .{
+    .origin = .{ .help = "The relying party's origin, such as https://example.com" },
+    .authenticator = .{ .help = "Windows: which authenticator may answer (platform: Windows Hello itself)" },
+    .pin = .{ .help = "Linux: the key's PIN, when the relying party requires user " ++
+        "verification; better given through $TERMANCY_FIDO_PIN", .secret = true },
+} }}), .{ .fields = .{
+    .pin = .{ .env = "TERMANCY_FIDO_PIN" },
+} });
 
 const CreateFlags = struct {
     origin: []const u8,
     authenticator: Authenticator = .any,
-    pub const meta = .{ .origin = origin_meta, .authenticator = authenticator_meta };
 };
+const create_flags = cli.flags(CreateFlags, field.Set(.{field.Spec(CreateFlags){ .fields = .{
+    .origin = .{ .help = "The relying party's origin, such as https://example.com" },
+    .authenticator = .{ .help = "Windows: which authenticator may answer (platform: Windows Hello itself)" },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "passkey",
@@ -59,7 +54,7 @@ pub const command = cli.command(.{
             .name = "get",
             .summary = "Sign a challenge with a credential (navigator.credentials.get)",
             .args = .{ .max = 1, .usage = "[options.json]" },
-            .flags = GetFlags,
+            .flags = get_flags,
             .examples =
             \\curl -s https://example.com/login/options | termancy passkey get --origin https://example.com
             ,
@@ -69,7 +64,7 @@ pub const command = cli.command(.{
             .name = "create",
             .summary = "Create a credential (navigator.credentials.create)",
             .args = .{ .max = 1, .usage = "[options.json]" },
-            .flags = CreateFlags,
+            .flags = create_flags,
             .examples =
             \\termancy passkey create --origin https://example.com options.json > response.json
             ,

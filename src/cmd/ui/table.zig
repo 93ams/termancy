@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field_ = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const Table = @import("../tui/registry/table.zig").Table;
@@ -17,31 +18,21 @@ pub const Flags = struct {
     border: Border = .rounded,
     height: usize = 10,
     print: bool = false,
-
-    pub const meta = .{
-        .separator = .{
-            .short = 's',
-            .help = "The field separator: one character, or \\t (or tab) for TSV",
-        },
-        .columns = .{
-            .short = 'c',
-            .help = "Column titles, comma-separated; then the first line is data, not titles",
-            .value_name = "titles",
-            .split = ',',
-        },
-        .widths = .{
-            .short = 'w',
-            .help = "Column widths, comma-separated; 0 fits the column to its cells",
-            .split = ',',
-        },
-        .border = .{
-            .help = "Border style: none, normal, rounded, thick, double, hidden, or ascii",
-            .value_name = "style",
-        },
-        .height = .{ .help = "Rows shown at once" },
-        .print = .{ .short = 'p', .help = "Print the table to standard output instead" },
-    };
 };
+const flags_flags = cli.flags(Flags, field_.Set(.{field_.Spec(Flags){ .fields = .{
+    .separator = .{ .help = "The field separator: one character, or \\t (or tab) for TSV" },
+    .columns = .{ .help = "Column titles, comma-separated; then the first line is data, not titles" },
+    .widths = .{ .help = "Column widths, comma-separated; 0 fits the column to its cells" },
+    .border = .{ .help = "Border style: none, normal, rounded, thick, double, hidden, or ascii" },
+    .height = .{ .help = "Rows shown at once" },
+    .print = .{ .help = "Print the table to standard output instead" },
+} }}), .{ .fields = .{
+    .separator = .{ .short = 's' },
+    .columns = .{ .short = 'c', .value_name = "titles", .split = ',' },
+    .widths = .{ .short = 'w', .split = ',' },
+    .border = .{ .value_name = "style" },
+    .print = .{ .short = 'p' },
+} });
 
 pub const command = cli.command(.{
     .name = "table",
@@ -56,7 +47,7 @@ pub const command = cli.command(.{
     \\the table is written to standard output instead, colored only where standard
     \\output shows colors.
     ,
-    .flags = Flags,
+    .flags = flags_flags,
     .examples =
     \\termancy ui table < people.csv
     \\ps -eo pid,comm | tr -s ' ' | sed 's/^ //' | termancy ui table -s ' ' | cut -d' ' -f1

@@ -14,6 +14,8 @@
 //! call this from tests.
 
 const std = @import("std");
+const sets = @import("sets.zig");
+const field = @import("field");
 const App = @import("App.zig");
 
 /// How `run` runs the application.
@@ -94,8 +96,10 @@ const Context = @import("Context.zig");
 
 const ServeFlags = struct {
     port: u16 = 8080,
-    pub const meta = .{ .port = .{ .env = "PORT" } };
 };
+const serve_flags = sets.flags(ServeFlags, field.none, .{ .fields = .{
+    .port = .{ .env = "PORT" },
+} });
 
 fn serve(ctx: *Context, flags: ServeFlags) !void {
     try ctx.out.print("listening on {d}\n", .{flags.port});
@@ -103,7 +107,7 @@ fn serve(ctx: *Context, flags: ServeFlags) !void {
 
 const root = spec.command(.{
     .name = "app",
-    .subcommands = .{spec.command(.{ .name = "serve", .flags = ServeFlags, .run = serve })},
+    .subcommands = .{spec.command(.{ .name = "serve", .flags = serve_flags, .run = serve })},
 });
 
 test run {

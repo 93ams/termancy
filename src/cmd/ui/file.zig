@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const FilePicker = @import("../tui/registry/filepicker.zig").FilePicker;
@@ -9,12 +10,13 @@ const FilePicker = @import("../tui/registry/filepicker.zig").FilePicker;
 pub const Flags = struct {
     all: bool = false,
     ext: []const []const u8 = &.{},
-
-    pub const meta = .{
-        .all = .{ .short = 'a', .help = "Show files and directories whose names start with ." },
-        .ext = .{ .help = "List only files ending in this (repeatable), such as .toml" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .all = .{ .help = "Show files and directories whose names start with ." },
+    .ext = .{ .help = "List only files ending in this (repeatable), such as .toml" },
+} }}), .{ .fields = .{
+    .all = .{ .short = 'a' },
+} });
 
 pub const command = cli.command(.{
     .name = "file",
@@ -27,7 +29,7 @@ pub const command = cli.command(.{
     \\left, h, or backspace go up; . shows or hides dotfiles. esc or q cancels (status
     \\1), Ctrl-C interrupts (status 130).
     ,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .max = 1, .usage = "[dir]" },
     .examples =
     \\$EDITOR "$(termancy ui file --ext .md)"

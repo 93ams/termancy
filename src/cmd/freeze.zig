@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const term = @import("term");
 const explain = @import("explain.zig");
 const Io = std.Io;
@@ -31,30 +32,38 @@ const Flags = struct {
     line_numbers: bool = false,
     lines: ?[]const u8 = null,
     width: u16 = 0,
-    pub const meta = .{
-        .output = .{ .short = 'o', .help = "The image to write: .png or .svg" },
-        .language = .{ .short = 'l', .help = "The code's language (default: from the file name)" },
-        .theme = .{
-            .short = 't',
-            .help = "Colors: charm, dracula, monokai, tokyo-night, github, ansi",
-        },
-        .execute = .{ .short = 'x', .help = "Run this command and draw what it writes" },
-        .window = .{ .help = "Draw a window bar with its three buttons" },
-        .title = .{ .help = "The window bar's title (default: the file's name)" },
-        .shadow = .{ .help = "Draw a drop shadow under the window" },
-        .radius = .{ .short = 'r', .help = "The window's corner radius, in pixels" },
-        .border = .{ .help = "The window border's width, in pixels" },
-        .border_color = .{ .help = "The window border's color" },
-        .padding = .{ .short = 'p', .help = "Pixels between the text and the window's edge" },
-        .margin = .{ .short = 'm', .help = "Pixels around the window (transparent)" },
-        .background = .{ .short = 'b', .help = "The window's color (default: the theme's)" },
-        .font_family = .{ .help = "An installed monospace font (default: a common one)" },
-        .font_size = .{ .help = "The font's size, in pixels", .min = 4 },
-        .line_numbers = .{ .short = 'n', .help = "Number the lines" },
-        .lines = .{ .help = "Only these lines, first and last (as 10,20), counting from 1" },
-        .width = .{ .short = 'w', .help = "Wrap lines at this many columns (0: never)" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .output = .{ .help = "The image to write: .png or .svg" },
+    .language = .{ .help = "The code's language (default: from the file name)" },
+    .theme = .{ .help = "Colors: charm, dracula, monokai, tokyo-night, github, ansi" },
+    .execute = .{ .help = "Run this command and draw what it writes" },
+    .window = .{ .help = "Draw a window bar with its three buttons" },
+    .title = .{ .help = "The window bar's title (default: the file's name)" },
+    .shadow = .{ .help = "Draw a drop shadow under the window" },
+    .radius = .{ .help = "The window's corner radius, in pixels" },
+    .border = .{ .help = "The window border's width, in pixels" },
+    .border_color = .{ .help = "The window border's color" },
+    .padding = .{ .help = "Pixels between the text and the window's edge" },
+    .margin = .{ .help = "Pixels around the window (transparent)" },
+    .background = .{ .help = "The window's color (default: the theme's)" },
+    .font_family = .{ .help = "An installed monospace font (default: a common one)" },
+    .font_size = .{ .help = "The font's size, in pixels", .checks = &.{.min(4)} },
+    .line_numbers = .{ .help = "Number the lines" },
+    .lines = .{ .help = "Only these lines, first and last (as 10,20), counting from 1" },
+    .width = .{ .help = "Wrap lines at this many columns (0: never)" },
+} }}), .{ .fields = .{
+    .output = .{ .short = 'o' },
+    .language = .{ .short = 'l' },
+    .theme = .{ .short = 't' },
+    .execute = .{ .short = 'x' },
+    .radius = .{ .short = 'r' },
+    .padding = .{ .short = 'p' },
+    .margin = .{ .short = 'm' },
+    .background = .{ .short = 'b' },
+    .line_numbers = .{ .short = 'n' },
+    .width = .{ .short = 'w' },
+} });
 
 pub const command = cli.command(.{
     .name = "freeze",
@@ -66,7 +75,7 @@ pub const command = cli.command(.{
     \\font is the machine's: --font-family names one, else a common monospace font.
     ,
     .args = .{ .max = 1, .usage = "[file]" },
-    .flags = Flags,
+    .flags = flags_flags,
     .examples =
     \\termancy freeze main.zig --window --shadow -o main.png
     \\termancy freeze main.zig -n --lines 10,30 -t dracula

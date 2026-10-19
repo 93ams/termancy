@@ -1,11 +1,13 @@
 //! Typed flag values: which Zig types a flag may have, and how text becomes one.
 //!
 //! Supported element types: `bool`, integers (decimal, or `0x`/`0o`/`0b`), floats,
-//! `[]const u8`, enums (by name; `-` matches `_`), and any type following the `parse`
+//! `[]const u8`, enums (by name; `-` matches `_`), a tagged union's variant names (the
+//! variant takes its defaults: `--storage s3`), and any type following the `parse`
 //! convention, `pub fn parse(text: []const u8) !T`. A field may also be `?T` (absent is
 //! `null`) or `[]const T` (repeatable).
 
 const std = @import("std");
+const field = @import("field");
 const Flag = @import("Flag.zig");
 
 /// A word that is not a value of the type.
@@ -19,6 +21,7 @@ pub fn parse(comptime T: type, text: []const u8) Error!T {
         .int => std.fmt.parseInt(T, text, 0) catch error.InvalidValue,
         .float => std.fmt.parseFloat(T, text) catch error.InvalidValue,
         .@"enum" => parseEnum(T, text),
+        .@"union" => if (comptime field.isChoice(T)) parseChoice(T, text) else @compileError(unsupported(T)),
         .pointer => if (T == []const u8) text else @compileError(unsupported(T)),
         else => @compileError(unsupported(T)),
     };
@@ -27,6 +30,13 @@ pub fn parse(comptime T: type, text: []const u8) Error!T {
 fn parseEnum(comptime T: type, text: []const u8) Error!T {
     inline for (@typeInfo(T).@"enum".field_names, @typeInfo(T).@"enum".field_values) |name, value| {
         if (namesMatch(name, text)) return @fromBackingInt(@intCast(value));
+    }
+    return error.InvalidValue;
+}
+
+fn parseChoice(comptime T: type, text: []const u8) Error!T {
+    inline for (comptime field.fieldNames(T)) |name| {
+        if (namesMatch(name, text)) return field.initVariant(T, name);
     }
     return error.InvalidValue;
 }
@@ -43,24 +53,8 @@ fn unsupported(comptime T: type) []const u8 {
     return "cli: " ++ @typeName(T) ++ " is not a supported flag type";
 }
 
-/// Whether `T` follows the `parse` convention: a declaration `pub fn parse(text: []const u8)`
-/// returning `T` or an error union of `T`. The signature is checked, not just the name, so
-/// an unrelated method called `parse` does not count.
-pub fn hasParse(comptime T: type) bool {
-    switch (@typeInfo(T)) {
-        .@"struct", .@"enum", .@"union" => {},
-        else => return false,
-    }
-    if (!@hasDecl(T, "parse")) return false;
-    const info = switch (@typeInfo(@TypeOf(T.parse))) {
-        .@"fn" => |f| f,
-        else => return false,
-    };
-    if (info.param_types.len != 1 or info.param_types[0] != []const u8) return false;
-    const Return = info.return_type orelse return false;
-    return Return == T or
-        (@typeInfo(Return) == .error_union and @typeInfo(Return).error_union.payload == T);
-}
+/// Whether `T` follows the `parse` convention; see `field.hasParse`.
+pub const hasParse = field.hasParse;
 
 /// `?T` -> `T`, `[]const T` -> `T` (except strings), otherwise `T` itself.
 pub fn Element(comptime Field: type) type {
@@ -104,11 +98,9 @@ pub fn label(comptime T: type) []const u8 {
         .bool => "bool",
         .int => "int",
         .float => "number",
-        .@"enum" => |e| blk: {
+        .@"enum", .@"union" => blk: {
             var out: []const u8 = "";
-            for (e.field_names, 0..) |name, i| {
-                out = out ++ (if (i == 0) "" else "|") ++ kebabName(name);
-            }
+            for (choices(T), 0..) |name, i| out = out ++ (if (i == 0) "" else "|") ++ name;
             break :blk out;
         },
         else => "string",
@@ -122,16 +114,22 @@ pub fn valueType(comptime T: type) Flag.ValueType {
         .bool => .bool,
         .int => .int,
         .float => .float,
-        .@"enum" => .@"enum",
+        .@"enum", .@"union" => .@"enum",
         else => .string,
     };
 }
 
-/// The enum's names as they are typed on the command line.
+/// The names of an enum's values, or a choice's variants, as they are typed on the
+/// command line.
 pub fn choices(comptime T: type) []const []const u8 {
-    if (@typeInfo(T) != .@"enum" or hasParse(T)) return &.{};
+    if (hasParse(T)) return &.{};
+    const names = switch (@typeInfo(T)) {
+        .@"enum" => |e| e.field_names,
+        .@"union" => if (field.isChoice(T)) field.fieldNames(T) else return &.{},
+        else => return &.{},
+    };
     var out: []const []const u8 = &.{};
-    for (@typeInfo(T).@"enum".field_names) |name| out = out ++ .{kebabName(name)};
+    for (names) |name| out = out ++ .{kebabName(name)};
     return out;
 }
 
@@ -151,6 +149,9 @@ pub fn write(comptime T: type, value: T, writer: *std.Io.Writer) std.Io.Writer.E
         .bool => try writer.writeAll(if (value) "true" else "false"),
         .int, .float => try writer.print("{d}", .{value}),
         .@"enum" => for (@tagName(value)) |c| try writer.writeByte(if (c == '_') '-' else c),
+        .@"union" => for (@tagName(std.meta.activeTag(value))) |c| {
+            try writer.writeByte(if (c == '_') '-' else c);
+        },
         .optional => if (value) |v| try write(@TypeOf(v), v, writer),
         .pointer => if (T == []const u8)
             try writer.writeAll(value)

@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const term = @import("term");
 const templates = @import("templates.zig");
 
@@ -12,19 +13,17 @@ const InitFlags = struct {
     module_path: ?[]const u8 = null,
     fetch: ?[]const u8 = null,
     force: bool = false,
-    pub const meta = .{
-        .dir = .{ .help = "Directory to create (default: the name)", .value_name = "path" },
-        .module_path = .{
-            .help = "Depend on a termancy checkout at this path (for offline or local work)",
-            .value_name = "path",
-        },
-        .fetch = .{
-            .help = "Depend on termancy at this URL, recorded by zig fetch --save=termancy",
-            .value_name = "url",
-        },
-        .force = .{ .help = "Write into a non-empty directory, replacing files" },
-    };
 };
+const init_flags = cli.flags(InitFlags, field.Set(.{field.Spec(InitFlags){ .fields = .{
+    .dir = .{ .help = "Directory to create (default: the name)" },
+    .module_path = .{ .help = "Depend on a termancy checkout at this path (for offline or local work)" },
+    .fetch = .{ .help = "Depend on termancy at this URL, recorded by zig fetch --save=termancy" },
+    .force = .{ .help = "Write into a non-empty directory, replacing files" },
+} }}), .{ .fields = .{
+    .dir = .{ .value_name = "path" },
+    .module_path = .{ .value_name = "path" },
+    .fetch = .{ .value_name = "url" },
+}, .exclusive = &.{&.{ .module_path, .fetch }} });
 
 pub const command = cli.command(.{
     .name = "init",
@@ -36,9 +35,8 @@ pub const command = cli.command(.{
     \\--save=termancy <url>); with neither, add it yourself before building. Refuses to write
     \\into a non-empty directory without --force.
     ,
-    .flags = InitFlags,
+    .flags = init_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<name>" },
-    .exclusive = &.{&.{ "module-path", "fetch" }},
     .examples =
     \\termancy cli init demo --module-path ../termancy
     \\termancy cli init demo --fetch git+https://github.com/93ams/termancy

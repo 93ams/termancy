@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const Filter = @import("../tui/registry/filter.zig").Filter;
@@ -14,17 +15,16 @@ pub const Flags = struct {
     prompt: []const u8 = "> ",
     value: []const u8 = "",
     height: usize = 10,
-
-    pub const meta = .{
-        .limit = .{ .help = "The most items to choose; above 1, tab chooses each" },
-        .no_limit = .{ .help = "Choose any number of items" },
-        .placeholder = .{ .help = "Shown while the query is empty" },
-        .header = .{ .help = "Text above the query" },
-        .prompt = .{ .help = "Written before the query" },
-        .value = .{ .help = "The query to start with" },
-        .height = .{ .help = "Items shown at once" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .limit = .{ .help = "The most items to choose; above 1, tab chooses each" },
+    .no_limit = .{ .help = "Choose any number of items" },
+    .placeholder = .{ .help = "Shown while the query is empty" },
+    .header = .{ .help = "Text above the query" },
+    .prompt = .{ .help = "Written before the query" },
+    .value = .{ .help = "The query to start with" },
+    .height = .{ .help = "Items shown at once" },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "filter",
@@ -39,7 +39,7 @@ pub const command = cli.command(.{
     \\Keys: typing edits the query, up/down (ctrl+p/ctrl+n) move, enter chooses, esc
     \\cancels (status 1), Ctrl-C interrupts (status 130).
     ,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .max = null, .usage = "[item...]" },
     .examples =
     \\vim "$(find . -type f | termancy ui filter)"

@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 const load = @import("load.zig");
 
@@ -14,13 +15,12 @@ const group = "Edit Commands";
 
 const SetFlags = struct {
     string: bool = false,
-    pub const meta = .{
-        .string = .{
-            .short = 's',
-            .help = "Store the value as a string instead of inferring its type",
-        },
-    };
 };
+const set_flags = cli.flags(SetFlags, field.Set(.{field.Spec(SetFlags){ .fields = .{
+    .string = .{ .help = "Store the value as a string instead of inferring its type" },
+} }}), .{ .fields = .{
+    .string = .{ .short = 's' },
+} });
 
 pub const set = cli.command(.{
     .name = "set",
@@ -32,7 +32,7 @@ pub const set = cli.command(.{
     \\created.
     ,
     .group = group,
-    .flags = SetFlags,
+    .flags = set_flags,
     .args = .{
         .min = 2,
         .max = 2,

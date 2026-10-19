@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field_ = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const group = @import("../tui/init.zig").group;
@@ -35,12 +36,12 @@ const Flags = struct {
     svg: bool = false,
     width: u16 = 64,
     height: u16 = 16,
-    pub const meta = .{
-        .svg = .{ .help = "Print the first frame as an SVG image instead of running it" },
-        .width = .{ .help = "Columns of the --svg image", .min = 20, .max = 300 },
-        .height = .{ .help = "Rows of the --svg image", .min = 4, .max = 200 },
-    };
 };
+const flags_flags = cli.flags(Flags, field_.Set(.{field_.Spec(Flags){ .fields = .{
+    .svg = .{ .help = "Print the first frame as an SVG image instead of running it" },
+    .width = .{ .help = "Columns of the --svg image", .checks = &.{ .min(20), .max(300) } },
+    .height = .{ .help = "Rows of the --svg image", .checks = &.{ .min(4), .max(200) } },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "demo",
@@ -51,7 +52,7 @@ pub const command = cli.command(.{
     \\demo of a component that does not end by itself.
     ,
     .group = group,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .max = 1, .usage = "[component]", .complete = completeDemos },
     .examples =
     \\termancy ui demo

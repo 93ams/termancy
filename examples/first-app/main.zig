@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 const tui = @import("tui");
 // `termancy tui add select` copied select.zig, and list.zig which it requires, into src/ui.
@@ -46,13 +47,16 @@ const Order = struct {
     drink: enum { espresso, latte, filter } = .espresso,
     cups: u8 = 1,
     config: []const u8 = "brew.toml",
-
-    pub const meta = .{
-        .drink = .{ .short = 'd', .help = "What to brew" },
-        .cups = .{ .short = 'n', .help = "How many cups", .min = 1, .max = 12 },
-        .config = .{ .short = 'c', .help = "The configuration file" },
-    };
 };
+const order_flags = cli.flags(Order, field.Set(.{field.Spec(Order){ .fields = .{
+    .drink = .{ .help = "What to brew" },
+    .cups = .{ .help = "How many cups", .checks = &.{ .min(1), .max(12) } },
+    .config = .{ .help = "The configuration file" },
+} }}), .{ .fields = .{
+    .drink = .{ .short = 'd' },
+    .cups = .{ .short = 'n' },
+    .config = .{ .short = 'c' },
+} });
 
 const Step = enum { order, brew };
 
@@ -94,8 +98,12 @@ fn make(ctx: *cli.Context, flags: Order) !void {
 
 const PickFlags = struct {
     config: []const u8 = "brew.toml",
-    pub const meta = .{ .config = .{ .short = 'c', .help = "The configuration file" } };
 };
+const pick_flags = cli.flags(PickFlags, field.Set(.{field.Spec(PickFlags){ .fields = .{
+    .config = .{ .help = "The configuration file" },
+} }}), .{ .fields = .{
+    .config = .{ .short = 'c' },
+} });
 
 /// Choose from the menu in brew.toml with the `select` component, full screen.
 fn pick(ctx: *cli.Context, flags: PickFlags) !void {
@@ -117,13 +125,13 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "make",
             .summary = "Brew an order, asking for anything not given as a flag",
-            .flags = Order,
+            .flags = order_flags,
             .run = make,
         }),
         cli.command(.{
             .name = "pick",
             .summary = "Pick a drink from the menu",
-            .flags = PickFlags,
+            .flags = pick_flags,
             .run = pick,
         }),
     },

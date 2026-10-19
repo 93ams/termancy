@@ -99,19 +99,31 @@ pub fn specAt(
 /// One step of the path to a failed value: a field (or variant) name, or a list index.
 pub const Segment = union(enum) { field: []const u8, index: usize };
 
+/// Which checks `validate` runs.
+pub const Scope = enum {
+    /// Every check.
+    every,
+    /// Only checks that need a whole value: a struct's checks across its fields (and a
+    /// choice's), a list's own `.checks`, and checks on a group or variant as a whole;
+    /// not the checks of single values, nor `.each`. For values whose single parts were
+    /// checked as they were given, such as flags on a command line.
+    whole,
+};
+
 /// Runs every check in `S` on `value` and everything in it, calling
 /// `report.fail(path: []const Segment, message: []const u8, about: ?About) !void` for each
 /// failure; `path` is empty for a check on the whole of `value`. Returns how many failed.
 pub fn validate(comptime T: type, comptime S: type, value: T, report: anytype) !usize {
     var at: [max_depth]Segment = undefined;
-    return walk(T, S, &.{}, &.{}, value, &at, 0, report);
+    return walk(T, S, .every, &.{}, &.{}, value, &at, 0, report);
 }
 
-/// `validate`, leaving out the fields of `T` named in `skip` (checked elsewhere, such as
-/// settings checked once merged with their other sources).
+/// `validate` with a `scope`, leaving out the fields of the struct `T` named in `skip`
+/// (checked elsewhere, such as settings checked once merged with their other sources).
 pub fn validateExcept(
     comptime T: type,
     comptime S: type,
+    comptime scope: Scope,
     value: T,
     report: anytype,
     comptime skip: []const []const u8,
@@ -126,7 +138,7 @@ pub fn validateExcept(
         if (!skipped) {
             at[0] = .{ .field = name };
             const f = @field(spec.fields, name);
-            failures += try walk(@FieldType(T, name), S, f.checks, f.each, @field(value, name), &at, 1, report);
+            failures += try walk(@FieldType(T, name), S, scope, f.checks, f.each, @field(value, name), &at, 1, report);
         }
     }
     return failures + try run(T, spec.checks, value, at[0..0], report);
@@ -138,6 +150,7 @@ pub const max_depth = 32;
 fn walk(
     comptime V: type,
     comptime S: type,
+    comptime scope: Scope,
     comptime checks: []const Check(path.Unwrap(V)),
     comptime each: anytype,
     value: V,
@@ -147,15 +160,17 @@ fn walk(
 ) !usize {
     if (@typeInfo(V) == .optional) {
         const set = value orelse return 0;
-        return walk(path.Unwrap(V), S, checks, each, set, at, depth, report);
+        return walk(path.Unwrap(V), S, scope, checks, each, set, at, depth, report);
     }
-    var failures = try run(V, checks, value, at[0..depth], report);
+    // A single value's checks ran when it was given, under `.whole`.
+    const whole = path.isList(V) or path.isGroup(V) or path.isChoice(V);
+    var failures = if (scope == .every or whole) try run(V, checks, value, at[0..depth], report) else 0;
     if (comptime path.isGroup(V)) {
         const spec = comptime S.of(V);
         inline for (@typeInfo(V).@"struct".field_names) |name| {
             at[depth] = .{ .field = name };
             const f = @field(spec.fields, name);
-            failures += try walk(@FieldType(V, name), S, f.checks, f.each, @field(value, name), at, depth + 1, report);
+            failures += try walk(@FieldType(V, name), S, scope, f.checks, f.each, @field(value, name), at, depth + 1, report);
         }
         failures += try run(V, spec.checks, value, at[0..depth], report);
     } else if (comptime path.isChoice(V)) {
@@ -165,7 +180,7 @@ fn walk(
                 const name = @tagName(tag);
                 at[depth] = .{ .field = name };
                 const f = @field(spec.fields, name);
-                failures += try walk(@TypeOf(payload), S, f.checks, f.each, payload, at, depth + 1, report);
+                failures += try walk(@TypeOf(payload), S, scope, f.checks, f.each, payload, at, depth + 1, report);
             },
         }
         failures += try run(V, spec.checks, value, at[0..depth], report);
@@ -173,7 +188,7 @@ fn walk(
         const Elem = @typeInfo(V).pointer.child;
         for (value, 0..) |item, i| {
             at[depth] = .{ .index = i };
-            failures += try walk(Elem, S, each, &.{}, item, at, depth + 1, report);
+            failures += try walk(Elem, S, scope, each, &.{}, item, at, depth + 1, report);
         }
     }
     return failures;
@@ -293,8 +308,13 @@ test validateExcept {
     var buffer: [256]u8 = undefined;
     var out: std.Io.Writer = .fixed(&buffer);
     const value: App = .{ .public = .{ .port = 0 }, .tags = &.{""} };
-    _ = try validateExcept(App, Specs, value, Collect{ .out = &out }, &.{"public"});
+    _ = try validateExcept(App, Specs, .every, value, Collect{ .out = &out }, &.{"public"});
     try testing.expectEqualStrings("tags.0. must be at least 1 long\n", out.buffered());
+    // Only what needs a whole value: here, the check across `App`'s fields.
+    out = .fixed(&buffer);
+    const clash: App = .{ .admin = .{ .port = 0 }, .public = .{ .port = 0 }, .tags = &.{""} };
+    _ = try validateExcept(App, Specs, .whole, clash, Collect{ .out = &out }, &.{});
+    try testing.expectEqualStrings(" ports clash\n", out.buffered());
 }
 
 test checkOne {

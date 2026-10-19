@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const live = @import("term").live;
 const term = @import("../ui/term.zig");
@@ -21,12 +22,14 @@ const AddFlags = struct {
     force: bool = false,
     prune: bool = false,
     project: []const u8 = ".",
-    pub const meta = .{
-        .force = .{ .help = "Replace files modified since termancy tui add wrote them" },
-        .prune = .{ .help = "Remove files a component no longer has, unless edited" },
-        .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-    };
 };
+const add_flags = cli.flags(AddFlags, field.Set(.{field.Spec(AddFlags){ .fields = .{
+    .force = .{ .help = "Replace files modified since termancy tui add wrote them" },
+    .prune = .{ .help = "Remove files a component no longer has, unless edited" },
+    .project = .{ .help = "The project directory" },
+} }}), .{ .fields = .{
+    .project = .{ .short = 'C', .value_name = "path" },
+} });
 
 pub const command = cli.command(.{
     .name = "add",
@@ -52,7 +55,7 @@ pub const command = cli.command(.{
     \\enter adds, esc cancels. Elsewhere, name at least one.
     ,
     .group = group,
-    .flags = AddFlags,
+    .flags = add_flags,
     .dry_run = true,
     .args = .{ .max = null, .usage = "<component>..." },
     .examples =

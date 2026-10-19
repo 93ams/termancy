@@ -4,6 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 const live = @import("term").live;
 const version = @import("../main.zig").version;
@@ -12,8 +13,10 @@ const update = sys.update;
 
 const UpdateFlags = struct {
     check: bool = false,
-    pub const meta = .{ .check = .{ .help = "Only report whether a newer release exists" } };
 };
+const update_flags = cli.flags(UpdateFlags, field.Set(.{field.Spec(UpdateFlags){ .fields = .{
+    .check = .{ .help = "Only report whether a newer release exists" },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "update",
@@ -29,7 +32,7 @@ pub const command = cli.command(.{
     \\refuses instead, before any network access, so a script never waits on a prompt.
     \\-v logs the URLs, the archive chosen, and the checks made.
     ,
-    .flags = UpdateFlags,
+    .flags = update_flags,
     .confirm = true,
     .logging = true,
     .exit_statuses = &.{

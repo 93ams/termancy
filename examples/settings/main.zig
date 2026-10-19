@@ -70,8 +70,12 @@ const shop = cfg.settings(Settings, Specs, .{ .fields = .{
 
 const Global = struct {
     file: []const u8 = "app.toml",
-    pub const meta = .{ .file = .{ .short = 'f', .help = "The settings file" } };
 };
+const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .file = .{ .help = "The settings file" },
+} }}), .{ .fields = .{
+    .file = .{ .short = 'f' },
+} });
 
 fn readFile(ctx: *cli.Context, file: []const u8) ![]const u8 {
     return std.Io.Dir.cwd().readFileAlloc(ctx.io, file, ctx.arena, .limited(1 << 20)) catch |err|
@@ -108,17 +112,17 @@ const ShowFlags = struct {
     profile: ?[]const u8 = null,
     passphrase: ?[]const u8 = null,
     reveal: bool = false,
-    pub const meta = .{
-        .env = .{ .short = 'e', .help = "Also load <file>.<env>.toml over the file" },
-        .profile = .{ .short = 'p', .help = "Merge the file's profiles.<name> table" },
-        .passphrase = .{
-            .env = "SETTINGS_PASSPHRASE",
-            .secret = true,
-            .help = "Opens secrets.toml.enc next to the file",
-        },
-        .reveal = .{ .help = "Print secrets instead of redacting them" },
-    };
 };
+const show_flags = cli.flags(ShowFlags, field.Set(.{field.Spec(ShowFlags){ .fields = .{
+    .env = .{ .help = "Also load <file>.<env>.toml over the file" },
+    .profile = .{ .help = "Merge the file's profiles.<name> table" },
+    .passphrase = .{ .secret = true, .help = "Opens secrets.toml.enc next to the file" },
+    .reveal = .{ .help = "Print secrets instead of redacting them" },
+} }}), .{ .fields = .{
+    .env = .{ .short = 'e' },
+    .profile = .{ .short = 'p' },
+    .passphrase = .{ .env = "SETTINGS_PASSPHRASE" },
+} });
 
 fn show(ctx: *cli.Context, flags: ShowFlags) !void {
     const global = try ctx.flags(Global);
@@ -317,16 +321,13 @@ fn schema(ctx: *cli.Context) !void {
 const SealFlags = struct {
     passphrase: []const u8,
     memory: u32 = 64 * 1024,
-    pub const meta = .{
-        .passphrase = .{
-            .env = "SETTINGS_PASSPHRASE",
-            .secret = true,
-            .prompt = "Passphrase",
-            .help = "The passphrase to encrypt with",
-        },
-        .memory = .{ .min = 8, .help = "KiB of memory the key derivation needs (its cost)" },
-    };
 };
+const seal_flags = cli.flags(SealFlags, field.Set(.{field.Spec(SealFlags){ .fields = .{
+    .passphrase = .{ .secret = true, .help = "The passphrase to encrypt with" },
+    .memory = .{ .help = "KiB of memory the key derivation needs (its cost)", .checks = &.{.min(8)} },
+} }}), .{ .fields = .{
+    .passphrase = .{ .env = "SETTINGS_PASSPHRASE", .prompt = "Passphrase" },
+} });
 
 const SealArgs = struct { plain: []const u8 };
 
@@ -342,12 +343,12 @@ fn seal(ctx: *cli.Context, flags: SealFlags, args: SealArgs) !void {
 pub const root = cli.command(.{
     .name = "settings",
     .summary = "Show, check, and change the shop's settings",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = .{
         cli.command(.{
             .name = "show",
             .summary = "Print the effective settings and where each came from",
-            .flags = ShowFlags,
+            .flags = show_flags,
             .run = show,
         }),
         cli.command(.{
@@ -378,7 +379,7 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "seal",
             .summary = "Encrypt a file, for secrets kept in a repository",
-            .flags = SealFlags,
+            .flags = seal_flags,
             .args = SealArgs,
             .run = seal,
         }),

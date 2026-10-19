@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 const term = @import("tui").term;
 const ssh = sys.ssh;
@@ -19,19 +20,22 @@ const Flags = struct {
     authorized_keys: ?[]const u8 = null,
     anyone: bool = false,
     banner: []const u8 = "",
-    pub const meta = .{
-        .listen = .{ .short = 'l', .help = "The address and port to listen on (default: " ++
-            "127.0.0.1:2222, or 127.0.0.1:7681 with --web)" },
-        .web = .{ .help = "Serve to browsers instead: a page with a terminal, behind a token" },
-        .host_key = .{ .help = "The server's Ed25519 key (made when missing; default: in " ++
-            "termancy's state directory)" },
-        .authorized_keys = .{ .short = 'k', .help = "Who may connect: an authorized_keys file " ++
-            "(default: ~/.ssh/authorized_keys)" },
-        .anyone = .{ .help = "Let anyone connect, without a key or token (for demos on " ++
-            "trusted networks)" },
-        .banner = .{ .help = "Text shown before logging in" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .listen = .{ .help = "The address and port to listen on (default: " ++
+        "127.0.0.1:2222, or 127.0.0.1:7681 with --web)" },
+    .web = .{ .help = "Serve to browsers instead: a page with a terminal, behind a token" },
+    .host_key = .{ .help = "The server's Ed25519 key (made when missing; default: in " ++
+        "termancy's state directory)" },
+    .authorized_keys = .{ .help = "Who may connect: an authorized_keys file " ++
+        "(default: ~/.ssh/authorized_keys)" },
+    .anyone = .{ .help = "Let anyone connect, without a key or token (for demos on " ++
+        "trusted networks)" },
+    .banner = .{ .help = "Text shown before logging in" },
+} }}), .{ .fields = .{
+    .listen = .{ .short = 'l' },
+    .authorized_keys = .{ .short = 'k' },
+} });
 
 pub const command = cli.command(.{
     .name = "serve",
@@ -50,7 +54,7 @@ pub const command = cli.command(.{
     \\it behind a reverse proxy that adds it.
     ,
     .args = .{ .max = null, .usage = "-- command...", .passthrough = true },
-    .flags = Flags,
+    .flags = flags_flags,
     .logging = true,
     .examples =
     \\termancy serve -- termancy ui demo

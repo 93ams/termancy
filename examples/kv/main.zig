@@ -21,16 +21,19 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const sys = @import("sys");
 const components = @import("components");
 
 const Global = struct {
     store: ?[]const u8 = null,
-    pub const meta = .{
-        .store = .{ .env = "KV_STORE", .help = "Where the keys are kept (default: the data dir)" },
-    };
 };
+const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .store = .{ .help = "Where the keys are kept (default: the data dir)" },
+} }}), .{ .fields = .{
+    .store = .{ .env = "KV_STORE" },
+} });
 
 const Store = sys.files.Store;
 
@@ -84,8 +87,8 @@ fn completeKey(ctx: *cli.Context, prefix: []const u8) ![]const cli.Candidate {
 const SetArgs = struct {
     key: []const u8,
     value: []const u8,
-    pub const meta = .{ .key = .{ .complete = completeKey } };
 };
+const set_args = cli.args(SetArgs, field.none, .{ .fields = .{ .key = .{ .complete = .from(completeKey) } } });
 
 fn set(ctx: *cli.Context, args: SetArgs) !void {
     if (!Store.isValidName(args.key)) return ctx.usageError("\"{s}\" cannot be a key", .{args.key});
@@ -96,8 +99,8 @@ fn set(ctx: *cli.Context, args: SetArgs) !void {
 
 const GetArgs = struct {
     key: []const u8,
-    pub const meta = .{ .key = .{ .complete = completeKey } };
 };
+const get_args = cli.args(GetArgs, field.none, .{ .fields = .{ .key = .{ .complete = .from(completeKey) } } });
 
 fn get(ctx: *cli.Context, args: GetArgs) !void {
     if (!Store.isValidName(args.key)) return ctx.usageError("\"{s}\" cannot be a key", .{args.key});
@@ -110,8 +113,8 @@ fn get(ctx: *cli.Context, args: GetArgs) !void {
 
 const DelArgs = struct {
     keys: []const []const u8,
-    pub const meta = .{ .keys = .{ .name = "key", .complete = completeKey } };
 };
+const del_args = cli.args(DelArgs, field.none, .{ .fields = .{ .keys = .{ .name = "key", .complete = .from(completeKey) } } });
 
 fn del(ctx: *cli.Context, args: DelArgs) !void {
     const store = try openStore(ctx);
@@ -198,8 +201,12 @@ fn shell(ctx: *cli.Context) !void {
 
 const DocsFlags = struct {
     format: cli.docs.Format = .markdown,
-    pub const meta = .{ .format = .{ .short = 'f', .help = "What to write" } };
 };
+const docs_flags = cli.flags(DocsFlags, field.Set(.{field.Spec(DocsFlags){ .fields = .{
+    .format = .{ .help = "What to write" },
+} }}), .{ .fields = .{
+    .format = .{ .short = 'f' },
+} });
 
 fn docs(ctx: *cli.Context, flags: DocsFlags) !void {
     try cli.docs.write(ctx.out, &root, flags.format, .{});
@@ -208,15 +215,15 @@ fn docs(ctx: *cli.Context, flags: DocsFlags) !void {
 pub const root = cli.command(.{
     .name = "kv",
     .summary = "Keep small values under names",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = .{
-        cli.command(.{ .name = "set", .summary = "Store a value", .args = SetArgs, .run = set }),
-        cli.command(.{ .name = "get", .summary = "Print a value", .args = GetArgs, .run = get }),
+        cli.command(.{ .name = "set", .summary = "Store a value", .args = set_args, .run = set }),
+        cli.command(.{ .name = "get", .summary = "Print a value", .args = get_args, .run = get }),
         cli.command(.{
             .name = "del",
             .aliases = &.{"rm"},
             .summary = "Delete keys",
-            .args = DelArgs,
+            .args = del_args,
             .confirm = "Delete these keys?",
             .run = del,
         }),
@@ -242,7 +249,7 @@ pub const root = cli.command(.{
             .name = "docs",
             .summary = "Print the reference documentation",
             .group = "Tools",
-            .flags = DocsFlags,
+            .flags = docs_flags,
             .run = docs,
         }),
     },

@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 const sys = @import("sys");
 
@@ -15,30 +16,20 @@ pub const Global = struct {
     env_prefix: ?[]const u8 = null,
     set: []const []const u8 = &.{},
     output: Output = .text,
-
-    pub const meta = .{
-        .config = .{
-            .short = 'c',
-            .help = "Config file to load; repeatable, later files win (default: discover termancy.*)",
-            .value_name = "path",
-            .env = "TERMANCY_CONFIG",
-            .split = ',',
-            .complete = completeConfigFiles,
-        },
-        .profile = .{
-            .help = "Apply the profiles.<name> section",
-            .value_name = "name",
-            .env = "TERMANCY_PROFILE",
-            .complete = completeProfiles,
-        },
-        .env_prefix = .{
-            .help = "Read key a.b from the variable <PREFIX>_A_B",
-            .value_name = "prefix",
-        },
-        .set = .{ .help = "Override a value; repeatable", .value_name = "key=value" },
-        .output = .{ .short = 'o', .help = "Output format" },
-    };
 };
+pub const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .config = .{ .help = "Config file to load; repeatable, later files win (default: discover termancy.*)" },
+    .profile = .{ .help = "Apply the profiles.<name> section" },
+    .env_prefix = .{ .help = "Read key a.b from the variable <PREFIX>_A_B" },
+    .set = .{ .help = "Override a value; repeatable" },
+    .output = .{ .help = "Output format" },
+} }}), .{ .fields = .{
+    .config = .{ .short = 'c', .value_name = "path", .env = "TERMANCY_CONFIG", .split = ',', .complete = .from(completeConfigFiles) },
+    .profile = .{ .value_name = "name", .env = "TERMANCY_PROFILE", .complete = .from(completeProfiles) },
+    .env_prefix = .{ .value_name = "prefix" },
+    .set = .{ .value_name = "key=value" },
+    .output = .{ .short = 'o' },
+} });
 
 /// The message for a file whose extension names no supported format.
 pub const unknown_format =

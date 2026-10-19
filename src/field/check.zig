@@ -64,8 +64,7 @@ pub fn Check(comptime V: type) type {
         }
 
         /// At least `n`: a number, or a type with `order(a, b) std.math.Order`.
-        pub fn min(comptime n: V) Self {
-            comptime ordered();
+        pub fn min(comptime n: NumberOrOrdered(V)) Self {
             return .{ .about = .{ .min = bound(n) }, .run = struct {
                 fn run(v: V, w: *std.Io.Writer) Error!void {
                     if (less(v, n)) return fail(w, "must be at least {s}", .{comptime bound(n).text});
@@ -74,8 +73,7 @@ pub fn Check(comptime V: type) type {
         }
 
         /// At most `n`: a number, or a type with `order(a, b) std.math.Order`.
-        pub fn max(comptime n: V) Self {
-            comptime ordered();
+        pub fn max(comptime n: NumberOrOrdered(V)) Self {
             return .{ .about = .{ .max = bound(n) }, .run = struct {
                 fn run(v: V, w: *std.Io.Writer) Error!void {
                     if (less(n, v)) return fail(w, "must be at most {s}", .{comptime bound(n).text});
@@ -129,14 +127,6 @@ pub fn Check(comptime V: type) type {
             }.run };
         }
 
-        fn ordered() void {
-            const numeric = @typeInfo(V) == .int or @typeInfo(V) == .float;
-            if (!numeric and !(@typeInfo(V) == .@"struct" and @hasDecl(V, "order"))) {
-                @compileError(".min and .max need a number or a type with " ++
-                    "order(a, b) std.math.Order, found " ++ @typeName(V));
-            }
-        }
-
         fn sized() void {
             const list = @typeInfo(V) == .pointer and @typeInfo(V).pointer.size == .slice;
             if (!list) @compileError(".minLen and .maxLen need a string or a list, found " ++
@@ -151,6 +141,23 @@ pub fn Check(comptime V: type) type {
         fn length(v: V) usize {
             if (V == []const u8) return std.unicode.utf8CountCodepoints(v) catch v.len;
             return v.len;
+        }
+    };
+}
+
+/// `V` when `.min` and `.max` can bound it: a number, or a type with
+/// `order(a, b) std.math.Order`. Otherwise a type no bound converts to, whose name says
+/// why at the bound itself: `expected type 'MinMaxNeedANumberOrOrder([]const u8)'`.
+fn NumberOrOrdered(comptime V: type) type {
+    const numeric = @typeInfo(V) == .int or @typeInfo(V) == .float;
+    if (numeric or (@typeInfo(V) == .@"struct" and @hasDecl(V, "order"))) return V;
+    return MinMaxNeedANumberOrOrder(V);
+}
+
+fn MinMaxNeedANumberOrOrder(comptime V: type) type {
+    return struct {
+        comptime {
+            _ = V;
         }
     };
 }

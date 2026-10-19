@@ -76,6 +76,8 @@ pub const settings = settings_.settings;
 pub const Keys = settings_.Keys;
 /// How a list combines across layers.
 pub const Merge = settings_.Merge;
+/// Where else each value of a settings type can be set, for a command's help.
+pub const sourcesOf = settings_.sourcesOf;
 /// How `decode` treats unknown keys, bounds, and warnings.
 pub const DecodeOptions = decoding.Options;
 /// What `decode` can fail with.

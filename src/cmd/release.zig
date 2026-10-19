@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 
 const Ed25519 = std.crypto.sign.Ed25519;
@@ -67,13 +68,12 @@ fn runKeygen(ctx: *cli.Context) !void {
 
 const SignFlags = struct {
     key: ?[]const u8 = null,
-    pub const meta = .{
-        .key = .{
-            .help = "The secret key file (default: $TERMANCY_SIGNING_KEY)",
-            .value_name = "file",
-        },
-    };
 };
+const sign_flags = cli.flags(SignFlags, field.Set(.{field.Spec(SignFlags){ .fields = .{
+    .key = .{ .help = "The secret key file (default: $TERMANCY_SIGNING_KEY)" },
+} }}), .{ .fields = .{
+    .key = .{ .value_name = "file" },
+} });
 
 const sign = cli.command(.{
     .name = "sign",
@@ -82,7 +82,7 @@ const sign = cli.command(.{
     \\Sign each <file> with the Ed25519 secret key and write the signature, base64, to
     \\<file>.sig, which sys.update downloads and checks when a public key is set.
     ,
-    .flags = SignFlags,
+    .flags = sign_flags,
     .args = .{ .min = 1, .max = null, .usage = "<file>..." },
     .examples =
     \\termancy release sign --key release.key termancy-linux-x86_64.tar.gz
@@ -129,10 +129,12 @@ fn parseSecretKey(text: []const u8) ?Ed25519.KeyPair {
 
 const VerifyFlags = struct {
     public_key: []const u8 = "",
-    pub const meta = .{
-        .public_key = .{ .help = "The public key keygen printed (base64)", .value_name = "key" },
-    };
 };
+const verify_flags = cli.flags(VerifyFlags, field.Set(.{field.Spec(VerifyFlags){ .fields = .{
+    .public_key = .{ .help = "The public key keygen printed (base64)" },
+} }}), .{ .fields = .{
+    .public_key = .{ .value_name = "key" },
+} });
 
 const verify = cli.command(.{
     .name = "verify",
@@ -141,7 +143,7 @@ const verify = cli.command(.{
     \\Check each <file> against <file>.sig with the public key, as sys.update does
     \\before it installs. Exit status 1 when any signature is missing or does not verify.
     ,
-    .flags = VerifyFlags,
+    .flags = verify_flags,
     .args = .{ .min = 1, .max = null, .usage = "<file>..." },
     .examples =
     \\termancy release verify --public-key MCowBQ... termancy-linux-x86_64.tar.gz
@@ -190,18 +192,21 @@ const ManifestFlags = struct {
     homepage: []const u8 = "https://github.com/93ams/termancy",
     license: []const u8 = "MIT",
     publisher: []const u8 = "93ams",
-    pub const meta = .{
-        .format = .{ .short = 'f', .help = "The package manager" },
-        .sums = .{ .help = "The checksum file listing the assets", .value_name = "file" },
-        .url = .{ .help = "Where the assets are downloaded from, without the file name" },
-        .version = .{ .help = "The version released, without v" },
-        .name = .{ .help = "The package and command name" },
-        .description = .{ .help = "One line for listings" },
-        .homepage = .{ .help = "The project's home page" },
-        .license = .{ .help = "SPDX license identifier" },
-        .publisher = .{ .help = "winget's publisher, the first part of the package identifier" },
-    };
 };
+const manifest_flags = cli.flags(ManifestFlags, field.Set(.{field.Spec(ManifestFlags){ .fields = .{
+    .format = .{ .help = "The package manager" },
+    .sums = .{ .help = "The checksum file listing the assets" },
+    .url = .{ .help = "Where the assets are downloaded from, without the file name" },
+    .version = .{ .help = "The version released, without v" },
+    .name = .{ .help = "The package and command name" },
+    .description = .{ .help = "One line for listings" },
+    .homepage = .{ .help = "The project's home page" },
+    .license = .{ .help = "SPDX license identifier" },
+    .publisher = .{ .help = "winget's publisher, the first part of the package identifier" },
+} }}), .{ .fields = .{
+    .format = .{ .short = 'f' },
+    .sums = .{ .value_name = "file" },
+} });
 
 const manifest = cli.command(.{
     .name = "manifest",
@@ -212,7 +217,7 @@ const manifest = cli.command(.{
     \\termancy-windows-aarch64.zip); its download is --url joined with the name. An archive is
     \\taken to hold the executable at its top level, named --name (with .exe on Windows).
     ,
-    .flags = ManifestFlags,
+    .flags = manifest_flags,
     .examples =
     \\termancy release manifest -f homebrew --version 0.3.0 \
     \\    --url https://github.com/93ams/termancy/releases/download/v0.3.0 > termancy.rb

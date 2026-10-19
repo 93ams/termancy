@@ -161,6 +161,10 @@ post_run: ?Handler = null,
 persistent_pre_run: ?Handler = null,
 /// Runs after `post_run` of this command and of every descendant, leaf first.
 persistent_post_run: ?Handler = null,
+/// Runs the checks of the command's flags and positionals (`field` specs) that need the
+/// whole decoded value, before any hook of the run: checks across fields, and a list's
+/// own. Reports every problem, then fails with `error.UsageFailed`. Built by `cli.command`.
+check: ?Handler = null,
 /// Runs after this command or any descendant ends, leaf first, however it ended: after
 /// success, a failure, `ctx.exit`, or an interrupt (`App.cancel_on_interrupt`). For
 /// releasing what a `persistent_pre_run` acquired. Its error is reported only when the

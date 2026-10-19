@@ -169,6 +169,93 @@ pub fn structKeys(comptime X: type) []const []const u8 {
     };
 }
 
+/// For each value whose key is not its field path (`.key` renamed it, or a parent's), the
+/// field path and the key: how `Config.bindFlags` turns a flag's path into its key.
+pub fn pathKeys(comptime X: type) []const [2][]const u8 {
+    const Set = Of(X);
+    return comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var out: []const [2][]const u8 = &.{};
+        if (isTable(field.Unwrap(Set.Type))) collectPaths(Set.Type, Set.root, "", "", &out);
+        break :blk out;
+    };
+}
+
+fn collectPaths(
+    comptime T: type,
+    comptime place: anytype,
+    comptime path: []const u8,
+    comptime prefix: []const u8,
+    comptime out: *[]const [2][]const u8,
+) void {
+    const C = field.Unwrap(T);
+    const names = field.fieldNames(C);
+    const types = field.fieldTypes(C);
+    for (names, types) |name, F| {
+        const p = if (isChoice(C)) @field(place.variants, name) else @field(place.fields, name);
+        if (isChoice(C) and F == void) continue;
+        const sub = join(path, name);
+        const key = join(prefix, keyOf(p, name));
+        const F_ = field.Unwrap(F);
+        if (!std.mem.eql(u8, sub, key)) out.* = out.* ++ .{[2][]const u8{ sub, key }};
+        if (isTable(F_) or isChoice(F_)) collectPaths(F_, p, sub, key, out);
+    }
+}
+
+/// Where else each value of `X` can be set, for a command's help (`cli`'s `.settings`
+/// `.sources`): its field path, and `port in app.toml, $APP_PORT`. `file` names the file
+/// read; `env_prefix`, the prefix of `Config.automaticEnv`, when it is used.
+pub fn sourcesOf(
+    comptime X: type,
+    comptime options: struct { file: ?[]const u8 = null, env_prefix: ?[]const u8 = null },
+) []const [2][]const u8 {
+    const Set = Of(X);
+    return comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var out: []const [2][]const u8 = &.{};
+        const env = envBindings(X);
+        const renamed = pathKeys(X);
+        var paths: []const []const u8 = &.{};
+        collectPathsOf(Set.Type, "", &paths);
+        for (paths) |p| {
+            var key = p;
+            for (renamed) |pair| if (std.mem.eql(u8, pair[0], p)) {
+                key = pair[1];
+            };
+            var parts: []const []const u8 = &.{};
+            if (options.file) |file| parts = parts ++ .{key ++ " in " ++ file};
+            const bound: ?[]const u8 = for (env) |binding| {
+                if (std.mem.eql(u8, binding.key, key)) break binding.env;
+            } else null;
+            if (bound) |name| {
+                parts = parts ++ .{"$" ++ name};
+            } else if (options.env_prefix) |prefix| {
+                parts = parts ++ .{"$" ++ envName(prefix, key)};
+            }
+            if (parts.len > 0) out = out ++ .{[2][]const u8{ p, field.join(parts, ", ") }};
+        }
+        break :blk out;
+    };
+}
+
+fn collectPathsOf(comptime T: type, comptime path: []const u8, comptime out: *[]const []const u8) void {
+    const C = field.Unwrap(T);
+    for (field.fieldNames(C), field.fieldTypes(C)) |name, F| {
+        if (isChoice(C) and F == void) continue;
+        const sub = join(path, name);
+        const F_ = field.Unwrap(F);
+        if (isChoice(F_)) out.* = out.* ++ .{sub};
+        if (isTable(F_) or isChoice(F_)) collectPathsOf(F_, sub, out) else out.* = out.* ++ .{sub};
+    }
+}
+
+/// `APP_SERVER_PORT` for prefix `APP` and key `server.port`, as `path.toEnvName` does.
+fn envName(comptime prefix: []const u8, comptime key: []const u8) []const u8 {
+    var out: []const u8 = "";
+    for (prefix ++ "_" ++ key) |c| out = out ++ .{if (std.ascii.isAlphanumeric(c)) std.ascii.toUpper(c) else '_'};
+    return out;
+}
+
 const What = enum { secret, env, append, leaf };
 
 fn collect(
@@ -273,6 +360,20 @@ test "keys, secrets, variables, and appends follow places and specs" {
     const appends = comptime appendKeys(example);
     try testing.expectEqual(1, appends.len);
     try testing.expectEqualStrings("plugins", appends[0]);
+}
+
+test sourcesOf {
+    const sources = comptime sourcesOf(example, .{ .file = "app.toml", .env_prefix = "APP" });
+    try testing.expectEqualStrings("public.host", sources[0][0]);
+    try testing.expectEqualStrings("public.address in app.toml, $APP_PUBLIC_ADDRESS", sources[0][1]);
+    try testing.expectEqualStrings("public.port in app.toml, $PORT", sources[1][1]);
+}
+
+test pathKeys {
+    const keys = comptime pathKeys(example);
+    try testing.expectEqual(1, keys.len);
+    try testing.expectEqualStrings("public.host", keys[0][0]);
+    try testing.expectEqualStrings("public.address", keys[0][1]);
 }
 
 test "a plain struct is its own settings" {
