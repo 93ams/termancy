@@ -96,6 +96,7 @@ const cases = [_]Case{
 pub fn addCases(b: *std.Build, step: *std.Build.Step) void {
     const cli_root = b.path("src/cli/root.zig");
     const term_root = b.path("src/term/root.zig");
+    const field_root = b.path("src/field/root.zig");
     const tui_root = b.path("src/tui/root.zig");
     const local_cache: std.Build.LazyPath = .{ .relative = .{ .base = .local_cache } };
     const global_cache: std.Build.LazyPath = .{ .relative = .{ .base = .global_cache } };
@@ -108,15 +109,16 @@ pub fn addCases(b: *std.Build, step: *std.Build.Step) void {
         run.addDirectoryArg(local_cache);
         run.addArg("--global-cache-dir");
         run.addDirectoryArg(global_cache);
-        run.addArgs(&.{ "--dep", "cli", "--dep", "tui" });
+        run.addArgs(&.{ "--dep", "cli", "--dep", "tui", "--dep", "field" });
         run.addPrefixedFileArg("-Mroot=", b.path(b.fmt("test/compile_errors/{s}.zig", .{
             case.name,
         })));
-        run.addArgs(&.{ "--dep", "term" });
+        run.addArgs(&.{ "--dep", "term", "--dep", "field" });
         run.addPrefixedFileArg("-Mcli=", cli_root);
         run.addArgs(&.{ "--dep", "term" });
         run.addPrefixedFileArg("-Mtui=", tui_root);
         run.addPrefixedFileArg("-Mterm=", term_root);
+        run.addPrefixedFileArg("-Mfield=", field_root);
         // The library's other files are inputs too, but are not named on the command line;
         // rerunning every time is cheaper than keeping a list of them here.
         run.has_side_effects = true;

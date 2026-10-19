@@ -288,13 +288,13 @@ const docs_index =
 ;
 
 /// The library modules, in the order `unit` runs them, each after the ones it imports.
-const libraries = [_][]const u8{ "term", "cli", "cfg", "tui", "sys" };
+const libraries = [_][]const u8{ "term", "field", "cli", "cfg", "tui", "sys" };
 
 /// The libraries `name` imports besides `std`.
 fn libraryImports(comptime name: []const u8) []const []const u8 {
-    if (comptime std.mem.eql(u8, name, "cli") or std.mem.eql(u8, name, "tui")) {
-        return &.{"term"};
-    }
+    if (comptime std.mem.eql(u8, name, "cli")) return &.{ "term", "field" };
+    if (comptime std.mem.eql(u8, name, "cfg")) return &.{"field"};
+    if (comptime std.mem.eql(u8, name, "tui")) return &.{"term"};
     return &.{};
 }
 
@@ -707,8 +707,8 @@ const wasi_target: std.Target.Query = .{ .cpu_arch = .wasm32, .os_tag = .wasi };
 const arm_target: std.Target.Query = .{ .cpu_arch = .aarch64, .os_tag = .linux };
 
 fn isWasiLibrary(name: []const u8) bool {
-    return std.mem.eql(u8, name, "term") or std.mem.eql(u8, name, "cli") or
-        std.mem.eql(u8, name, "cfg");
+    return std.mem.eql(u8, name, "term") or std.mem.eql(u8, name, "field") or
+        std.mem.eql(u8, name, "cli") or std.mem.eql(u8, name, "cfg");
 }
 
 fn lazyPaths(b: *std.Build, paths: []const []const u8) []const std.Build.LazyPath {
