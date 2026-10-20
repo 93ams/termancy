@@ -4,6 +4,7 @@
 //! ends when it exits.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli");
 const field = @import("field");
 const sys = @import("sys");
@@ -331,11 +332,14 @@ fn runOnPty(
     defer child.deinit();
     var ended: std.atomic.Value(bool) = .init(false);
     var pump = try io.concurrent(pumpPty(@TypeOf(session)), .{ &child, session, &ended });
+    // They went (or the server stops): the program was told to end, and `deinit` waits.
+    var gone = false;
     // Input until the program's output ends (it exited) or they go.
     while (!ended.load(.acquire)) {
         // Canceled (the server stops): end the program, and clean up below as when it ends.
         const event = session.next(poll) catch {
             child.kill();
+            gone = true;
             break;
         };
         switch (event) {
@@ -345,11 +349,15 @@ fn runOnPty(
             .eof, .timeout => {},
             .closed => {
                 child.kill();
+                gone = true;
                 break;
             },
         }
     }
     pump.cancel(io);
+    // Nobody is left to tell the status, and a program ignoring SIGHUP would hold `wait`
+    // forever: `deinit` ends it instead.
+    if (gone) return 255;
     const status = child.wait() catch term.Pty.Exit{ .exited = 255 };
     return status.status();
 }
@@ -387,9 +395,11 @@ fn runPiped(served: *Served, session: *ssh.Session, env: *const std.process.Envi
     var out_pump = try io.concurrent(pumpFile, .{ io, child.stdout.?, session, false, &ended });
     var err_pump = try io.concurrent(pumpFile, .{ io, child.stderr.?, session, true, &ended });
     var stdin: ?Io.File = child.stdin;
+    var stopped = false;
     while (ended.load(.acquire) < 2) {
         const event = session.next(poll) catch {
-            child.kill(io);
+            stop(&child);
+            stopped = true;
             break;
         };
         switch (event) {
@@ -398,10 +408,14 @@ fn runPiped(served: *Served, session: *ssh.Session, env: *const std.process.Envi
                 f.close(io);
                 stdin = null;
             },
-            .signal => |name| if (isStopSignal(name)) child.kill(io),
+            .signal => |name| if (isStopSignal(name)) {
+                stop(&child);
+                stopped = true;
+            },
             .resize, .timeout => {},
             .closed => {
-                child.kill(io);
+                stop(&child);
+                stopped = true;
                 break;
             },
         }
@@ -410,11 +424,46 @@ fn runPiped(served: *Served, session: *ssh.Session, env: *const std.process.Envi
     child.stdin = null;
     out_pump.cancel(io);
     err_pump.cancel(io);
+    if (stopped and builtin.os.tag != .windows) if (reapWithin(io, &child)) |code| return code;
     const term_status = child.wait(io) catch return 255;
     return switch (term_status) {
         .exited => |code| code,
         else => 255,
     };
+}
+
+/// Tells a piped program to end without waiting for it, so the session keeps reading:
+/// `SIGHUP`, as for a pseudo-terminal (std's `kill` sends `SIGTERM`, then blocks until
+/// the program obeys). Windows ends it outright.
+fn stop(child: *std.process.Child) void {
+    const id = child.id orelse return;
+    if (builtin.os.tag == .windows) {
+        _ = std.os.windows.ntdll.NtTerminateProcess(id, @fromBackingInt(1));
+    } else std.posix.kill(id, .HUP) catch {};
+}
+
+/// POSIX: the exit status of a `stop`ped program that ended within a second; past that,
+/// it is sent `SIGKILL` and null returned, for `wait` to reap it.
+fn reapWithin(io: Io, child: *std.process.Child) ?u32 {
+    const pid = child.id.?;
+    for (0..20) |_| {
+        var status: if (builtin.link_libc) c_int else i32 = 0;
+        const rc = std.posix.system.wait4(pid, &status, std.posix.W.NOHANG, null);
+        if (std.posix.errno(rc) == .SUCCESS and rc != 0) {
+            // Reaped here, so here is where std's bookkeeping for it ends too.
+            if (child.stdout) |f| f.close(io);
+            if (child.stderr) |f| f.close(io);
+            child.stdout = null;
+            child.stderr = null;
+            child.id = null;
+            const bits: u32 = @bitCast(status);
+            return if (std.posix.W.IFEXITED(bits)) std.posix.W.EXITSTATUS(bits) else 255;
+        }
+        // Canceled (the server stops): no grace.
+        io.sleep(.fromMilliseconds(50), .awake) catch break;
+    }
+    std.posix.kill(pid, .KILL) catch {};
+    return null;
 }
 
 fn pumpFile(
