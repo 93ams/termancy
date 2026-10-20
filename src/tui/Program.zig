@@ -392,8 +392,10 @@ pub fn Program(comptime Model: type) type {
         /// Messages posted from other threads (`post`), and the lock that guards them.
         inbox: std.ArrayList(Self.Msg) = .empty,
         inbox_lock: std.atomic.Mutex = .unlocked,
-        /// Some thread has posted: `run` checks the inbox often.
+        /// Some thread has posted: `run` checks the inbox, often when `post` cannot wake it.
         posting: std.atomic.Value(bool) = .init(false),
+        /// `run` listens on the signal pipe, so `post` wakes it there (see `winch.wake`).
+        wakeable: std.atomic.Value(bool) = .init(false),
         /// What commands asked for, written with the next frame.
         suspended: bool = false,
         mouse_changed: bool = false,
@@ -544,6 +546,7 @@ pub fn Program(comptime Model: type) type {
             defer p.inbox_lock.unlock();
             try p.inbox.append(p.gpa, msg);
             p.posting.store(true, .release);
+            if (builtin.os.tag != .windows and p.wakeable.load(.acquire)) winch.wake();
         }
 
         /// Delivers what was posted, oldest first, and draws the result once.
@@ -1143,6 +1146,11 @@ pub fn Program(comptime Model: type) type {
             else
                 null;
             defer if (resizes != null) winch.stop();
+            // A post wakes the loop through the pipe; without one, the loop polls for posts.
+            p.wakeable.store(resizes != null, .release);
+            defer p.wakeable.store(false, .release);
+            // What was posted before the pipe could say so.
+            try p.deliverPosted();
             var signal_buffer: [64]u8 = undefined;
             var signal_data = [1][]u8{&signal_buffer};
             var signal_armed = false;
@@ -1170,7 +1178,8 @@ pub fn Program(comptime Model: type) type {
                     p.now = .now(io, .awake);
                     continue;
                 }
-                const busy = jobs.running.items.len > 0 or p.posting.load(.acquire);
+                const busy = jobs.running.items.len > 0 or
+                    (p.posting.load(.acquire) and !p.wakeable.load(.acquire));
                 if (builtin.os.tag == .windows) {
                     // shortcut: on Windows a console handle is never asynchronous, and
                     // `Io.Batch.awaitConcurrent` leaves the batch broken when it says
@@ -1401,7 +1410,7 @@ const winch = struct {
     const posix = std.posix;
     const linux = std.os.linux;
 
-    /// What SIGTERM and SIGHUP write; SIGWINCH writes anything else.
+    /// What SIGTERM and SIGHUP write; SIGWINCH and `wake` write anything else.
     const stop_byte = 's';
     const signals = [_]posix.SIG{ .WINCH, .TERM, .HUP };
 
@@ -1460,6 +1469,12 @@ const winch = struct {
         const flags = c.fcntl(fds[1], c.F.GETFL);
         _ = c.fcntl(fds[1], c.F.SETFL, flags | @as(c_int, @bitCast(c.O{ .NONBLOCK = true })));
         return true;
+    }
+
+    /// Wakes the listening program, from any thread: a message was posted (`post`).
+    fn wake() void {
+        const fd = write_end.load(.acquire);
+        if (fd >= 0) write(fd, 'p');
     }
 
     fn write(fd: posix.fd_t, b: u8) void {
@@ -1550,6 +1565,28 @@ test "winch: a resize signal is a byte on the pipe; one listener at a time" {
     try std.posix.raise(.TERM);
     try std.testing.expectEqual(1, try std.posix.read(fd, &byte));
     try std.testing.expectEqual(winch.stop_byte, byte[0]);
+}
+
+test "post wakes a program listening on the signal pipe, rather than its polling" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.SkipZigTest;
+    const Empty = struct {
+        pub fn update(_: *@This(), _: Msg) Cmd {
+            return .none;
+        }
+        pub fn view(_: *const @This(), _: *Io.Writer) Io.Writer.Error!void {}
+    };
+    var out: Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var model: Empty = .{};
+    var p: Program(Empty) = .init(testing.allocator, &model, &out.writer, .{});
+    defer p.deinit();
+    const fd = winch.listen() orelse return error.SkipZigTest;
+    defer winch.stop();
+    p.wakeable.store(true, .release); // as `run` sets it
+    try p.post(.{ .tick = 1 });
+    var byte: [1]u8 = undefined;
+    try testing.expectEqual(1, try std.posix.read(fd, &byte));
+    try testing.expectEqual('p', byte[0]);
 }
 
 test "runSession: input, a resize, and the end, from a remote session" {
