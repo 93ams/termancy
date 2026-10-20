@@ -268,8 +268,8 @@ pub fn checkOne(
     const spec = comptime specAt(T, S, path_);
     inline for (spec.checks) |c| {
         c.run(value, w) catch |err| switch (err) {
-            error.Invalid => return c.about,
-            else => |e| return e,
+            // A reason longer than `w` is cut short, as in `validate`.
+            error.Invalid, error.WriteFailed => return c.about,
         };
     }
     return null;
@@ -358,6 +358,14 @@ test checkOne {
     const about = try checkOne(App, Specs, "admin.port", 0, &w);
     try testing.expectEqual(1, about.?.min.number.?);
     try testing.expectEqualStrings("must be at least 1", w.buffered());
+}
+
+test "checkOne reports a failure whose reason does not fit" {
+    var buffer: [4]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    const about = try checkOne(App, Specs, "admin.port", 0, &w);
+    try testing.expectEqual(1, about.?.min.number.?);
+    try testing.expectEqualStrings("must", w.buffered());
 }
 
 test specAt {

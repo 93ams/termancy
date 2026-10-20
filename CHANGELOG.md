@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `field.checkOne` returns the failed check's `About` when its reason does not fit the
+  writer, as `field.validate` does, instead of `error.WriteFailed`.
 - `field`: `.min` and `.max` on a float reject NaN; `--ratio nan` (or `nan` in a TOML file)
   passed both.
 - `cli`: a switch set to false (`--no-yaml`, or `yaml = false` in a configuration or its
