@@ -475,11 +475,15 @@ From a review before the repository went public:
 - `termancy freeze` no longer crashes on a line wider than 65535 columns (it wraps there),
   and writes its image only once drawn, atomically: a failure (a missing font) leaves the
   file already at `-o` as it was instead of empty.
-- `termancy ssh verify --signers` refuses a signer whose allowed_signers line carries
-  options (`namespaces=`, `valid-before=`, `cert-authority`...) it does not check, where it
-  used to accept the signature as good.
-- `termancy serve` ends a session's program and its output tasks when the server is
-  canceled, instead of leaving them running.
+- `termancy ssh verify --signers` enforces a signer's allowed_signers options as
+  `ssh-keygen -Y verify` does: `namespaces=` must take the namespace, `valid-after=` and
+  `valid-before=` must hold now, and `cert-authority` or any other option refuses (it used
+  to accept the signature as good whatever they said). A matching line that allows the
+  signature wins, and the signer is named by its principals.
+- `termancy serve` ends a session's program and its output tasks when the client goes or
+  the server is canceled, instead of leaving them running. A program run without a
+  terminal is sent `SIGHUP` and, if still running a second later, `SIGKILL`; it used to
+  get `SIGTERM` and block the session until it obeyed.
 - `termancy record capture` refuses a tape that already exists, as `record new` does,
   before starting the shell.
 - `termancy update` gives each download 30 minutes instead of 60 seconds, so a large
