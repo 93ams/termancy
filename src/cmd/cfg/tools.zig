@@ -201,7 +201,8 @@ fn runEdit(ctx: *cli.Context) !void {
         ".{s}.termancy-edit{s}",
         .{ std.fs.path.stem(file), std.fs.path.extension(file) },
     ) });
-    try load.writeFileAtomic(ctx, copy, original);
+    // The copy is as private as the file it stands for.
+    try load.writeFileAs(ctx, copy, original, load.permissionsOf(ctx, file));
     defer std.Io.Dir.cwd().deleteFile(ctx.io, copy) catch {};
 
     var buffer: [256]u8 = undefined;
@@ -219,12 +220,7 @@ fn runEdit(ctx: *cli.Context) !void {
         var diag: cfg.Diagnostic = .{};
         if (format.parse(ctx.arena, edited, &diag)) |_| {
             if (std.mem.eql(u8, edited, original)) return;
-            const cwd = std.Io.Dir.cwd();
-            // The replacement is a new file; it keeps the old one's permissions (`0600`).
-            const mode = if (cwd.statFile(ctx.io, file, .{})) |stat| stat.permissions else |_| null;
-            try load.writeFileAtomic(ctx, file, edited);
-            if (mode) |permissions| cwd.setFilePermissions(ctx.io, file, permissions, .{}) catch {};
-            return;
+            return load.writeFileAtomic(ctx, file, edited);
         } else |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.SyntaxError => {},
@@ -309,4 +305,36 @@ test "merge and schema infer" {
     defer inferred.deinit();
     try testing.expectEqual(0, inferred.status);
     try testing.expect(std.mem.indexOf(u8, inferred.out, "\"type\": \"boolean\"") != null);
+}
+
+test "set and fmt keep a private file private" {
+    if (!@hasDecl(std.Io.File.Permissions, "fromMode")) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "secret.toml", .data = "token = \"s\"\n" });
+    try tmp.dir.setFilePermissions(testing.io, "secret.toml", .fromMode(0o600), .{});
+    const before = try tmp.dir.statFile(testing.io, "secret.toml", .{});
+    // drvfs and FAT record no modes: nothing to keep there.
+    if (before.permissions.toMode() & 0o777 != 0o600) return error.SkipZigTest;
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(dir);
+    const path = try std.fs.path.join(testing.allocator, &.{ dir, "secret.toml" });
+    defer testing.allocator.free(path);
+
+    const set = try termancy(&.{ "cfg", "set", "-c", path, "other", "1" });
+    defer set.deinit();
+    try set.expect(0, "", "");
+    const after_set = try tmp.dir.statFile(testing.io, "secret.toml", .{});
+    try testing.expectEqual(0o600, after_set.permissions.toMode() & 0o777);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "secret.toml", .data = "a   =   1\n" });
+    try tmp.dir.setFilePermissions(testing.io, "secret.toml", .fromMode(0o600), .{});
+    const formatted = try termancy(&.{ "cfg", "fmt", path });
+    defer formatted.deinit();
+    try testing.expectEqual(0, formatted.status);
+    const after_fmt = try tmp.dir.statFile(testing.io, "secret.toml", .{});
+    try testing.expectEqual(0o600, after_fmt.permissions.toMode() & 0o777);
+    const rewritten = try readTmp(tmp, "secret.toml");
+    defer testing.allocator.free(rewritten);
+    try testing.expectEqualStrings("a = 1\n", rewritten); // It was rewritten.
 }

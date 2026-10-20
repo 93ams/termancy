@@ -342,18 +342,27 @@ pub fn formatName(format: cfg.Format) []const u8 {
 }
 
 /// Replaces `file` with `data` atomically: readers see the old or the new file, never half.
+/// The new file keeps the old one's permissions, so a `0600` file stays private.
 pub fn writeFileAtomic(ctx: *cli.Context, file: []const u8, data: []const u8) !void {
-    const dir = std.Io.Dir.cwd();
-    var atomic = dir.createFileAtomic(ctx.io, file, .{ .replace = true }) catch |err| {
-        return ctx.fail("{s}: cannot write: {s}", .{ file, @errorName(err) });
-    };
-    defer atomic.deinit(ctx.io);
-    atomic.file.writeStreamingAll(ctx.io, data) catch |err| {
-        return ctx.fail("{s}: cannot write: {s}", .{ file, @errorName(err) });
-    };
-    atomic.replace(ctx.io) catch |err| {
-        return ctx.fail("{s}: cannot replace: {s}", .{ file, @errorName(err) });
-    };
+    return writeFileAs(ctx, file, data, permissionsOf(ctx, file));
+}
+
+/// `writeFileAtomic` with the new file's `permissions` given.
+pub fn writeFileAs(
+    ctx: *cli.Context,
+    file: []const u8,
+    data: []const u8,
+    permissions: std.Io.File.Permissions,
+) !void {
+    sys.files.writeAtomic(ctx.io, std.Io.Dir.cwd(), file, data, .{
+        .permissions = permissions,
+    }) catch |err| return ctx.fail("{s}: cannot write: {s}", .{ file, @errorName(err) });
+}
+
+/// The permissions of `file`, or the default for a new file when it does not exist.
+pub fn permissionsOf(ctx: *cli.Context, file: []const u8) std.Io.File.Permissions {
+    const stat = std.Io.Dir.cwd().statFile(ctx.io, file, .{}) catch return .default_file;
+    return stat.permissions;
 }
 
 // -- Completion ------------------------------------------------------------------------
