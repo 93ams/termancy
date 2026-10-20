@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: reformatting, sorting, or setting a TOML value keeps a quoted string that reads
+  like a date (`released = "2024-01-01"`) quoted, instead of turning it into a TOML date
+  for every other reader of the file (`termancy cfg fmt`, `cfg set`).
 - `cfg`: expansion adds at most `max_expanded_len` (16 MiB) of text, in a dotenv file
   (`dotenv.max_expanded_len`, a syntax error past it) and through `${key}` references
   (`Config.max_expanded_len`, reported by `checkReferences`). A few hundred bytes that
