@@ -1,7 +1,8 @@
 //! Coverage-guided fuzz tests of `sys`'s parsers of untrusted input: SSH's wire types,
 //! its transport (packets and the key exchange, from either side), public keys and
-//! `authorized_keys` lines, private key files, and SSH signatures; and the CBOR that
-//! WebAuthn authenticators send.
+//! `authorized_keys` lines, private key files, and SSH signatures; the CBOR that
+//! WebAuthn authenticators send, their authenticator data and COSE keys, and their CTAPHID
+//! reports and CTAP2 responses; and the WebAuthn JSON relying parties and browsers send.
 //!
 //! `zig build fuzz --fuzz` (or `--fuzz=100K` for a bounded run) explores them from the seeds
 //! below; a plain `zig build fuzz` (and `zig build unit`) replays the seeds and the
@@ -14,6 +15,8 @@ const wire = @import("ssh/wire.zig");
 const transport = @import("ssh/transport.zig");
 const keys = @import("ssh/keys.zig");
 const cbor = @import("security/cbor.zig");
+const webauthn = @import("security/webauthn.zig");
+const ctap = @import("security/ctap.zig");
 
 /// The longest input a target reads.
 const max_input = 1 << 13;
@@ -356,4 +359,249 @@ test "fuzz: cbor" {
 const cbor_regressions = [_][]const u8{
     // A half float whose bits are 21 read as `true`.
     "\xf9\x00\x15",
+};
+
+// WebAuthn.
+
+/// Authenticator data: what `attestedCredential` reads covers the input unless the ED flag
+/// announces extensions, and a COSE key that reads checks a signature, at worst with an
+/// error. The input is tried as a COSE key alone too.
+fn fuzzAuthenticatorData(_: void, smith: *testing.Smith) anyerror!void {
+    const bytes = try take(smith);
+    defer testing.allocator.free(bytes);
+    _ = webauthn.PublicKey.fromCose(bytes) catch {};
+    const data = webauthn.AuthenticatorData.parse(bytes) catch return;
+    const attested = webauthn.attestedCredential(bytes) catch return;
+    if (!data.flags.extension_data) {
+        const read = webauthn.AuthenticatorData.min_len + 18 + attested.id.len +
+            attested.public_key.len;
+        try testing.expectEqual(bytes.len, read);
+    }
+    const key = webauthn.PublicKey.fromCose(attested.public_key) catch return;
+    webauthn.verifySignature(key, .{
+        .raw_id = attested.id,
+        .client_data_json = "{}",
+        .authenticator_data = bytes,
+        .signature = attested.id,
+    }) catch {};
+}
+
+/// Authenticator data for `example.com` with `flags`, a two-byte credential ID, `key`, and
+/// `after` it.
+fn authenticatorData(gpa: Allocator, flags: u8, key: []const u8, after: []const u8) ![]u8 {
+    var rp_id_hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("example.com", &rp_id_hash, .{});
+    const aaguid: [16]u8 = @splat(0xaa);
+    return std.mem.concat(gpa, u8, &.{
+        &rp_id_hash, &.{ flags, 0, 0, 0, 3 }, &aaguid, "\x00\x02id", key, after,
+    });
+}
+
+test "fuzz: webauthn authenticator data" {
+    const gpa = testing.allocator;
+    // {1: 1, 3: -8, -1: 6, -2: x}
+    const ed25519 = "\xa4\x01\x01\x03\x27\x20\x06\x21\x58\x20" ++ @as([32]u8, @splat(0x09));
+    // {1: 2, 3: -7, -1: 1, -2: x, -3: y}, P-256's base point.
+    const base = std.crypto.ecc.P256.basePoint.affineCoordinates();
+    const es256 = try std.mem.concat(gpa, u8, &.{
+        "\xa5\x01\x02\x03\x26\x20\x01\x21\x58\x20", &base.x.toBytes(.big),
+        "\x22\x58\x20",                             &base.y.toBytes(.big),
+    });
+    defer gpa.free(es256);
+    const plain = try authenticatorData(gpa, 0x45, ed25519, "");
+    defer gpa.free(plain);
+    const extended = try authenticatorData(gpa, 0xc5, es256, "\xa1\x6bcredProtect\x02");
+    defer gpa.free(extended);
+    const unannounced = try authenticatorData(gpa, 0x45, ed25519, "\xa0");
+    defer gpa.free(unannounced);
+    try fuzzWith(fuzzAuthenticatorData, &[_][]const u8{ plain, extended, es256, unannounced } ++
+        authenticator_data_regressions);
+}
+
+/// Inputs that once broke the authenticator data or COSE key readers. A credential ID
+/// length of 0xffee or more overflowed, but needs more than `max_input` bytes: its test is
+/// in `webauthn.zig`.
+const authenticator_data_regressions = [_][]const u8{
+    // {1: 1, 3: -8, -1: 6, -2: x, -2: x'}: the last x was taken.
+    "\xa5\x01\x01\x03\x27\x20\x06\x21\x58\x20" ++ @as([32]u8, @splat(0x09)) ++
+        "\x21\x58\x20" ++ @as([32]u8, @splat(0x0a)),
+};
+
+fn expectJsonError(err: anyerror) !void {
+    if (err == error.OutOfMemory) return err;
+}
+
+/// The JSON a relying party sends (request and creation options) and a client returns
+/// (an assertion, its client data): each parser reads it or refuses it.
+fn fuzzWebauthnJson(_: void, smith: *testing.Smith) anyerror!void {
+    const text = try take(smith);
+    defer testing.allocator.free(text);
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    _ = webauthn.RequestOptions.parseJson(arena, text) catch |err| try expectJsonError(err);
+    _ = webauthn.CreationOptions.parseJson(arena, text) catch |err| try expectJsonError(err);
+    _ = webauthn.Assertion.parseJson(arena, text) catch |err| try expectJsonError(err);
+    webauthn.verifyClientData(arena, text, .{
+        .challenge = "0123456789abcdef",
+        .origin = "https://example.com",
+        .rp_id = "example.com",
+    }) catch |err| try expectJsonError(err);
+}
+
+test "fuzz: webauthn json" {
+    const gpa = testing.allocator;
+    var client: std.Io.Writer.Allocating = .init(gpa);
+    defer client.deinit();
+    const data: webauthn.ClientData = .{
+        .challenge = "0123456789abcdef",
+        .origin = "https://example.com",
+        .cross_origin = true,
+    };
+    try data.writeJson(&client.writer);
+    try fuzzWith(fuzzWebauthnJson, &[_][]const u8{
+        client.written(),
+        \\{"challenge":"AAAA","rpId":"example.com","timeout":60000,"allowCredentials":[
+        \\{"type":"public-key","id":"AA","transports":["usb","smart-card"]}],
+        \\"userVerification":"required"}
+        ,
+        \\{"rp":{"id":"example.com","name":"x"},"user":{"id":"AA","name":"n","displayName":"d"},
+        \\"challenge":"AA","pubKeyCredParams":[{"type":"public-key","alg":-7}],
+        \\"authenticatorSelection":{"residentKey":"required"}}
+        ,
+        \\{"id":"AQID","rawId":"AQID","type":"public-key","response":{"clientDataJSON":"e30",
+        \\"authenticatorData":"AQ","signature":"AQ","userHandle":"AQ"}}
+        ,
+    });
+}
+
+// CTAP.
+
+/// A key that answers with the input, 64 bytes a report, on the channel's ID unless a
+/// report starts with 0xff (another channel's), then times out. What it is sent is lost.
+const Replay = struct {
+    reports: []const u8,
+    cid: u32 = 0x0102_0304,
+
+    fn device(replay: *Replay) ctap.Device {
+        return .{ .context = replay, .vtable = &.{ .write = write, .read = read } };
+    }
+
+    fn write(_: *anyopaque, _: *const ctap.Report) ctap.Device.Error!void {}
+
+    fn read(context: *anyopaque, report: *ctap.Report, _: u32) ctap.Device.Error!void {
+        const replay: *Replay = @ptrCast(@alignCast(context));
+        if (replay.reports.len == 0) return error.Timeout;
+        const n = @min(replay.reports.len, ctap.report_len);
+        report.* = @splat(0);
+        @memcpy(report[0..n], replay.reports[0..n]);
+        replay.reports = replay.reports[n..];
+        if (report[0] != 0xff) std.mem.writeInt(u32, report[0..4], replay.cid, .big);
+    }
+
+    fn heard(_: *anyopaque, _: ctap.KeepaliveStatus) void {}
+};
+
+/// The first byte picks the command; the rest is what the key answers. Messages split
+/// over reports are put back together within `max_payload`, and every response parser
+/// reads its answer or refuses it.
+fn fuzzCtap(_: void, smith: *testing.Smith) anyerror!void {
+    const bytes = try take(smith);
+    defer testing.allocator.free(bytes);
+    if (bytes.len == 0) return;
+    var replay: Replay = .{ .reports = bytes[1..] };
+    var channel: ctap.Channel = .{ .device = replay.device(), .cid = replay.cid, .io = testing.io };
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const protocol: ctap.PinProtocol = if (bytes[0] & 0x80 == 0) .one else .two;
+    switch (bytes[0] % 5) {
+        0 => _ = ctap.getInfo(arena, &channel) catch |err| return expectJsonError(err),
+        1 => _ = ctap.getAssertion(arena, &channel, .{
+            .rp_id = "example.com",
+            .client_data_hash = @splat(1),
+            .allow_list = &.{"id"},
+        }, .{ .context = &replay, .function = Replay.heard }) catch |err|
+            return expectJsonError(err),
+        2 => _ = ctap.getPinRetries(&channel, protocol) catch return,
+        3 => _ = ctap.getPinToken(&channel, protocol, "1234") catch return,
+        else => {
+            var out: [ctap.Channel.max_payload]u8 = undefined;
+            const reply = channel.transact(.ping, "", &out, null) catch return;
+            try testing.expect(reply.len <= out.len);
+        },
+    }
+}
+
+/// `payload` as the reports of a CTAPHID message of `command`, as a key sends them, after
+/// the byte that picks the command.
+fn frame(b: *wire.Builder, command: ctap.Command, payload: []const u8) !void {
+    var report: ctap.Report = @splat(0);
+    report[4] = 0x80 | @as(u8, @backingInt(command));
+    std.mem.writeInt(u16, report[5..7], @intCast(payload.len), .big);
+    const first = @min(payload.len, ctap.report_len - 7);
+    @memcpy(report[7..][0..first], payload[0..first]);
+    try b.raw(&report);
+    var rest = payload[first..];
+    var seq: u8 = 0;
+    while (rest.len > 0) : (seq += 1) {
+        report = @splat(0);
+        report[4] = seq;
+        const n = @min(rest.len, ctap.report_len - 5);
+        @memcpy(report[5..][0..n], rest[0..n]);
+        try b.raw(&report);
+        rest = rest[n..];
+    }
+}
+
+test "fuzz: ctap reports and responses" {
+    const gpa = testing.allocator;
+    var seeds: [5]wire.Builder = @splat(.init(gpa));
+    defer for (&seeds) |*seed| seed.deinit();
+
+    // getInfo: {1: ["FIDO_2_1"], 3: aaguid, 4: {"clientPin": true}, 6: [2, 1]}
+    try seeds[0].byte(0);
+    try frame(&seeds[0], .cbor, "\x00\xa4\x01\x81\x68FIDO_2_1\x03\x50" ++
+        @as([16]u8, @splat(0xaa)) ++ "\x04\xa1\x69clientPin\xf5\x06\x82\x02\x01");
+
+    // getAssertion, after a keepalive and another channel's report, over three reports:
+    // {1: {"id": h'6964', "type": "public-key"}, 2: authData, 3: signature, 4: {"id": h'75'}}
+    try seeds[1].byte(1);
+    try frame(&seeds[1], .keepalive, "\x02");
+    try seeds[1].raw(&@as(ctap.Report, @splat(0xff)));
+    const authenticator_data = "\x58\x25" ++ @as([32]u8, @splat(0x01)) ++ "\x01\x00\x00\x00\x09";
+    try frame(&seeds[1], .cbor, "\x00\xa4\x01\xa2\x62id\x42id\x64type\x6apublic-key\x02" ++
+        authenticator_data ++ "\x03\x58\x40" ++ @as([64]u8, @splat(0x05)) ++ "\x04\xa1\x62id\x41u");
+
+    // getPinRetries: {3: 8}
+    try seeds[2].byte(2);
+    try frame(&seeds[2], .cbor, "\x00\xa1\x03\x08");
+
+    // getPinToken, protocol two: the key's agreement key (P-256's base point), then a token.
+    const base = std.crypto.ecc.P256.basePoint.affineCoordinates();
+    var agreement: wire.Builder = .init(gpa);
+    defer agreement.deinit();
+    try agreement.raw("\x00\xa1\x01\xa5\x01\x02\x03\x38\x18\x20\x01\x21\x58\x20");
+    try agreement.raw(&base.x.toBytes(.big));
+    try agreement.raw("\x22\x58\x20");
+    try agreement.raw(&base.y.toBytes(.big));
+    try seeds[3].byte(0x80);
+    try frame(&seeds[3], .cbor, agreement.bytes());
+    try frame(&seeds[3], .cbor, "\x00\xa1\x02\x58\x30" ++ @as([48]u8, @splat(0x07)));
+
+    // A ping's reply.
+    try seeds[4].byte(4);
+    try frame(&seeds[4], .ping, "pong");
+
+    var docs: [seeds.len][]const u8 = undefined;
+    for (&docs, &seeds) |*doc, *seed| doc.* = seed.bytes();
+    try fuzzWith(fuzzCtap, &docs ++ ctap_regressions);
+}
+
+/// Inputs that once broke the CTAPHID or CTAP2 readers. A reply over 7609 bytes into a
+/// larger buffer overflowed the sequence number, but needs more than `max_input` bytes:
+/// its test is in `ctap.zig`.
+const ctap_regressions = [_][]const u8{
+    // getAssertion with the credential {1: "id", h'bb': 0}: h'bb' was taken for its ID.
+    "\x01\x00\x00\x00\x00\x90\x00\x0d\x00\xa1\x01\xa2\x01\x62id\x41\xbb\x00\x00\x00",
 };
