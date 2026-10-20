@@ -132,24 +132,48 @@ fn openControlling(io: Io, direction: Direction) OpenError!File {
     return file;
 }
 
-/// The terminal device a standard stream is open on (`/dev/ttys003`), if any is: macOS's
-/// `poll` refuses `/dev/tty` itself, so reads from it could not time out (a lone Esc would
-/// wait for the next key).
+/// The controlling terminal's own device (`/dev/ttys003`): macOS's `poll` refuses
+/// `/dev/tty` itself, so reads from it could not time out (a lone Esc would wait for the
+/// next key). The device a standard stream is open on, else the one the kernel records
+/// for the process, when every stream is redirected.
 fn openDevice(io: Io) Io.Cancelable!?File {
+    var name: [256]u8 = undefined;
     for ([_]posix.fd_t{ 2, 1, 0 }) |fd| {
-        var name: [256]u8 = undefined;
         if (darwin.ttyname_r(fd, &name, name.len) != 0) continue;
-        const path = std.mem.sliceTo(&name, 0);
-        return Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |err| switch (err) {
-            error.Canceled => error.Canceled,
-            else => continue,
-        };
+        if (try openPath(io, std.mem.sliceTo(&name, 0))) |file| return file;
     }
-    return null;
+    const path = darwin.controllingDevice(&name) orelse return null;
+    return openPath(io, path);
+}
+
+fn openPath(io: Io, path: []const u8) Io.Cancelable!?File {
+    return Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |err| switch (err) {
+        error.Canceled => error.Canceled,
+        else => null,
+    };
 }
 
 const darwin = struct {
     extern "c" fn ttyname_r(fd: c_int, buffer: [*]u8, len: usize) c_int;
+    extern "c" fn devname(dev: i32, mode: u16) ?[*:0]const u8;
+
+    /// `struct kinfo_proc` (648 bytes on arm64 and x86_64), of which only `kp_eproc.e_tdev`
+    /// is read: at 296 (`sizeof(struct extern_proc)`) + 276 within `struct eproc`.
+    const kinfo_proc_size = 648;
+    const e_tdev_offset = 296 + 276;
+
+    /// `/dev/<name>` of the process's controlling terminal, in `buffer`; null without one.
+    fn controllingDevice(buffer: []u8) ?[]const u8 {
+        var info: [kinfo_proc_size]u8 align(8) = undefined;
+        var len: usize = info.len;
+        // CTL_KERN, KERN_PROC, KERN_PROC_PID, this process.
+        const mib = [4]c_int{ 1, 14, 1, std.c.getpid() };
+        if (std.c.sysctl(&mib, mib.len, &info, &len, null, 0) != 0 or len < e_tdev_offset + 4) return null;
+        const dev = std.mem.readInt(i32, info[e_tdev_offset..][0..4], builtin.cpu.arch.endian());
+        if (dev == -1) return null; // NODEV: no controlling terminal
+        const name = std.mem.sliceTo(devname(dev, 0o020000) orelse return null, 0); // S_IFCHR
+        return std.fmt.bufPrint(buffer, "/dev/{s}", .{name}) catch null;
+    }
 };
 
 const kernel32 = struct {
