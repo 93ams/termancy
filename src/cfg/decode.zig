@@ -137,13 +137,7 @@ const Decoder = struct {
         const message = "expected a boolean";
         switch (value) {
             .bool => |b| return b,
-            .string => |s| {
-                const truthy = [_][]const u8{ "true", "yes", "on", "1" };
-                const falsy = [_][]const u8{ "false", "no", "off", "0" };
-                for (truthy) |t| if (std.ascii.eqlIgnoreCase(s, t)) return true;
-                for (falsy) |f| if (std.ascii.eqlIgnoreCase(s, f)) return false;
-                return d.fail(key, error.InvalidValue, message);
-            },
+            .string => |s| return parseBool(s) orelse d.fail(key, error.InvalidValue, message),
             else => return d.fail(key, error.InvalidValue, message),
         }
     }
@@ -641,6 +635,18 @@ const no_note = struct {
 
 /// What encoding can fail with: a value no tree can hold.
 pub const EncodeError = error{Unrepresentable} || Allocator.Error;
+
+/// `text` as a boolean, ignoring ASCII case: `true`, `yes`, `on`, `1`, or `false`, `no`,
+/// `off`, `0`; null for anything else.
+pub fn parseBool(text: []const u8) ?bool {
+    for ([_][]const u8{ "true", "yes", "on", "1" }) |t| {
+        if (std.ascii.eqlIgnoreCase(text, t)) return true;
+    }
+    for ([_][]const u8{ "false", "no", "off", "0" }) |f| {
+        if (std.ascii.eqlIgnoreCase(text, f)) return false;
+    }
+    return null;
+}
 
 /// Encodes a Zig value as a tree in `arena`, each field under its own name. Optional
 /// fields that are `null` are left out of tables, since most formats cannot spell null.
