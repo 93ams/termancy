@@ -610,8 +610,64 @@ fn writeTextValue(
         .optional => if (value) |inner| {
             try writeTextValue(w, inner, secrets);
         } else try w.writeAll("null"),
-        else => try w.print("{any}", .{value}),
+        else => {
+            var buffer: [max_any_len]u8 = undefined;
+            try w.writeAll(anyText(&buffer, value, secrets));
+        },
     }
+}
+
+/// The longest rendering of a composite field value (a struct, a list) that is written.
+const max_any_len = 256;
+
+/// `value` rendered by `writeAny`, cut at `buffer`'s size.
+fn anyText(buffer: []u8, value: anytype, secrets: []const []const u8) []const u8 {
+    var fixed: Io.Writer = .fixed(buffer);
+    writeAny(&fixed, value, secrets) catch {}; // Cut at the buffer's size.
+    return fixed.buffered();
+}
+
+/// `value` as `{any}` writes it, except that strings inside it are text (quoted, with Zig
+/// escapes, so a record stays one line) with every secret value replaced, where `{any}`
+/// would list their bytes; a type with a `format` method is written with it.
+fn writeAny(w: *Io.Writer, value: anytype, secrets: []const []const u8) Io.Writer.Error!void {
+    const T = @TypeOf(value);
+    if (comptime isString(T)) {
+        try w.writeByte('"');
+        var scrubber: Scrubber = .{ .secrets = secrets, .text = value };
+        while (scrubber.next()) |piece| {
+            try std.zig.stringEscape(piece.clear, w);
+            if (piece.hit) try w.writeAll(redacted);
+        }
+        return w.writeByte('"');
+    }
+    switch (@typeInfo(T)) {
+        .pointer => |p| if (p.size == .slice) {
+            try w.writeAll("{");
+            for (value, 0..) |item, i| {
+                try w.writeAll(if (i == 0) " " else ", ");
+                try writeAny(w, item, secrets);
+            }
+            return w.writeAll(if (value.len == 0) "}" else " }");
+        },
+        .array => |a| return if (a.child == u8)
+            writeAny(w, @as([]const u8, &value), secrets)
+        else
+            writeAny(w, @as([]const a.child, &value), secrets),
+        .@"struct" => |info| {
+            if (comptime std.meta.hasMethod(T, "format")) return w.print("{f}", .{value});
+            try w.writeAll(".{");
+            inline for (info.field_names, 0..) |name, i| {
+                try w.writeAll(if (i == 0) " " else ", ");
+                if (!info.is_tuple) try w.print(".{s} = ", .{name});
+                try writeAny(w, @field(value, name), secrets);
+            }
+            return w.writeAll(if (info.field_names.len == 0) "}" else " }");
+        },
+        .optional => return if (value) |inner| writeAny(w, inner, secrets) else w.writeAll("null"),
+        else => {},
+    }
+    try w.print("{any}", .{value});
 }
 
 /// Splits text into runs of clear text, each followed by a secret value or the end, so a
@@ -732,12 +788,10 @@ fn writeJsonValue(
             try writeJsonValue(json, inner, secrets);
         } else try json.write(null),
         else => {
-            // Anything else is rendered as its `{any}` text, which is always valid JSON once
-            // quoted, rather than trusting `Stringify` with an arbitrary type.
-            var buffer: [256]u8 = undefined;
-            var fixed: Io.Writer = .fixed(&buffer);
-            fixed.print("{any}", .{value}) catch {}; // Truncated at the buffer's size.
-            try json.write(fixed.buffered());
+            // Anything else is rendered as text (`writeAny`), which is always valid JSON
+            // once quoted, rather than trusting `Stringify` with an arbitrary type.
+            var buffer: [max_any_len]u8 = undefined;
+            try json.write(anyText(&buffer, value, secrets));
         },
     }
 }
@@ -1013,6 +1067,25 @@ test "secret values are scrubbed from messages and string fields in every format
         \\
     , w.buffered());
     try testing.expect(std.mem.indexOf(u8, w.buffered(), "hunt") == null);
+}
+
+test "secret values are scrubbed from composite field values too" {
+    var buffer: [1024]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    var logger: Logger = .{ .writer = &w, .secrets = &.{"hunter2"} };
+    const argv: []const []const u8 = &.{ "--token", "hunter2" };
+    logger.info("run", .{ .argv = argv });
+    logger.format = .json;
+    logger.info("run", .{ .argv = argv });
+    try testing.expect(std.mem.indexOf(u8, w.buffered(), "hunter2") == null);
+    try testing.expectEqual(2, std.mem.count(u8, w.buffered(), redacted));
+}
+
+test "composite values show their strings as text" {
+    var buffer: [128]u8 = undefined;
+    const S = struct { name: []const u8, n: u32, tags: [2][]const u8 };
+    const text = anyText(&buffer, S{ .name = "a\nb", .n = 3, .tags = .{ "x", "pw" } }, &.{"pw"});
+    try testing.expectEqualStrings(".{ .name = \"a\\nb\", .n = 3, .tags = { \"x\", \"[REDACTED]\" } }", text);
 }
 
 test "json message with a backslash and a newline is one line and round-trips" {

@@ -485,6 +485,35 @@ From a review before the repository went public:
   instead of leaving the console without echo.
 - `term.Pty.deinit` sends `SIGKILL` to the program's process group when it ignores
   `SIGHUP` for a second, instead of waiting for it forever.
+||||||| bbead15
+- `sys.update.removeLeftovers` also deletes `<exe>.zip`, the archive `termancy update`
+  stages next to the executable while unpacking a `.zip` release, which stayed behind when
+  the update was cut short.
+- `sys.log`: strings inside a struct, list, or optional field value are written as text,
+  with known secret values replaced by `[REDACTED]`, in every format. They were written as
+  lists of byte values, which the secret scrubbing could not see, so a secret inside one
+  (an argument list, a request struct) reached the log readable.
+- `sys.dirs` on macOS: a relative `$TMPDIR` no longer makes the runtime directory relative
+  to the working directory; `/tmp` is used instead, as `tempDir` already did.
+- `sys.files.Store` refuses blob names Windows reads as something else: device names
+  (`CON`, `NUL`, `nul.txt`, `COM1`, ...) and names ending in a dot or a space. Writing
+  `nul` reported success and kept nothing; `con` wrote the blob to the console.
+  `sys.sandbox` refuses device names in Windows paths too (`error.UnsupportedPath`). Both use
+  the new `sys.dirs.isWindowsReserved`.
+- `sys.update.install` (and so `termancy update`) syncs the new executable to disk before
+  renaming it into place, so a crash or power loss right after an update cannot leave an
+  empty executable with the rollback copy already removed.
+- `sys.signal` on Windows: closing the console, logging off, or shutting down now waits
+  for the program to clean up and call `uninstall` (up to Windows' own timeout, 5 seconds
+  by default for a closed console). Windows ends the process as soon as the handler
+  returns, so the program never saw the termination before and its cleanup did not run.
+- `sys.signal`: a second `SIGHUP` before `reset` (a reload asked for twice) no longer ends
+  the process; only interrupt, termination, and quit fall back to the default action on a
+  second signal.
+- `sys.ssh.Server.serve` and `sys.web.Server.serve` (and so `termancy serve`) keep serving
+  when an accept fails for one connection (the peer hung up first) or for want of file
+  descriptors (they wait 100 ms and accept again), instead of returning and ending every
+  open session. A peer opening many idle connections could stop the server.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up

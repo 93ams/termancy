@@ -14,13 +14,17 @@
 //! flushing, locking) is unsafe inside a signal handler, so it happens on the normal path
 //! once the program looks at the flag. A second Ctrl-C before the program has reacted gets
 //! the default action and ends the process at once, so a stuck program can still be
-//! stopped: POSIX handlers are installed with `SA_RESETHAND`; the Windows handler declines
-//! the second event. `reset` clears the flag and re-arms the handler.
+//! stopped: POSIX handlers for interrupt, termination, and quit are installed with
+//! `SA_RESETHAND`; the Windows handler declines the second event. A hangup is not a stop
+//! request, so a second one never ends the process. `reset` clears the flag and re-arms the
+//! handlers.
 //!
 //! POSIX: `SIGINT` (interrupt) and `SIGTERM` (terminate), via `sigaction`. Windows:
 //! `SetConsoleCtrlHandler`; Ctrl-C and Ctrl-Break are an interrupt, closing the console,
-//! logging off, and shutting down are a termination (Windows ends the process a few seconds
-//! after a close event regardless).
+//! logging off, and shutting down are a termination. Windows ends the process as soon as the
+//! handler of a termination returns, and at the latest after its timeout (5 seconds by
+//! default), so the handler waits: until the program calls `uninstall` (after cleaning up)
+//! or exits, or until `termination_wait_ms` passes.
 //!
 //! `installWith` also catches, on POSIX only, `SIGHUP` (hangup: a daemon's "reload your
 //! configuration", or a closed terminal) and `SIGQUIT` (quit: Ctrl-\). Both are opt-in;
@@ -104,7 +108,8 @@ pub const Error = error{Interrupted};
 /// 0 when nothing arrived, else the `Signal` value. One atomic, so the handler needs no
 /// lock and readers see a whole value.
 var pending: std.atomic.Value(u8) = .init(0);
-var installed: bool = false;
+/// Read by the Windows handler, which runs on a thread of its own.
+var installed: std.atomic.Value(bool) = .init(false);
 var selected: Set = .{};
 var previous: if (has_sigaction) [posix_signals.len]std.posix.Sigaction else void = undefined;
 
@@ -135,7 +140,7 @@ pub fn install() void {
 /// `uninstall` first to change the set. On Windows, Ctrl-C and Ctrl-Break follow
 /// `interrupt` and the close, log-off, and shutdown events follow `terminate`.
 pub fn installWith(set: Set) void {
-    if (installed) return;
+    if (installed.load(.acquire)) return;
     selected = set;
     if (comptime is_windows) {
         // Fails only for an invalid handler pointer.
@@ -143,12 +148,12 @@ pub fn installWith(set: Set) void {
     } else if (comptime has_sigaction) {
         arm(&previous);
     }
-    installed = true;
+    installed.store(true, .release);
 }
 
 /// Restores the dispositions that `install` replaced. The flag is left as it is.
 pub fn uninstall() void {
-    if (!installed) return;
+    if (!installed.load(.acquire)) return;
     if (comptime is_windows) {
         _ = win32.SetConsoleCtrlHandler(&handleConsole, .FALSE);
     } else if (comptime has_sigaction) {
@@ -156,7 +161,7 @@ pub fn uninstall() void {
             if (isSelected(selected, i)) std.posix.sigaction(sig, &previous[i], null);
         }
     }
-    installed = false;
+    installed.store(false, .release);
 }
 
 /// Whether a stop request (interrupt, termination, or quit; not a hangup) has arrived
@@ -183,7 +188,7 @@ pub fn check() Error!void {
 /// the default action after it fires), so the program is interruptible again.
 pub fn reset() void {
     pending.store(0, .release);
-    if (has_sigaction and installed) arm(null);
+    if (has_sigaction and installed.load(.acquire)) arm(null);
 }
 
 /// Records `sig` unless a request is already recorded: the first one wins, except that a
@@ -200,14 +205,15 @@ pub fn record(sig: Signal) void {
 
 fn arm(old: ?*[posix_signals.len]std.posix.Sigaction) void {
     comptime assert(has_sigaction);
-    const action: std.posix.Sigaction = .{
-        .handler = .{ .handler = handlePosix },
-        .mask = std.posix.sigemptyset(),
-        // No `SA_RESTART`: the I/O implementation decides about `EINTR` itself.
-        .flags = std.posix.SA.RESETHAND,
-    };
     for (posix_signals, 0..) |sig, i| {
         if (!isSelected(selected, i)) continue;
+        const action: std.posix.Sigaction = .{
+            .handler = .{ .handler = handlePosix },
+            .mask = std.posix.sigemptyset(),
+            // No `SA_RESTART`: the I/O implementation decides about `EINTR` itself. A
+            // hangup keeps its handler: a second one (a reload asked twice) must not kill.
+            .flags = if (sig == .HUP) 0 else std.posix.SA.RESETHAND,
+        };
         std.posix.sigaction(sig, &action, if (old) |o| &o[i] else null);
     }
 }
@@ -232,7 +238,21 @@ fn handleConsole(event: std.os.windows.DWORD) callconv(.winapi) std.os.windows.B
     // A second event before the program reacted: let the default handler end the process.
     if (interrupted()) return .FALSE;
     record(sig);
+    // Windows ends the process once this returns: give the program its cleanup first.
+    if (sig == .terminate) awaitCleanup();
     return .TRUE;
+}
+
+/// How long the Windows handler of a termination waits for the program to clean up and
+/// `uninstall`; Windows itself ends the process after its own timeout (5 seconds by
+/// default for a closed console), whichever comes first.
+pub const termination_wait_ms = 10_000;
+
+fn awaitCleanup() void {
+    var waited: u32 = 0;
+    while (installed.load(.acquire) and waited < termination_wait_ms) : (waited += 50) {
+        win32.Sleep(50);
+    }
 }
 
 const win32 = struct {
@@ -241,6 +261,7 @@ const win32 = struct {
         handler: ?*const fn (windows.DWORD) callconv(.winapi) windows.BOOL,
         add: windows.BOOL,
     ) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 };
 
 const testing = std.testing;
@@ -298,11 +319,23 @@ test "installWith catches SIGHUP and SIGQUIT only when asked" {
     defer uninstall();
     try std.posix.raise(.HUP);
     try testing.expectEqual(.hangup, received().?);
-    reset(); // Re-arms SIGHUP, which `SA_RESETHAND` reset to the default.
+    reset(); // Clears the flag, so the next hangup is reported again.
     try std.posix.raise(.HUP);
     try testing.expectEqual(.hangup, received().?);
     try std.posix.raise(.QUIT);
     try testing.expectEqual(.quit, received().?);
+}
+
+test "a second SIGHUP before reset is caught again, not the default action" {
+    if (!has_sigaction) return error.SkipZigTest;
+    reset();
+    defer reset();
+    installWith(.{ .hangup = true });
+    defer uninstall();
+    try std.posix.raise(.HUP);
+    // Without `reset`: under `SA_RESETHAND` this one would end the test process.
+    try std.posix.raise(.HUP);
+    try testing.expectEqual(.hangup, received().?);
 }
 
 test "a raised SIGINT sets the flag; reset re-arms for SIGTERM" {
