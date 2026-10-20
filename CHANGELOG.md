@@ -555,6 +555,26 @@ From a review before the repository went public:
 - `termancy release keygen` links the key into place only once written and synced, so a
   failure leaves no empty key file blocking the next try; `release sign` writes each
   `.sig` atomically.
+||||||| bbead15
+- `cfg`: an integer setting given a number past 2^53 that was read as a float (JSON, YAML,
+  or ZON past the `i64` range: `"id": 10000000000000000001`) is "integer out of range",
+  instead of decoding as the nearest float, another number.
+- `cfg`: reformatting, sorting, or setting a TOML value keeps a quoted string that reads
+  like a date (`released = "2024-01-01"`) quoted, instead of turning it into a TOML date
+  for every other reader of the file (`termancy cfg fmt`, `cfg set`).
+- `cfg`: expansion adds at most `max_expanded_len` (16 MiB) of text, in a dotenv file
+  (`dotenv.max_expanded_len`, a syntax error past it) and through `${key}` references
+  (`Config.max_expanded_len`, reported by `checkReferences`). A few hundred bytes that
+  double a value line by line used to ask for gigabytes.
+- `cfg`: every format reads a file that starts with a UTF-8 byte order mark, as Windows
+  editors write, and in-place edits keep it. INI used to read the mark into the first key's
+  name, so that key was silently missing; TOML, JSON, JSONC, and dotenv rejected the file.
+- `cfg`: an include cycle through another spelling of the same path (`include = "./a.toml"`
+  or `"../conf/a.toml"`) is `error.IncludeCycle`, instead of reading the file again until
+  the path is too long.
+- `cfg`: with references on, a value that takes text from a secret through `${key}`
+  (`url = "pg://u:${db.password}@h"`) is redacted by `write` and `snapshot` too, instead of
+  printing the secret.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up

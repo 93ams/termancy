@@ -75,6 +75,10 @@ pub const redacted = "<redacted>";
 
 /// Files larger than this are refused by `loadFile`.
 pub const max_file_size = 16 * 1024 * 1024;
+/// The most text `${key}` references may add to the effective tree: `b = "${a}${a}"`,
+/// `c = "${b}${b}"`, ... doubles with each key. A reference past it stays as written, and
+/// `checkReferences` reports it.
+pub const max_expanded_len = max_file_size;
 
 gpa: Allocator,
 /// Long-lived: layers, their sources, settings, decoded results.
@@ -131,6 +135,9 @@ unexpanded: ?Value = null,
 /// With references: for each key a reference names, the keys whose values name it, so a
 /// `set` re-expands only what depends on the key it changes. In the cache arena.
 dependents: std.StringHashMapUnmanaged(std.ArrayList([]const u8)) = .empty,
+/// With references: keys whose expanded value took text from a secret, so `write` redacts
+/// them too. In the cache arena.
+derived_secrets: std.StringArrayHashMapUnmanaged(void) = .empty,
 /// Where `${secret:<scheme>:<name>}` looks secrets up, by scheme, beside `env` and `file`.
 secret_providers: std.StringArrayHashMapUnmanaged(SecretProvider) = .empty,
 /// `${name:argument}` resolvers that are not secrets (`addResolver`).
@@ -611,15 +618,18 @@ fn loadIncluding(
     chain: *std.ArrayList([]const u8),
     out: *std.ArrayList(FileSource),
 ) LoadError!void {
+    // Compared without `.` and `..`, so `./a.toml` from `a.toml` is the same file.
+    const resolved = try std.fs.path.resolveAlloc(config.gpa, &.{file_path});
+    defer config.gpa.free(resolved);
     for (chain.items, 0..) |pending, i| {
-        if (!std.mem.eql(u8, pending, file_path)) continue;
+        if (!std.mem.eql(u8, pending, resolved)) continue;
         const a = config.arena.allocator();
         var cycle: std.ArrayList(u8) = .empty;
         for (chain.items[i..]) |link| {
             try cycle.appendSlice(a, link);
             try cycle.appendSlice(a, " -> ");
         }
-        try cycle.appendSlice(a, file_path);
+        try cycle.appendSlice(a, resolved);
         if (diag) |d| d.* = .{ .key = config.include_key.?, .message = cycle.items };
         return error.IncludeCycle;
     }
@@ -627,7 +637,7 @@ fn loadIncluding(
     errdefer file.arena.deinit();
     file.included = chain.items.len > 0;
     if (config.include_key) |key| if (file.tree.table.fetchOrderedRemove(key)) |entry| {
-        try chain.append(config.gpa, file.name);
+        try chain.append(config.gpa, resolved);
         defer _ = chain.pop();
         const includes: []const Value = switch (entry.value) {
             .string => &.{entry.value},
@@ -1428,6 +1438,18 @@ pub fn markSecret(config: *Config, key_path: []const u8) Allocator.Error!void {
     try config.secrets.put(a, try a.dupe(u8, key_path), {});
 }
 
+/// Whether the value at `key` is or holds a secret: the key or a table above it is secret,
+/// or a reference copied a secret into it.
+fn holdsSecret(config: *const Config, key: []const u8) bool {
+    if (config.isSecret(key) or config.derived_secrets.contains(key)) return true;
+    for (config.secrets.keys()) |secret| {
+        if (key.len > secret.len and key[secret.len] == '.' and
+            (std.mem.startsWith(u8, key, secret) or
+                (config.case_insensitive and std.ascii.startsWithIgnoreCase(key, secret)))) return true;
+    }
+    return false;
+}
+
 /// Whether `key_path` was marked secret, by `markSecret` or a settings type's specs.
 pub fn isSecret(config: *const Config, key_path: []const u8) bool {
     if (config.secrets.contains(key_path)) return true;
@@ -1483,6 +1505,7 @@ pub fn resolve(config: *Config) Allocator.Error!Value {
     config.reference_problem = null;
     config.unexpanded = null;
     config.dependents = .empty;
+    config.derived_secrets = .empty;
     if (config.references) {
         config.unexpanded = try result.clone(a);
         try config.expandReferences(&result);
@@ -1675,6 +1698,8 @@ const Expander = struct {
     chain: std.ArrayList([]const u8) = .empty,
     /// When set, only these keys need expanding; every other value already is.
     pending: ?*const std.StringHashMapUnmanaged(void) = null,
+    /// Bytes references have added so far.
+    expanded: usize = 0,
 
     /// Expands the value at `key` in place; returns whether that succeeded.
     fn expand(e: *Expander, key: []const u8) Allocator.Error!bool {
@@ -1722,8 +1747,13 @@ const Expander = struct {
                 break;
             };
             const target = try e.config.foldKey(text[i + 2 .. close]);
-            const replacement = try e.lookup(key, target);
+            var replacement = try e.lookup(key, target);
+            if (replacement) |r| if (e.expanded + r.len > max_expanded_len) {
+                try e.report(key, "expanded value is too long");
+                replacement = null;
+            };
             if (replacement) |r| {
+                e.expanded += r.len;
                 try out.appendSlice(e.arena, r);
             } else {
                 ok = false;
@@ -1754,6 +1784,7 @@ const Expander = struct {
         }
         // References inside the target are expanded first, by key, so `lookup` again.
         if (!try e.expand(target)) return null;
+        if (e.config.holdsSecret(target)) try e.config.derived_secrets.put(e.arena, from, {});
         const value = e.root.lookup(target).?;
         return switch (value) {
             .string => |s| s,
@@ -2325,6 +2356,14 @@ pub fn snapshot(config: *Config, options: WriteOptions) Allocator.Error!Value {
                 error.InvalidPath, error.NotATable, error.IndexOutOfRange => unreachable,
             };
         }
+        // Expanded references live only in the effective tree.
+        if (options.layer == null) for (config.derived_secrets.keys()) |key| {
+            if (value.lookup(key) == null) continue;
+            value.put(a, key, .{ .string = redacted }) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidPath, error.NotATable, error.IndexOutOfRange => unreachable,
+            };
+        };
     }
     return value;
 }
@@ -3097,6 +3136,33 @@ test "secrets nested and in arrays are redacted" {
     try testing.expect(!config.isSecret("db"));
 }
 
+test "a reference to a secret is redacted where it expands" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    config.useReferences();
+    try config.loadSource("a.toml",
+        \\[db]
+        \\password = "hunter2"
+        \\url = "pg://u:${db.password}@h"
+        \\again = "${db.url}"
+        \\[vault]
+        \\token = "tok3n"
+        \\[app]
+        \\auth = "Bearer ${vault.token}"
+        \\host = "h"
+    , .toml, null);
+    try config.markSecret("db.password");
+    try config.markSecret("vault");
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try config.write(&out.writer, .toml, .{});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "hunter2") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "tok3n") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "host = \"h\"") != null);
+    // Only what is written is redacted; the value itself still expands.
+    try testing.expectEqualStrings("pg://u:hunter2@h", (try config.get("db.url")).?.string);
+}
+
 test "a scalar or empty document is handled per format" {
     var config: Config = .init(testing.allocator);
     defer config.deinit();
@@ -3270,6 +3336,23 @@ test "references expand across layers, and cycles and missing keys are reported"
     try testing.expectEqualStrings("${missing}", (try config.get("c")).?.string);
 }
 
+test "references stop adding text at max_expanded_len" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    config.useReferences();
+    var source: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer source.deinit();
+    try source.writer.writeAll("k0 = \"");
+    try source.writer.splatByteAll('x', 64);
+    try source.writer.writeAll("\"\n");
+    for (1..24) |i| try source.writer.print("k{d} = \"${{k{d}}}${{k{d}}}\"\n", .{ i, i - 1, i - 1 });
+    try config.loadSource("a.toml", source.written(), .toml, null);
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.BadReference, config.checkReferences(&diag));
+    try testing.expectEqualStrings("expanded value is too long", diag.message);
+    try testing.expectEqualStrings("${k22}${k22}", (try config.get("k23")).?.string);
+}
+
 test "secret references resolve at load and are redacted" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3348,6 +3431,16 @@ test "includes load first, relative to the including file, and cycles are errors
     const cycle = config.loadFile(io, tmp.dir, "a.toml", null, &diag);
     try testing.expectError(error.IncludeCycle, cycle);
     try testing.expectEqualStrings("a.toml -> b.toml -> a.toml", diag.message);
+
+    // The same file spelled another way is still a cycle.
+    try tmp.dir.createDirPath(io, "conf");
+    try tmp.dir.writeFile(io, .{ .sub_path = "conf/self.toml", .data = "include = \"./self.toml\"\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "conf/up.toml", .data = "include = \"../conf/up.toml\"\n" });
+    const self = config.loadFile(io, tmp.dir, "conf/self.toml", null, &diag);
+    try testing.expectError(error.IncludeCycle, self);
+    try testing.expect(std.mem.endsWith(u8, diag.message, "self.toml"));
+    const up = config.loadFile(io, tmp.dir, "conf/up.toml", null, &diag);
+    try testing.expectError(error.IncludeCycle, up);
 
     // A missing include loads nothing of its tree.
     const c = "include = [\"d.toml\", \"gone.toml\"]\n";

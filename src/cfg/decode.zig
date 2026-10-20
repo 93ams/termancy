@@ -137,13 +137,7 @@ const Decoder = struct {
         const message = "expected a boolean";
         switch (value) {
             .bool => |b| return b,
-            .string => |s| {
-                const truthy = [_][]const u8{ "true", "yes", "on", "1" };
-                const falsy = [_][]const u8{ "false", "no", "off", "0" };
-                for (truthy) |t| if (std.ascii.eqlIgnoreCase(s, t)) return true;
-                for (falsy) |f| if (std.ascii.eqlIgnoreCase(s, f)) return false;
-                return d.fail(key, error.InvalidValue, message);
-            },
+            .string => |s| return parseBool(s) orelse d.fail(key, error.InvalidValue, message),
             else => return d.fail(key, error.InvalidValue, message),
         }
     }
@@ -155,6 +149,9 @@ const Decoder = struct {
             .int => |i| return std.math.cast(T, i) orelse d.fail(key, error.InvalidValue, range),
             .float => |f| {
                 if (@floor(f) != f) return d.fail(key, error.InvalidValue, message);
+                // Past 2^53 a float is not every integer: JSON's 10000000000000000001 reads
+                // as 1e19, which would decode as another number.
+                if (@abs(f) > 9007199254740992) return d.fail(key, error.InvalidValue, range);
                 // `maxInt(T)` may round up to a power of two as an f64 (`2^63` for `i64`),
                 // so the upper bound is exclusive: `max + 1` is that power of two either way.
                 const max: f64 = @floatFromInt(std.math.maxInt(T));
@@ -639,6 +636,18 @@ const no_note = struct {
 /// What encoding can fail with: a value no tree can hold.
 pub const EncodeError = error{Unrepresentable} || Allocator.Error;
 
+/// `text` as a boolean, ignoring ASCII case: `true`, `yes`, `on`, `1`, or `false`, `no`,
+/// `off`, `0`; null for anything else.
+pub fn parseBool(text: []const u8) ?bool {
+    for ([_][]const u8{ "true", "yes", "on", "1" }) |t| {
+        if (std.ascii.eqlIgnoreCase(text, t)) return true;
+    }
+    for ([_][]const u8{ "false", "no", "off", "0" }) |f| {
+        if (std.ascii.eqlIgnoreCase(text, f)) return false;
+    }
+    return null;
+}
+
 /// Encodes a Zig value as a tree in `arena`, each field under its own name. Optional
 /// fields that are `null` are left out of tables, since most formats cannot spell null.
 /// Types with a `format` method and a `parse` function encode as their text.
@@ -1031,15 +1040,21 @@ test "integers from floats at the edges of their range" {
         error.InvalidValue,
         decode(u64, a, .{ .float = 2 * two_63 }, .{}, null),
     );
-    try testing.expectEqual(1 << 62, try decode(i64, a, .{ .float = two_63 / 2 }, .{}, null));
-    try testing.expectEqual(
-        std.math.minInt(i64),
-        try decode(i64, a, .{ .float = -two_63 }, .{}, null),
+    // Past 2^53 a float is not every integer, so it is out of range for any integer type.
+    const two_53: f64 = 9007199254740992.0;
+    try testing.expectEqual(1 << 53, try decode(i64, a, .{ .float = two_53 }, .{}, null));
+    try testing.expectEqual(-(1 << 53), try decode(i64, a, .{ .float = -two_53 }, .{}, null));
+    try testing.expectError(error.InvalidValue, decode(i64, a, .{ .float = two_53 + 2 }, .{}, null));
+    try testing.expectError(error.InvalidValue, decode(i64, a, .{ .float = -two_63 }, .{}, null));
+    try testing.expectError(error.InvalidValue, decode(u64, a, .{ .float = two_63 }, .{}, null));
+    // JSON reads an integer past `i64` as the nearest float: 1e19 here.
+    var diag: Diagnostic = .{};
+    const S = struct { id: u64 };
+    try testing.expectError(
+        error.InvalidValue,
+        decodeWith(S, a, "{\"id\": 10000000000000000001}", .{}, &diag),
     );
-    try testing.expectEqual(
-        @as(u64, 1) << 63,
-        try decode(u64, a, .{ .float = two_63 }, .{}, null),
-    );
+    try testing.expectEqualStrings("integer out of range for u64", diag.message);
     try testing.expectEqual(255, try decode(u8, a, .{ .float = 255 }, .{}, null));
     try testing.expectError(error.InvalidValue, decode(u8, a, .{ .float = 256 }, .{}, null));
     try testing.expectError(error.InvalidValue, decode(u8, a, .{ .float = -1 }, .{}, null));
