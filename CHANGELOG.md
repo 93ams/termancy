@@ -485,7 +485,6 @@ From a review before the repository went public:
   instead of leaving the console without echo.
 - `term.Pty.deinit` sends `SIGKILL` to the program's process group when it ignores
   `SIGHUP` for a second, instead of waiting for it forever.
-||||||| bbead15
 - `sys.update.removeLeftovers` also deletes `<exe>.zip`, the archive `termancy update`
   stages next to the executable while unpacking a `.zip` release, which stayed behind when
   the update was cut short.
@@ -514,7 +513,6 @@ From a review before the repository went public:
   when an accept fails for one connection (the peer hung up first) or for want of file
   descriptors (they wait 100 ms and accept again), instead of returning and ending every
   open session. A peer opening many idle connections could stop the server.
-||||||| bbead15
 - termancy puts the terminal back (raw mode off, main screen, cursor shown) before printing
   a panic, instead of leaving it as a full-screen command had it.
 - A tui program whose first frame fails, or that switched to the alternate screen or turned
@@ -532,7 +530,6 @@ From a review before the repository went public:
 - Messages posted from other threads are drawn in one frame per batch, not one each.
 - After a message is posted from another thread, a tui program no longer wakes every 15 ms
   for the rest of its run: `post` wakes it once, through its signal pipe.
-||||||| bbead15
 - `termancy cfg set`, `unset`, `fmt`, `init --force`, and `edit` keep the file's
   permissions: a `0600` file no longer becomes `0644` when rewritten, and `edit`'s working
   copy is as private as the file it stands for.
@@ -555,7 +552,6 @@ From a review before the repository went public:
 - `termancy release keygen` links the key into place only once written and synced, so a
   failure leaves no empty key file blocking the next try; `release sign` writes each
   `.sig` atomically.
-||||||| bbead15
 - `cfg`: an integer setting given a number past 2^53 that was read as a float (JSON, YAML,
   or ZON past the `i64` range: `"id": 10000000000000000001`) is "integer out of range",
   instead of decoding as the nearest float, another number.
