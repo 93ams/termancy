@@ -437,6 +437,7 @@ pub fn Program(comptime Model: type) type {
                 .renderer = .init(gpa, .{
                     .mode = if (options.alt_screen) .full_screen else .inline_frame,
                     .level = options.capability.color,
+                    .reflows = options.capability.reflows,
                 }),
                 .alt_screen = options.alt_screen,
                 .mouse = if (options.mouse) .on else .off,

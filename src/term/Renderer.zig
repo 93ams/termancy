@@ -49,6 +49,9 @@ pub const Options = struct {
     mode: Mode = .inline_frame,
     /// Colors are lowered to this.
     level: capability.Color = .truecolor,
+    /// Whether the terminal rewraps lines when it narrows (`Capability.reflows`), which
+    /// `erase` counts rows by.
+    reflows: bool = true,
 };
 
 /// A renderer that has drawn nothing yet. Free with `deinit`.
@@ -230,13 +233,15 @@ pub fn erase(r: *Renderer, w: *Writer, width: usize) Writer.Error!void {
     if (!r.showing) return;
     // Rows above the cursor's: the frame's rows before it, each as many terminal rows as
     // its cells take at `width` (more when the terminal narrowed and reflowed them).
+    // A terminal that cuts lines instead keeps one row each.
+    const rewrap = r.options.reflows and width > 0;
     var above: usize = 0;
     for (0..r.cursor_row) |row| {
         const end = r.shown.rowEnd(row);
-        above += if (end == 0 or width == 0) 1 else (end + width - 1) / width;
+        above += if (end == 0 or !rewrap) 1 else (end + width - 1) / width;
     }
     const own = r.shown.rowEnd(r.cursor_row);
-    if (width > 0 and own > width) above += (own - 1) / width;
+    if (rewrap and own > width) above += (own - 1) / width;
     try w.writeByte('\r');
     try ansi.cursorUp(w, above);
     try ansi.eraseScreen(w, .to_end);
@@ -324,6 +329,23 @@ test "only the cells that changed go out" {
     out.clearRetainingCapacity();
     try renderer.draw(&out.writer, &buffer, .{});
     try testing.expectEqualStrings("", out.written());
+}
+
+test "erase counts the rows lines rewrapped into, unless the terminal cuts them" {
+    for ([_]bool{ true, false }) |reflows| {
+        var renderer: Renderer = .init(testing.allocator, .{ .reflows = reflows });
+        defer renderer.deinit();
+        var buffer: Buffer = .init(testing.allocator);
+        defer buffer.deinit();
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        try buffer.layout("aaaaaaaaaaaaaaaaaaaa\nbbbbbbbbbbbbbbbbbbbb", .{ .width = 30 });
+        try renderer.draw(&out.writer, &buffer, .{});
+        out.clearRetainingCapacity();
+        // Narrowed to 10: two rows a line where it rewraps, one where it cuts.
+        try renderer.erase(&out.writer, 10);
+        try testing.expectEqualStrings(if (reflows) "\r\x1b[3A\x1b[J" else "\r\x1b[1A\x1b[J", out.written());
+    }
 }
 
 test "random frames always draw what a whole redraw draws" {

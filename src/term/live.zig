@@ -588,6 +588,8 @@ pub const Live = struct {
     color: capability.Color = .none,
     /// ASCII spinners, bars, and symbols.
     ascii: bool = false,
+    /// Whether the terminal rewraps lines when it narrows (`Capability.reflows`).
+    reflows: bool = true,
     /// The terminal's size when `file` cannot say; a height of 0 limits nothing.
     columns: u16 = 80,
     rows: u16 = 0,
@@ -612,7 +614,13 @@ pub const Live = struct {
 
     /// Draws for an output that can take `cap`: animated when it takes escapes.
     pub fn init(out: *Writer, cap: capability.Capability, items: []const Item) Live {
-        return .{ .out = out, .items = items, .animate = cap.escapes, .color = cap.color };
+        return .{
+            .out = out,
+            .items = items,
+            .animate = cap.escapes,
+            .color = cap.color,
+            .reflows = cap.reflows,
+        };
     }
 
     /// Draws to `out`, which writes to `file`: animated only at a terminal that shows
@@ -804,13 +812,17 @@ pub const Live = struct {
     }
 
     /// To the start of the first live row: up as many rows as the drawn ones take at the
-    /// width now, which is more once the terminal narrowed and rewrapped them.
+    /// width now, which is more once the terminal narrowed and rewrapped them (not where it
+    /// cuts them).
     fn toTop(l: *Live) Writer.Error!void {
         try l.out.writeByte('\r');
         var above: usize = 0;
         for (0..l.drawn) |row| {
             const columns: usize = if (row < l.widths.len) l.widths[row] else 1;
-            const rows = if (columns == 0 or l.columns == 0) 1 else (columns + l.columns - 1) / l.columns;
+            const rows = if (columns == 0 or l.columns == 0 or !l.reflows)
+                1
+            else
+                (columns + l.columns - 1) / l.columns;
             // The cursor is on the last row of the last line.
             above += if (row + 1 < l.drawn) rows else rows - 1;
         }
@@ -1144,6 +1156,13 @@ test "after the terminal narrows, the next frame starts above the rewrapped rows
     const second = bytes.written().len;
     try live.draw(ms(200));
     try testing.expect(std.mem.indexOf(u8, bytes.written()[second..], "\r\x1b[1A") != null);
+    // A terminal that cuts lines instead: one row each, narrowed or not.
+    live.reflows = false;
+    try live.draw(ms(300));
+    live.columns = 10;
+    const third = bytes.written().len;
+    try live.draw(ms(400));
+    try testing.expect(std.mem.indexOf(u8, bytes.written()[third..], "\r\x1b[1A") != null);
 }
 
 test "lines are cut to the terminal's width, wide graphemes whole" {
