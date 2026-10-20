@@ -52,6 +52,9 @@ pub const Capability = struct {
     color: Color,
     /// Cursor movement, erasing, modes: everything an interactive program needs.
     escapes: bool,
+    /// Whether the terminal rewraps lines when it narrows, as most do; xterm, st, and the
+    /// Linux console cut them instead. Redrawing in place after a resize counts rows by it.
+    reflows: bool = true,
 
     /// Everything allowed; the default for in-memory rendering.
     pub const full: Capability = .{ .color = .truecolor, .escapes = true };
@@ -74,7 +77,19 @@ pub fn detect(environ: *const Environ.Map, facts: Facts) Capability {
     return .{
         .color = colorLevel(environ, facts, dumb),
         .escapes = facts.is_tty and !dumb,
+        .reflows = reflows(environ, term orelse ""),
     };
+}
+
+/// Whether the terminal rewraps lines when it narrows: not xterm (which sets
+/// `XTERM_VERSION`, unless tmux or screen, which do rewrap, runs inside it), st, or the
+/// Linux console.
+fn reflows(environ: *const Environ.Map, term: []const u8) bool {
+    const multiplexed = environ.get("TMUX") != null or environ.get("STY") != null;
+    if (environ.get("XTERM_VERSION") != null and !multiplexed) return false;
+    if (std.mem.eql(u8, term, "linux")) return false;
+    if (std.mem.eql(u8, term, "st") or std.mem.startsWith(u8, term, "st-")) return false;
+    return true;
 }
 
 fn colorLevel(environ: *const Environ.Map, facts: Facts, dumb: bool) Color {
@@ -176,6 +191,7 @@ const Case = struct {
     os: std.Target.Os.Tag = .linux,
     color: Color,
     escapes: bool = true,
+    reflows: bool = true,
 };
 
 fn expectCase(case: Case) !void {
@@ -188,6 +204,7 @@ fn expectCase(case: Case) !void {
         return err;
     };
     try testing.expectEqual(case.escapes, got.escapes);
+    try testing.expectEqual(case.reflows, got.reflows);
 }
 
 test "detect: the terminal variables set the level" {
@@ -225,7 +242,7 @@ test "detect: the terminal variables set the level" {
         .color = .ansi256,
     });
     try expectCase(.{ .env = &.{.{ "TERM", "screen-256color" }}, .color = .ansi256 });
-    try expectCase(.{ .env = &.{.{ "TERM", "linux" }}, .color = .basic });
+    try expectCase(.{ .env = &.{.{ "TERM", "linux" }}, .color = .basic, .reflows = false });
 }
 
 test "detect: dumb terminals get neither color nor escapes" {
@@ -235,6 +252,18 @@ test "detect: dumb terminals get neither color nor escapes" {
         .color = .basic,
         .escapes = false,
     });
+}
+
+test "detect: xterm, st, and the Linux console cut lines; tmux in xterm rewraps" {
+    const xterm = .{ "XTERM_VERSION", "XTerm(390)" };
+    try expectCase(.{ .env = &.{ .{ "TERM", "xterm-256color" }, xterm }, .color = .ansi256, .reflows = false });
+    try expectCase(.{
+        .env = &.{ .{ "TERM", "tmux-256color" }, xterm, .{ "TMUX", "/tmp/tmux-1000/default,1,0" } },
+        .color = .ansi256,
+    });
+    try expectCase(.{ .env = &.{.{ "TERM", "st-256color" }}, .color = .ansi256, .reflows = false });
+    try expectCase(.{ .env = &.{.{ "TERM", "linux" }}, .color = .basic, .reflows = false });
+    try expectCase(.{ .env = &.{.{ "TERM", "xterm-256color" }}, .color = .ansi256 });
 }
 
 test "detect: NO_COLOR wins, but keeps escapes" {
