@@ -477,6 +477,10 @@ From a review before the repository went public:
 
 ### Fixed
 
+- **`cfg` encrypted files:** the Argon2 costs an envelope names are bounded (1 GiB, four
+  passes over it, 16 lanes) and checked before they are paid; a file from elsewhere
+  saying `m=4294967295` ran the machine out of memory, `t=4294967295` for hours.
+  `encrypted.encrypt` refuses the same costs, so what it writes can be read.
 - `cfg`: `Config.markSecret` after a `get` also redacts the references that had already
   expanded the secret (`url = "pg://u:${password}@h"`); `write` and `snapshot` showed them
   in plain text.

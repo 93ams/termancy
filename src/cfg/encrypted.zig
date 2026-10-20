@@ -10,8 +10,10 @@
 //! ```
 //!
 //! The header line is authenticated with the ciphertext, so changing the parameters or the
-//! format makes decryption fail rather than misread. `Config.usePassphrase` lets
-//! `Config.loadFile` read such a file directly; `app.toml.enc` is a TOML file encrypted.
+//! format makes decryption fail rather than misread. The costs are paid before that check,
+//! so they are bounded (`Params`): a file from elsewhere cannot take all memory, or hours.
+//! `Config.usePassphrase` lets `Config.loadFile` read such a file directly; `app.toml.enc`
+//! is a TOML file encrypted.
 //!
 //! What is wiped: the derived key, always, and the plaintext buffer when decryption fails.
 //! The plaintext `decrypt` returns belongs to the caller, who should `secureZero` it once
@@ -34,7 +36,9 @@ const base64 = std.base64.standard;
 pub const magic = "termancy-encrypted";
 
 /// Argon2id costs. The defaults follow the RFC 9106 second recommendation: 64 MiB, three
-/// passes, which takes a fraction of a second.
+/// passes, which takes a fraction of a second. At most 1 GiB, 16 lanes, and `t * m` at
+/// most four passes over 1 GiB: an envelope asking for more is refused (`WeakParameters`)
+/// before any of it is paid, and `encrypt` refuses the same, so what it writes can be read.
 pub const Params = struct {
     /// Passes over memory.
     t: u32 = 3,
@@ -42,6 +46,10 @@ pub const Params = struct {
     m: u32 = 64 * 1024,
     /// Lanes.
     p: u24 = 1,
+
+    const max_m = 1024 * 1024;
+    const max_work = 4 * max_m;
+    const max_p = 16;
 };
 
 /// What encrypting and decrypting can fail with.
@@ -197,6 +205,10 @@ fn deriveKey(
     salt: []const u8,
     params: Params,
 ) Error!void {
+    const work = @as(u64, params.t) * params.m;
+    if (params.m > Params.max_m or params.p > Params.max_p or work > Params.max_work) {
+        return error.WeakParameters;
+    }
     const argon_params: argon2.Params = .{ .t = params.t, .m = params.m, .p = params.p };
     argon2.kdf(arena, key, passphrase, salt, argon_params, .argon2id, io) catch |err| {
         return switch (err) {
@@ -244,4 +256,26 @@ test "each encryption is different" {
     const one = try encrypt(a, testing.io, "a = 1", "p", .toml, test_params);
     const two = try encrypt(a, testing.io, "a = 1", "p", .toml, test_params);
     try testing.expect(!std.mem.eql(u8, one, two));
+}
+
+test "costs past the ceiling are refused before they are paid" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A salt, a nonce, and a tag, all zero: the least that reaches key derivation.
+    const body: []const u8 = &@as([75]u8, @splat('A')) ++ "=\n";
+    for ([_][]const u8{
+        "t=4294967295 m=8 p=1", // hours of passes
+        "t=1 m=4294967295 p=1", // 4 TiB, which the OOM killer stopped
+        "t=1 m=2097152 p=1", // 2 GiB
+        "t=5 m=1048576 p=1", // 1 GiB, five times over
+        "t=1 m=1048576 p=17", // more lanes than allowed
+    }) |costs| {
+        const parts = &.{ magic, " v1 argon2id ", costs, " format=toml\n", body };
+        const envelope = try std.mem.concat(a, u8, parts);
+        try testing.expectError(error.WeakParameters, decrypt(a, testing.io, envelope, "x"));
+    }
+    const greedy: Params = .{ .t = 1, .m = 2 * Params.max_m };
+    const sealed = encrypt(a, testing.io, "a = 1", "p", .toml, greedy);
+    try testing.expectError(error.WeakParameters, sealed);
 }
