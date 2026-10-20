@@ -2445,6 +2445,8 @@ const bash_cases = [_]ShellCase{
     .{ .words = &.{ "cfg", "get", "server.p" }, .stdout = "server.port\n" },
     // Directives: files of the formats termancy reads, directories.
     .{ .words = &.{ "cfg", "-c", "se" }, .stdout = "seeds.toml\nservers.toml\n" },
+    // A file name that is also a pattern stays as it is.
+    .{ .words = &.{ "cfg", "-c", "glob" }, .stdout = "glob[1].toml\n" },
     .{ .words = &.{ "cli", "docs", "--dir", "y" }, .stdout = "yaml\n" },
     // After `--flag=`, as one word and as bash splits it at the `=`.
     .{

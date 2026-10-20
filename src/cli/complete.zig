@@ -371,6 +371,10 @@ const bash_script =
     \\_@IDENT@_complete() {
     \\    local cur="${COMP_WORDS[COMP_CWORD]}"
     \\    local IFS=$'\n'
+    \\    # Candidates are words, not patterns: `lines=($(...))` must not expand `photo[1].jpg`.
+    \\    local glob=1
+    \\    [[ $- == *f* ]] && glob=0
+    \\    set -f
     \\    # bash splits `--flag=value` at the `=`; join the pieces back into one word.
     \\    local -a words=()
     \\    local i n=0 joined=0
@@ -418,6 +422,7 @@ const bash_script =
     \\    elif ((paths)); then
     \\        compopt -o filenames 2>/dev/null
     \\    fi
+    \\    ((glob)) && set +f
     \\    return 0
     \\}
     \\complete -o default -F _@IDENT@_complete @NAME@

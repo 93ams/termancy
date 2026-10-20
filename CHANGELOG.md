@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- bash completion no longer expands candidates as file patterns: `photo[1].jpg` stayed
+  `photo[1].jpg` only when no `photo1.jpg` existed, and under `shopt -s nullglob` a
+  candidate holding `*`, `?`, or `[` (even in its description) disappeared.
 - `field.checkOne` returns the failed check's `About` when its reason does not fit the
   writer, as `field.validate` does, instead of `error.WriteFailed`.
 - `field`: `.min` and `.max` on a float reject NaN; `--ratio nan` (or `nan` in a TOML file)
