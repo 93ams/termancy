@@ -280,7 +280,9 @@ pub fn Check(comptime V: type) type {
         }
 
         fn less(a: V, b: V) bool {
-            if (@typeInfo(V) == .int or @typeInfo(V) == .float) return a < b;
+            if (@typeInfo(V) == .int) return a < b;
+            // Not `a < b`: NaN must fail both `.min` and `.max`.
+            if (@typeInfo(V) == .float) return !(a >= b);
             return V.order(a, b) == .lt;
         }
 
@@ -384,6 +386,12 @@ test "built-in checks pass, fail with a reason, and describe themselves" {
     const check: Check(u16) = .max(10);
     try testing.expectEqual(10, check.about.?.max.number.?);
     try testing.expectEqualStrings("10", check.about.?.max.text);
+}
+
+test "NaN is out of every bound" {
+    try testing.expectEqualStrings("must be at least 0", try runs(f64, .min(0), std.math.nan(f64)));
+    try testing.expectEqualStrings("must be at most 1", try runs(f64, .max(1), std.math.nan(f64)));
+    try testing.expectEqualStrings("", try runs(f64, .max(1), 1));
 }
 
 const Millis = struct {

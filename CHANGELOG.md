@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `field`: `.min` and `.max` on a float reject NaN; `--ratio nan` (or `nan` in a TOML file)
+  passed both.
 - `cli`: a switch set to false (`--no-yaml`, or `yaml = false` in a configuration or its
   variable) no longer counts as given for `.exclusive`, `.together`, and `.requires`, so
   `serve --json` works with `yaml = false` in the configuration.
