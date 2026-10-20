@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- Interlaced GIFs are read with their rows in place; they came out scrambled.
+- `image.readGif` clears or puts back a frame as its disposal method says, and a graphic
+  control extension's transparent color applies to the frame after it only, not every one.
 - A JPEG of more than 100 scans is refused, and blocks past the end of a scan's data are left
   blank (as libjpeg leaves them) instead of decoded from zeros: 8 KB of empty scans took 19 s.
 - A JPEG of more than `image.max_pixels` (8192 by 8192) is refused, as a PNG or GIF is: a

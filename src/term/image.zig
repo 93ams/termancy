@@ -925,7 +925,9 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
     defer canvas.deinit(gpa);
     // Each frame's copy of the canvas, or its own pixels if more (off the screen).
     var budget: usize = 0;
+    // From a graphic control extension, for the frame after it only.
     var transparent: ?u8 = null;
+    var disposal: u8 = 0;
     while (at < data.len) {
         switch (data[at]) {
             0x3b => break,
@@ -935,6 +937,7 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 at += 2;
                 if (label == 0xf9 and at + 5 <= data.len and data[at] == 4) {
                     transparent = if (data[at + 1] & 1 != 0) data[at + 4] else null;
+                    disposal = data[at + 1] >> 2 & 7;
                 }
                 while (at < data.len and data[at] != 0) at += 1 + @as(usize, data[at]);
                 at += 1;
@@ -978,14 +981,35 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 at += 1;
                 const indices = try unlzw(gpa, stream.items, min_code, @as(usize, fw) * fh);
                 defer gpa.free(indices);
-                for (0..fh) |y| for (0..fw) |x| {
-                    const i = indices[y * fw + x];
-                    if (transparent != null and i == transparent.?) continue;
-                    if (fx + x < width and fy + y < height) {
-                        canvas.at(fx + x, fy + y).* = palette[i];
+                var before: ?Image = if (disposal == 3) try canvas.clone(gpa) else null;
+                defer if (before) |*b| b.deinit(gpa);
+                // Interlaced, the rows come every 8th from 0, every 8th from 4, every 4th
+                // from 2, then every 2nd from 1.
+                const passes: []const [2]u8 = if (flags & 0x40 != 0)
+                    &.{ .{ 0, 8 }, .{ 4, 8 }, .{ 2, 4 }, .{ 1, 2 } }
+                else
+                    &.{.{ 0, 1 }};
+                var row: usize = 0;
+                for (passes) |pass| {
+                    var y: usize = pass[0];
+                    while (y < fh) : (y += pass[1]) {
+                        for (0..fw) |x| {
+                            const i = indices[row * fw + x];
+                            if (transparent != null and i == transparent.?) continue;
+                            if (fx + x < width and fy + y < height) {
+                                canvas.at(fx + x, fy + y).* = palette[i];
+                            }
+                        }
+                        row += 1;
                     }
-                };
+                }
                 try frames.append(gpa, try canvas.clone(gpa));
+                // Disposed of: cleared to transparent (as browsers do), or put back.
+                if (disposal == 2)
+                    canvas.fillRect(fx, fy, fw, fh, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+                if (before) |b| @memcpy(canvas.pixels, b.pixels);
+                transparent = null;
+                disposal = 0;
             },
             else => return error.InvalidImage,
         }
@@ -1798,6 +1822,48 @@ test "LZW round trips across table resets" {
     const back = try unlzw(gpa, stream.items, 8, data.len);
     defer gpa.free(back);
     try testing.expectEqualSlices(u8, data, back);
+}
+
+/// Writes a GIF frame of `indices` in the global palette of 16 colors, after a graphic
+/// control extension with `control` as its flags (transparent index 0) unless null.
+fn testGifFrame(w: *Writer, control: ?u8, rect: [4]u16, flags: u8, indices: []const u8) !void {
+    if (control) |c| try w.writeAll(&.{ 0x21, 0xf9, 4, c, 0, 0, 0, 0 });
+    try w.writeByte(0x2c);
+    for (rect) |v| try writeU16(w, v);
+    try w.writeAll(&.{ flags, 4 });
+    try lzw(testing.allocator, w, indices, 4);
+    try w.writeByte(0);
+}
+
+test "GIF: interlaced rows in place, frames disposed of, transparency for one frame" {
+    const gpa = testing.allocator;
+    var out: Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    const w = &out.writer;
+    // 2 by 9, color i a red of i * 10.
+    try w.writeAll("GIF89a\x02\x00\x09\x00\x83\x00\x00");
+    for (0..16) |i| try w.writeAll(&.{ @intCast(i * 10), 0, 0 });
+    // Column 0 interlaced, row y in color y; cleared after.
+    try testGifFrame(w, 2 << 2, .{ 0, 0, 1, 9 }, 0x40, &.{ 0, 8, 4, 2, 6, 1, 3, 5, 7 });
+    // (1, 0) in color 11, put back after.
+    try testGifFrame(w, 3 << 2, .{ 1, 0, 1, 1 }, 0, &.{11});
+    // (1, 1) in color 12, with index 0 transparent.
+    try testGifFrame(w, 1, .{ 1, 1, 1, 1 }, 0, &.{12});
+    // (1, 2) in color 0, with no control extension: opaque.
+    try testGifFrame(w, null, .{ 1, 2, 1, 1 }, 0, &.{0});
+    try w.writeByte(0x3b);
+    const frames = try readGif(gpa, out.written());
+    defer {
+        for (frames) |*f| f.deinit(gpa);
+        gpa.free(frames);
+    }
+    try testing.expectEqual(4, frames.len);
+    for (0..9) |y| try testing.expectEqual(y * 10, frames[0].at(0, y).r);
+    try testing.expectEqual(0, frames[1].at(0, 5).a);
+    try testing.expectEqual(110, frames[1].at(1, 0).r);
+    try testing.expectEqual(0, frames[2].at(1, 0).a);
+    try testing.expectEqual(120, frames[2].at(1, 1).r);
+    try testing.expectEqual(255, frames[3].at(1, 2).a);
 }
 
 test "GIF: frames larger than the screen count toward max_pixels" {
