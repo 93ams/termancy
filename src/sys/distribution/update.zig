@@ -599,10 +599,17 @@ fn stage(io: Io, dir: Io.Dir, new_path: []const u8, bytes: []const u8) InstallEr
     const file = dir.createFile(io, new_path, .{ .permissions = .executable_file }) catch
         return error.StageFailed;
     defer file.close(io);
-    file.writeStreamingAll(io, bytes) catch {
+    // Synced before the rename: otherwise a crash can persist the rename but not the data,
+    // leaving an empty executable after `<exe>.old` was removed.
+    writeSynced(io, file, bytes) catch {
         dir.deleteFile(io, new_path) catch {};
         return error.StageFailed;
     };
+}
+
+fn writeSynced(io: Io, file: Io.File, bytes: []const u8) !void {
+    try file.writeStreamingAll(io, bytes);
+    try file.sync(io);
 }
 
 /// Makes `<exe>.old`; false when there was no executable to back up.

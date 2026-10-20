@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `sys.update.install` (and so `termancy update`) syncs the new executable to disk before
+  renaming it into place, so a crash or power loss right after an update cannot leave an
+  empty executable with the rollback copy already removed.
 - `sys.signal` on Windows: closing the console, logging off, or shutting down now waits
   for the program to clean up and call `uninstall` (up to Windows' own timeout, 5 seconds
   by default for a closed console). Windows ends the process as soon as the handler
