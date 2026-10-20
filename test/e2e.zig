@@ -2357,14 +2357,11 @@ fn addProjectChain(
     step: *std.Build.Step,
     chain: ProjectChain,
 ) void {
-    const seed = b.addRunArtifact(exe);
-    seed.setName(b.fmt("e2e: {s}: directory", .{chain.name}));
-    seed.clearEnvironment();
-    seed.addArg("version");
     // The basename keeps each chain's directory apart.
-    const dir = seed.captureStdOut(.{ .basename = b.fmt("{s}.txt", .{chain.name}) }).dirname();
+    const seed = chainDir(b, exe, b.fmt("e2e: {s}: directory", .{chain.name}), b.fmt("{s}.txt", .{chain.name}));
+    const dir = seed.dir;
 
-    var previous = &seed.step;
+    var previous = seed.step;
     for (chain.steps, 1..) |project_step, index| {
         const run = projectRun(b, exe, project_step);
         run.setName(b.fmt("e2e: {s} ({d})", .{ chain.name, index }));
@@ -2382,6 +2379,26 @@ fn addProjectChain(
         previous = &check.step;
     }
     step.dependOn(previous);
+}
+
+/// A chain's directory, emptied by `test/fresh_dir.zig` before the chain runs in it: the
+/// output directory of that run, whose input is termancy (add more to `run`), so the chain runs
+/// again, in a new directory, only when one of them changes.
+pub fn chainDir(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    name: []const u8,
+    basename: []const u8,
+) struct { step: *std.Build.Step, dir: std.Build.LazyPath, run: *std.Build.Step.Run } {
+    const fresh = b.addExecutable(.{ .name = "fresh_dir", .root_module = b.createModule(.{
+        .root_source_file = b.path("test/fresh_dir.zig"),
+        .target = b.graph.host,
+    }) });
+    const run = b.addRunArtifact(fresh);
+    run.setName(name);
+    run.addFileInput(exe.getEmittedBin());
+    const dir = run.addOutputFileArg(basename).dirname();
+    return .{ .step = &run.step, .dir = dir, .run = run };
 }
 
 fn projectRun(
