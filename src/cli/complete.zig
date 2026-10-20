@@ -238,7 +238,7 @@ fn subcommandFor(cmd: *const Command, word: []const u8, prefix: bool) ?*const Co
     if (!prefix or word.len == 0) return null;
     var found: ?*const Command = null;
     for (cmd.subcommands) |*sub| {
-        if (!advertised(sub.*) or !std.mem.startsWith(u8, sub.name, word)) continue;
+        if (!advertised(sub.*) or !sub.startsWith(word)) continue;
         if (found != null) return null;
         found = sub;
     }
@@ -709,6 +709,7 @@ const test_root = spec.command(.{
     .subcommands = .{
         spec.command(.{
             .name = "serve",
+            .aliases = &.{"run"},
             .summary = "Start",
             .flags = sets.flags(struct {
                 port: u16 = 1,
@@ -1028,6 +1029,10 @@ test "completion descends through an unambiguous prefix when the app accepts one
     try testing.expectEqualStrings("", out.written());
     out.clearRetainingCapacity();
     try candidates(&out.writer, &test_root, words, .{ .prefix_matching = true });
+    try testing.expectEqualStrings("--port\t\n", out.written());
+    // A prefix of an alias, as the parser takes it.
+    out.clearRetainingCapacity();
+    try candidates(&out.writer, &test_root, &.{ "ru", "--p" }, .{ .prefix_matching = true });
     try testing.expectEqualStrings("--port\t\n", out.written());
 }
 

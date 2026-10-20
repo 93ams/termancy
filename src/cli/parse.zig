@@ -264,10 +264,7 @@ const Parser = struct {
         var found: ?*const Command = null;
         for (current.subcommands) |*sub| {
             if (sub.hidden or sub.deprecated != null) continue;
-            const matches = std.mem.startsWith(u8, sub.name, prefix) or for (sub.aliases) |alias| {
-                if (std.mem.startsWith(u8, alias, prefix)) break true;
-            } else false;
-            if (!matches) continue;
+            if (!sub.startsWith(prefix)) continue;
             if (found) |other| return p.fail(
                 p.messages().ambiguous_command,
                 &.{ prefix, try p.pathText(), other.name, sub.name },

@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- With `App.prefix_matching`, completion descends through a prefix of a subcommand's alias
+  as the parser does (`app ru <Tab>` for `serve`, alias `run`); it took names only.
 - fish completion runs the program once per Tab, not three times (each `complete`
   condition ran it again), so slow completers answer three times sooner.
 - bash completion no longer expands candidates as file patterns: `photo[1].jpg` stayed
