@@ -18,9 +18,10 @@
 const std = @import("std");
 const field = @import("field");
 const Value = @import("value.zig").Value;
+const Config = @import("Config.zig");
 
 /// How layers combine a list: the later one replaces it, or adds to it.
-pub const Merge = @import("Config.zig").Merge;
+pub const Merge = Config.Merge;
 
 /// The spellings of a settings type `T`: `.fields` names each field's place.
 pub fn Keys(comptime T: type) type {
@@ -157,6 +158,50 @@ pub fn appendKeys(comptime X: type) []const []const u8 {
     };
 }
 
+/// The keys of choices: a later layer naming another variant replaces the earlier one.
+pub fn choiceKeys(comptime X: type) []const []const u8 {
+    const Set = Of(X);
+    return comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var out: []const []const u8 = &.{};
+        var unused: []const EnvBinding = &.{};
+        if (isTable(field.Unwrap(Set.Type))) {
+            collect(Set.Type, Set.Specs, Set.root, "", .choice, &out, &unused);
+        }
+        break :blk out;
+    };
+}
+
+/// For each value whose place keeps an old key (`.renamed_from`), its key and the old one.
+pub fn renamedKeys(comptime X: type) []const [2][]const u8 {
+    const Set = Of(X);
+    return comptime blk: {
+        @setEvalBranchQuota(100_000);
+        var out: []const [2][]const u8 = &.{};
+        if (isTable(field.Unwrap(Set.Type))) collectRenamed(Set.Type, Set.root, "", &out);
+        break :blk out;
+    };
+}
+
+fn collectRenamed(
+    comptime T: type,
+    comptime place: anytype,
+    comptime prefix: []const u8,
+    comptime out: *[]const [2][]const u8,
+) void {
+    const C = field.Unwrap(T);
+    for (field.fieldNames(C), field.fieldTypes(C)) |name, F| {
+        const p = if (isChoice(C)) @field(place.variants, name) else @field(place.fields, name);
+        if (isChoice(C) and F == void) continue;
+        const key = join(prefix, keyOf(p, name));
+        if (@hasField(@TypeOf(p), "renamed_from")) if (p.renamed_from) |old| {
+            out.* = out.* ++ .{[2][]const u8{ key, join(prefix, old) }};
+        };
+        const F_ = field.Unwrap(F);
+        if (isTable(F_) or isChoice(F_)) collectRenamed(F_, p, key, out);
+    }
+}
+
 /// Every key `X` reads: each leaf, each choice (it names the variant), and each list of
 /// tables, as a whole.
 pub fn structKeys(comptime X: type) []const []const u8 {
@@ -264,7 +309,7 @@ fn envName(comptime prefix: []const u8, comptime key: []const u8) []const u8 {
     return out;
 }
 
-const What = enum { secret, env, append, leaf };
+const What = enum { secret, env, append, leaf, choice };
 
 fn collect(
     comptime T: type,
@@ -297,7 +342,7 @@ fn collect(
                 if (what == .append and p.merge == .append) keys.* = keys.* ++ .{key};
             }
             if (isTable(F_) or isChoice(F_)) {
-                if (what == .leaf and isChoice(F_)) keys.* = keys.* ++ .{key};
+                if ((what == .leaf or what == .choice) and isChoice(F_)) keys.* = keys.* ++ .{key};
                 collect(F_, S, p, key, what, keys, bindings);
             } else if (what == .leaf) {
                 keys.* = keys.* ++ .{key};

@@ -39,6 +39,7 @@ const differ = @import("diff.zig");
 const encrypted = @import("encrypted.zig");
 const json = @import("json.zig");
 const yaml = @import("yaml.zig");
+const ini = @import("ini.zig");
 const locator = @import("locate.zig");
 
 const Config = @This();
@@ -94,7 +95,7 @@ automatic_env: bool = false,
 env_prefix: []const u8 = "",
 /// Key path -> environment variable name, from `bindEnv`.
 env_bindings: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
-/// Key path -> the flag that sets it, from `nameFlags`: for saying how to set a missing key.
+/// Field path (or key, for a flag without one) -> the flag that sets it, from `nameFlags`: for saying how to set a missing key.
 flag_names: std.StringArrayHashMapUnmanaged([]const u8) = .empty,
 /// Asks for a required key nothing set, before `decode` reports it missing (`askWith`).
 ask: ?Ask = null,
@@ -107,6 +108,15 @@ known_keys: std.StringArrayHashMapUnmanaged(void) = .empty,
 secrets: std.StringArrayHashMapUnmanaged(void) = .empty,
 /// Key paths whose lists accumulate across files and layers (`setMerge`).
 appends: std.StringArrayHashMapUnmanaged(void) = .empty,
+/// What `bindFlags` and `setFlag` bound, from which the flag layer is built.
+bound_flags: std.ArrayList(BoundFlag) = .empty,
+/// Each renamed key and its old key (`register`): a default under the new key does not
+/// hide the old key a source sets.
+renamed: std.ArrayList([2][]const u8) = .empty,
+/// The settings types `register` has registered, by name.
+registered: std.StringArrayHashMapUnmanaged(void) = .empty,
+/// Key paths of choices (`setDefaults`): a table naming another variant replaces the lower.
+choices: std.StringArrayHashMapUnmanaged(void) = .empty,
 /// Keys compare without regard to ASCII case (`ignoreKeyCase`).
 case_insensitive: bool = false,
 /// `set`s patched into the effective tree since it was last rebuilt. Each allocates in the
@@ -256,8 +266,9 @@ fn keyOfPath(config: *const Config, path_: ?[]const u8) ?[]const u8 {
 pub fn nameFlags(config: *Config, records: anytype, options: BindOptions) Allocator.Error!void {
     const a = config.arena.allocator();
     for (records) |record| {
-        const named = config.keyOfPath(if (@hasField(@TypeOf(record), "key")) record.key else null);
-        const key = named orelse try flagKey(a, options, record.name);
+        const given: ?[]const u8 = if (@hasField(@TypeOf(record), "key")) record.key else null;
+        // By field path: a settings type registered later may rename its key.
+        const key = given orelse try flagKey(a, options, record.name);
         const gop = try config.flag_names.getOrPut(a, key);
         if (!gop.found_existing) {
             gop.key_ptr.* = try a.dupe(u8, key);
@@ -276,9 +287,8 @@ pub fn setDefault(config: *Config, key_path: []const u8, value: anytype) SetErro
 }
 
 /// Sets every field of `value` as a default, under the keys the settings type `X` (see
-/// `cfg.settings`; or a plain struct) gives them; marks the keys its specs make secret,
-/// lists that merge by appending, and binds the environment variables its keys name with
-/// `.env` (see `bindEnv`).
+/// `cfg.settings`; or a plain struct) gives them, instead of the struct's own defaults
+/// (which `register`, and so `decode`, use without being asked). Registers `X` too.
 ///
 /// Defaults can live in a `.zon` file next to the source, checked against the struct by
 /// the compiler: a missing, misspelled, or mistyped field is a compile error.
@@ -288,18 +298,64 @@ pub fn setDefault(config: *Config, key_path: []const u8, value: anytype) SetErro
 /// try config.setDefaults(Settings, defaults);
 /// ```
 pub fn setDefaults(config: *Config, comptime X: type, value: settings_.Of(X).Type) SetError!void {
+    try config.register(X);
     const a = config.arena.allocator();
-    for (comptime settings_.appendKeys(X)) |key| try config.setMerge(key, .append);
     const encoded = try decoding.encodeAs(X, a, value);
-    try config.mergeInto(a, &config.layers[@backingInt(Layer.default)], encoded);
+    const defaults = &config.layers[@backingInt(Layer.default)];
+    // `value` is whole: it replaces what the struct's defaults set, rather than merging.
+    for (encoded.table.keys()) |key| _ = defaults.table.orderedRemove(key);
+    try config.mergeInto(a, defaults, encoded);
+    config.invalidate();
+}
+
+/// Tells the configuration about the settings type `X`: its keys (so `bindFlags` keeps only
+/// flags that are settings, under their keys), the struct's defaults (for `get` and
+/// `explain`; a key `setDefault` set keeps its value), its secrets, variables, merges, and
+/// choices. `decode` and `setDefaults` call it; call it first when reading before them.
+pub fn register(config: *Config, comptime X: type) Allocator.Error!void {
+    const a = config.arena.allocator();
+    const name = @typeName(settings_.Of(X));
+    if (config.registered.contains(name)) return;
+    try config.registered.put(a, name, {});
+    for (comptime settings_.appendKeys(X)) |key| try config.setMerge(key, .append);
+    const choices = comptime settings_.choiceKeys(X);
+    for (choices) |key| try config.choices.put(a, key, {});
+    if (choices.len > 0) try config.rebuildFiles();
     for (comptime settings_.secretKeys(X)) |key| try config.markSecret(key);
     try config.bindEnvs(X);
     try config.registerKeys(comptime settings_.structKeys(X));
     try config.registerPaths(X);
+    try config.renamed.appendSlice(a, comptime settings_.renamedKeys(X));
+    if (config.bound_flags.items.len > 0) config.rebuildFlags() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // A key no table can hold; `bindFlags` reported it when it bound it.
+        else => {},
+    };
+    try config.structDefaults(X);
     config.invalidate();
 }
 
-/// Records which keys the settings type `X` renames, so a flag's field path finds its key.
+/// The struct's own defaults, under the keys no default sets yet.
+fn structDefaults(config: *Config, comptime X: type) Allocator.Error!void {
+    const a = config.arena.allocator();
+    const encoded = try decoding.encodeDefaults(X, a);
+    var leaves: std.ArrayList([]const u8) = .empty;
+    try encoded.leafPaths(a, "", &leaves);
+    const defaults = &config.layers[@backingInt(Layer.default)];
+    leaves: for (leaves.items) |leaf| {
+        if (defaults.lookup(leaf) != null) continue;
+        // A choice set already keeps its variant.
+        for (config.choices.keys()) |choice| {
+            if (isUnder(leaf, choice) and defaults.lookup(choice) != null) continue :leaves;
+        }
+        defaults.put(a, leaf, encoded.lookup(leaf).?) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // Under a value a default set: that default wins.
+            error.InvalidPath, error.NotATable, error.IndexOutOfRange => {},
+        };
+    }
+}
+
 fn registerPaths(config: *Config, comptime X: type) Allocator.Error!void {
     for (comptime settings_.pathKeys(X)) |pair| {
         try config.path_keys.put(config.arena.allocator(), pair[0], pair[1]);
@@ -325,7 +381,9 @@ fn patchEffective(config: *Config, key_path: []const u8, value: Value) Allocator
     var effective = config.effective orelse return false;
     if (config.patches >= max_patches) return false;
     // Each of these makes the effective value depend on more than this one layer.
-    if (config.case_insensitive or config.appends.count() > 0) return false;
+    if (config.case_insensitive or config.appends.count() > 0 or config.choices.count() > 0) {
+        return false;
+    }
     // Which reference a rebuild reports first depends on the order it expands them in.
     if (config.references and config.reference_problem != null) return false;
     // A table merges with what lies below it, which a rebuild does key by key.
@@ -1152,11 +1210,12 @@ pub const BindOptions = struct {
 /// A record's key is its optional `key` field when set (for a `cli` flag, its field's path
 /// below a command's `.settings` or in its group, such as `"fetch.concurrency"`; a key a
 /// settings type renamed is followed to its new name), else its name. Once the
-/// configuration knows its keys (`setDefaults`, `decode`, or `registerKeys`), a record
-/// whose key is none of them is left out: `--config` or `--verbose` do not become settings.
+/// configuration knows its keys (`register`, `decode`, or `registerKeys`; before or after
+/// this call), a record whose key is none of them is left out: `--config` or `--verbose`
+/// do not become settings.
 pub fn bindFlags(config: *Config, records: anytype, options: BindOptions) SetError!void {
     try config.nameFlags(records, options);
-    try config.bindRecords(records, options, config.known_keys.count() > 0);
+    try config.bindRecords(records, options, true);
 }
 
 fn bindRecords(
@@ -1166,30 +1225,68 @@ fn bindRecords(
     filter: bool,
 ) SetError!void {
     const a = config.arena.allocator();
-    var flags: Value = .empty_table;
+    const batch = config.bound_flags.items.len;
     for (records) |record| {
-        const named = config.keyOfPath(if (@hasField(@TypeOf(record), "key")) record.key else null);
-        const key = if (named) |k|
-            try a.dupe(u8, k)
-        else
-            try flagKey(a, options, record.name);
-        if (filter and !config.isKnown(key)) continue;
-        const value = scalar.infer(try a.dupe(u8, record.value));
-        if (flags.lookup(key)) |existing| {
-            var array: Array = if (existing == .array) existing.array else .empty;
-            if (existing != .array) try array.append(a, existing);
-            try array.append(a, value);
-            try flags.put(a, key, .{ .array = array });
-        } else {
-            try flags.put(a, key, value);
-        }
-        try config.sources[@backingInt(Layer.flag)].put(
-            a,
-            key,
-            try std.mem.concat(a, u8, &.{ "--", record.name }),
-        );
+        const key: ?[]const u8 = if (@hasField(@TypeOf(record), "key")) record.key else null;
+        try config.bound_flags.append(a, .{
+            .name = try a.dupe(u8, record.name),
+            .value = try a.dupe(u8, record.value),
+            .key = if (key) |k| try a.dupe(u8, k) else null,
+            .options = options,
+            .filter = filter,
+            .batch = batch,
+        });
     }
-    try config.layers[@backingInt(Layer.flag)].merge(a, flags);
+    config.rebuildFlags() catch |err| {
+        // Records that cannot be bound are not kept: the layer is as it was.
+        config.bound_flags.shrinkRetainingCapacity(batch);
+        try config.rebuildFlags();
+        return err;
+    };
+}
+
+/// A flag record `bindFlags` or `setFlag` bound, kept so the flag layer can be built again
+/// once a settings type says which keys are settings and what they are called.
+const BoundFlag = struct {
+    name: []const u8,
+    value: []const u8,
+    key: ?[]const u8,
+    options: BindOptions,
+    filter: bool,
+    /// Records bound by one call share it: a key they repeat holds a list; a later call's
+    /// value replaces an earlier one's.
+    batch: usize,
+};
+
+/// Builds the flag layer from `bound_flags` with the keys known now.
+fn rebuildFlags(config: *Config) SetError!void {
+    const a = config.arena.allocator();
+    const layer = @backingInt(Layer.flag);
+    config.layers[layer] = .empty_table;
+    config.sources[layer] = .empty;
+    const filtering = config.known_keys.count() > 0;
+    var flags: Value = .empty_table;
+    for (config.bound_flags.items, 0..) |record, i| {
+        const key = config.keyOfPath(record.key) orelse try flagKey(a, record.options, record.name);
+        if (!(record.filter and filtering and !config.isKnown(key))) {
+            const value = scalar.infer(record.value);
+            if (flags.lookup(key)) |existing| {
+                var array: Array = if (existing == .array) existing.array else .empty;
+                if (existing != .array) try array.append(a, existing);
+                try array.append(a, value);
+                try flags.put(a, key, .{ .array = array });
+            } else {
+                try flags.put(a, key, value);
+            }
+            try config.sources[layer].put(a, key, try std.mem.concat(a, u8, &.{ "--", record.name }));
+        }
+        const last = i + 1 == config.bound_flags.items.len or
+            config.bound_flags.items[i + 1].batch != record.batch;
+        if (last) {
+            try config.layers[layer].merge(a, flags);
+            flags = .empty_table;
+        }
+    }
     config.invalidate();
 }
 
@@ -1233,8 +1330,19 @@ pub fn setMerge(config: *Config, key_path: []const u8, strategy: Merge) Allocato
     try config.rebuildFiles();
 }
 
-/// `dst.merge(src)`, except that the lists at `append` keys are concatenated.
+/// `dst.merge(src)`, except that the lists at `append` keys are concatenated, and a choice
+/// `src` names another variant of replaces `dst`'s.
 fn mergeInto(config: *Config, a: Allocator, dst: *Value, src: Value) Allocator.Error!void {
+    for (config.choices.keys()) |key| {
+        const lower = dst.lookup(key) orelse continue;
+        const higher = src.lookup(key) orelse continue;
+        if (lower != .table or higher != .table or sameVariant(lower, higher)) continue;
+        dst.put(a, key, .empty_table) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // `lookup` found it a table in `dst`.
+            error.InvalidPath, error.NotATable, error.IndexOutOfRange => unreachable,
+        };
+    }
     var combined: std.ArrayList(struct { []const u8, Array }) = .empty;
     for (config.appends.keys()) |key| {
         const lower = dst.lookup(key) orelse continue;
@@ -1253,6 +1361,12 @@ fn mergeInto(config: *Config, a: Allocator, dst: *Value, src: Value) Allocator.E
             error.InvalidPath, error.NotATable, error.IndexOutOfRange => unreachable,
         };
     }
+}
+
+/// Whether every variant `higher` names, `lower` names too.
+fn sameVariant(lower: Value, higher: Value) bool {
+    for (higher.table.keys()) |key| if (!lower.table.contains(key)) return false;
+    return true;
 }
 
 /// Makes keys compare without regard to ASCII case, as viper does: `Server.Port` in a file,
@@ -1346,6 +1460,14 @@ pub fn resolve(config: *Config) Allocator.Error!Value {
     try config.overlayEnv(&result);
     try config.overlay(&result, .flag);
     try config.overlay(&result, .override);
+    for (config.renamed.items) |pair| {
+        if (result.lookup(pair[1]) == null or !config.onlyDefault(pair[0])) continue;
+        _ = result.remove(pair[0]);
+        var i: usize = config.origins.count();
+        while (i > 0) : (i -= 1) {
+            if (isUnder(config.origins.keys()[i - 1], pair[0])) config.origins.orderedRemoveAt(i - 1);
+        }
+    }
     config.reference_problem = null;
     config.unexpanded = null;
     config.dependents = .empty;
@@ -1640,6 +1762,17 @@ const Expander = struct {
         e.config.reference_problem = .{ .key = key, .message = message };
     }
 };
+
+/// Whether every value at or under `key` is a default.
+fn onlyDefault(config: *const Config, key: []const u8) bool {
+    var any = false;
+    var it = config.origins.iterator();
+    while (it.next()) |entry| if (isUnder(entry.key_ptr.*, key)) {
+        if (entry.value_ptr.layer != .default) return false;
+        any = true;
+    };
+    return any;
+}
 
 fn overlay(config: *Config, result: *Value, layer: Layer) Allocator.Error!void {
     const a = config.cache.allocator();
@@ -1955,10 +2088,7 @@ pub fn decode(
     diag: ?*Diagnostic,
 ) GetError!settings_.Of(X).Type {
     const T = X;
-    try config.registerKeys(comptime settings_.structKeys(T));
-    try config.registerPaths(T);
-    for (comptime settings_.secretKeys(T)) |key| try config.markSecret(key);
-    try config.bindEnvs(T);
+    try config.register(T);
     const a = config.arena.allocator();
     if (options.warnings) |list| try config.duplicateKeys(a, list);
     defer if (options.warnings) |list| config.locateAll(list.items);
@@ -2013,7 +2143,7 @@ fn hintMissing(config: *Config, a: Allocator, d: *Diagnostic) Allocator.Error!vo
             try std.mem.concat(a, u8, &.{ "$", try path.toEnvName(a, config.env_prefix, d.key) }),
         );
     }
-    if (config.flag_names.get(d.key)) |flag| try ways.append(a, flag);
+    if (config.flag_names.get(config.pathOfKey(d.key))) |flag| try ways.append(a, flag);
     if (ways.items.len == 0) return;
     var message: std.Io.Writer.Allocating = .init(a);
     message.writer.print("{s}; set it in a file, ", .{d.message}) catch return error.OutOfMemory;
@@ -2051,7 +2181,7 @@ fn duplicateKeys(
             .dotenv => for (dotenv.spans(a, file.text) catch continue) |span| {
                 try written.append(a, .{ .path = span.path, .start = span.start });
             },
-            .ini => for (@import("ini.zig").spans(a, file.text) catch continue) |span| {
+            .ini => for (ini.spans(a, file.text) catch continue) |span| {
                 if (span.kind != .entry) continue;
                 try written.append(
                     a,
@@ -2807,6 +2937,7 @@ test "a .zon file loads like any other" {
     try testing.expectEqualStrings(
         \\.{
         \\    .server = .{
+        \\        .host = "localhost",
         \\        .port = 1,
         \\    },
         \\    .debug = true,
@@ -3306,6 +3437,55 @@ test "a check across a table's fields points at the table in its file" {
         "app.toml:3:1: admin: must be local (defaults: port = 80)",
         w.buffered(),
     );
+}
+
+test "decode registers the struct's defaults, and keys and filters flags bound before" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    const Settings = cfg_settings.settings(struct {
+        port: u16 = 80,
+        tls_cert: []const u8 = "",
+        name: []const u8,
+    }, field.none, .{ .fields = .{ .tls_cert = .{ .key = "certificate" } } });
+    const Record = struct { name: []const u8, value: []const u8, key: ?[]const u8 };
+    try config.bindFlags(&[_]Record{
+        .{ .name = "tls-cert", .value = "c.pem", .key = "tls_cert" },
+        .{ .name = "config", .value = "app.toml", .key = "config" },
+    }, .{});
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.MissingField, config.decode(Settings, .{}, &diag));
+    try testing.expectEqualStrings("name", diag.key);
+    try config.setFlag("name", "x");
+    const s = try config.decode(Settings, .{ .strict = true }, null);
+    try testing.expectEqualStrings("c.pem", s.tls_cert);
+    try testing.expectEqual(Layer.flag, (try config.explain("certificate")).?.layer);
+    try testing.expectEqual(Layer.default, (try config.explain("port")).?.layer);
+    try testing.expectEqual(null, try config.get("config"));
+    // Other defaults replace the struct's.
+    try config.setDefaults(Settings, .{ .port = 8080, .name = "d" });
+    try testing.expectEqual(8080, (try config.decode(Settings, .{}, null)).port);
+}
+
+test "a later layer naming another variant of a choice replaces it; the same one merges" {
+    const Storage = union(enum) {
+        disk: struct { path: []const u8 = "" },
+        s3: struct { bucket: []const u8, region: []const u8 = "us" },
+        memory,
+    };
+    const Settings = struct { storage: Storage = .memory };
+    for ([_]struct { []const u8, []const u8 }{
+        .{ "[storage.disk]\npath = \"/d\"\n", "us" },
+        .{ "[storage.s3]\nregion = \"eu\"\n", "eu" },
+    }) |case| {
+        var config: Config = .init(testing.allocator);
+        defer config.deinit();
+        try config.setDefaults(Settings, .{});
+        try config.loadSource("app.toml", case[0], .toml, null);
+        try config.setFlag("storage.s3.bucket", "b");
+        const s = try config.decode(Settings, .{}, null);
+        try testing.expectEqualStrings("b", s.storage.s3.bucket);
+        try testing.expectEqualStrings(case[1], s.storage.s3.region);
+    }
 }
 
 test "keys set twice in a file are warned about, at the one that wins" {

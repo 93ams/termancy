@@ -299,7 +299,10 @@ anything untranslated stays English. A `Translation` holds:
 - the library's sentences (`cli.i18n.messages.german`, `spanish`, `french`, `portuguese`);
 - command help (summaries, descriptions, groups, flag help, examples);
 - the app's own strings: `ctx.tr("Hello, {0}", .{name})`, and `ctx.plural(n, one, other,
-  args)` with CLDR plural rules.
+  args)` with CLDR plural rules;
+- what a check of its own says (`field.fail(w, "is reserved", .{})`), looked up by the text
+  it wrote, so it translates when that text is fixed. The built-in checks' messages are the
+  library's sentences.
 
 The locale comes from `App.locale` or `LC_ALL`/`LC_MESSAGES`/`LANG`, `pt_BR` falling back to
 `pt`.

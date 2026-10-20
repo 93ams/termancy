@@ -14,6 +14,7 @@ const Flag = @import("Flag.zig");
 const text = @import("text.zig");
 const field = @import("field");
 const Messages = @import("Messages.zig");
+const i18n = @import("i18n.zig");
 
 /// Deeper command trees than this are rejected rather than recorded unbounded.
 pub const max_depth = 32;
@@ -98,6 +99,8 @@ pub const Options = struct {
     prefix_matching: bool = false,
     /// The sentences of usage errors and warnings.
     messages: *const Messages = &Messages.english,
+    /// The user's language, for what a flag's own checks say (looked up by its text).
+    translation: ?*const i18n.Translation = null,
     /// A required flag with a `prompt` may be missing: it goes to `Result.missing` for the
     /// caller to ask for; so may required positionals that all have one (the caller compares
     /// `Result.positionals` with `args.min`). Set when the run is interactive.
@@ -534,7 +537,7 @@ const Parser = struct {
                 const m = p.messages();
                 const a = about orelse return p.fail(
                     m.invalid_value,
-                    &.{ shown, label, try p.arena.dupe(u8, reason.buffered()) },
+                    &.{ shown, label, try p.arena.dupe(u8, i18n.textIn(p.options.translation, reason.buffered())) },
                 );
                 return switch (a) {
                     .min => |b| p.fail(m.at_least, &.{ shown, label, b.text }),

@@ -101,7 +101,6 @@ const Loaded = struct {
 fn load(ctx: *cli.Context) !Loaded {
     const global = try ctx.flags(Global);
     var config: cfg.Config = .init(ctx.arena);
-    try config.setDefaults(repo_settings, .{});
     config.useEnv(ctx.environ);
     var diag: cfg.Diagnostic = .{};
     const file = config.loadAppFile(ctx.io, "repos", .{ .path = global.config }, &diag) catch |err|

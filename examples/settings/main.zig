@@ -128,8 +128,6 @@ fn show(ctx: *cli.Context, flags: ShowFlags) !void {
     const global = try ctx.flags(Global);
     var config: cfg.Config = .init(ctx.gpa);
     defer config.deinit();
-    try config.setDefaults(shop, .{});
-
     var diag: cfg.Diagnostic = .{};
     const variants: []const []const u8 = &.{ flags.env orelse "", "local" };
     _ = config.loadVariants(ctx.io, .cwd(), global.file, variants, null, &diag) catch |err|

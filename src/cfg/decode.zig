@@ -651,6 +651,54 @@ pub fn encodeAs(comptime X: type, arena: Allocator, value: settings_.Of(X).Type)
     return encodeAt(settings_.Of(X).root, arena, value);
 }
 
+/// The struct's own defaults as the settings type `X` spells them. A field without one is
+/// left out, but for a table, which holds its fields' defaults; so is a default the tree
+/// cannot hold (an integer beyond `i64`), which `decode` still falls back to.
+pub fn encodeDefaults(comptime X: type, arena: Allocator) Allocator.Error!Value {
+    const S = settings_.Of(X);
+    if (comptime !settings_.isTable(S.Type)) return .empty_table;
+    return encodeDefaultsAt(S.Type, S.root, arena);
+}
+
+fn encodeDefaultsAt(comptime T: type, comptime place: anytype, arena: Allocator) Allocator.Error!Value {
+    var table: Table = .empty;
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types, info.field_attrs) |name, F, attrs| {
+        const field_place = comptime @field(place.fields, name);
+        const key = comptime settings_.keyOf(field_place, name);
+        if (attrs.default_value_ptr) |d| {
+            const default = @as(*const F, @ptrCast(@alignCast(d))).*;
+            const skip = @typeInfo(F) == .optional and default == null;
+            if (!skip) if (encodeAt(field_place, arena, default)) |encoded| {
+                var kept = encoded;
+                if (comptime settings_.isTable(F)) dropRequired(F, field_place, &kept);
+                try table.put(arena, key, kept);
+            } else |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Unrepresentable => {},
+            };
+        } else if (comptime settings_.isTable(F)) {
+            try table.put(arena, key, try encodeDefaultsAt(F, field_place, arena));
+        }
+    }
+    return .{ .table = table };
+}
+
+/// Leaves out of `value` the fields of `T` that have no default of their own (a table that
+/// is given must give them, so its default does not stand in for them).
+fn dropRequired(comptime T: type, comptime place: anytype, value: *Value) void {
+    if (value.* != .table) return;
+    inline for (comptime field.fieldNames(T), comptime field.fieldTypes(T)) |name, F| {
+        const field_place = comptime @field(place.fields, name);
+        const key = comptime settings_.keyOf(field_place, name);
+        if (comptime settings_.isTable(F)) {
+            if (value.table.getPtr(key)) |child| dropRequired(F, field_place, child);
+        } else if (comptime field.isRequired(T, name)) {
+            _ = value.table.orderedRemove(key);
+        }
+    }
+}
+
 fn encodeAt(comptime place: anytype, arena: Allocator, value: anytype) EncodeError!Value {
     const T = @TypeOf(value);
     if (T == Value) return value.clone(arena);

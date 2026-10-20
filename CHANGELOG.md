@@ -27,7 +27,12 @@ git history.
   dropped) or below a command's `.settings` carries its path to `Config.bindFlags`, which
   follows keys a settings type renamed; `bindFlags` now leaves out every record whose key
   the configuration does not know (`setFlag` still sets any).
-- `Config.setDefaults` takes the settings type first: `config.setDefaults(Settings, .{})`.
+- `Config.setDefaults` takes the settings type first, and is only for defaults other than
+  the struct's: `decode` registers a settings type and its own defaults by itself, and
+  `Config.register(X)` does so earlier. `setDefaults(X, value)` replaces what the struct's
+  defaults set at those keys rather than merging with them.
+- A layer naming another variant of a choice replaces the lower layer's, instead of both
+  being set ("set only one of disk and s3").
 - A command's checks across its flags' fields run before its hooks (`Command.check`), and
   report every failure; a single value's checks run as it is parsed. Checks only run on
   values given: a default that fails its own checks is no longer an error.
@@ -143,6 +148,8 @@ git history.
 
 ### Added
 
+- A check's own message is translated by its text, like help and `ctx.tr`, from the app's
+  `translations`.
 - **`field`:** specs and checks (`min`, `max` on numbers or any type with `order`, `minLen`,
   `maxLen`, `oneOf`, `glob`, `from`) that describe themselves for help, docs, schemas, and
   completion; typed field paths; "did you mean" (the one edit distance `cli` and `cfg` share).

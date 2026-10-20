@@ -388,6 +388,7 @@ fn executeIn(
         .quiet = app.quiet_flag,
         .prefix_matching = app.prefix_matching,
         .messages = app.messages,
+        .translation = translation,
         .promptable = env.interactive and env.in != null,
         .defaults = app.defaults,
     }, &usage) catch |err| switch (err) {
@@ -589,7 +590,11 @@ fn ask(
             continue;
         }
         var usage: parse.Usage = .{};
-        parse.checkValue(arena, flag, answer, .{ .messages = app.messages }, &usage) catch |err| {
+        const options: parse.Options = .{
+            .messages = app.messages,
+            .translation = app.translationFor(env.environ),
+        };
+        parse.checkValue(arena, flag, answer, options, &usage) catch |err| {
             if (err == error.OutOfMemory) return error.OutOfMemory;
             problem = usage.message;
             continue;
@@ -2005,8 +2010,11 @@ test "help taller than the terminal goes through the pager" {
 const I18nFlags = struct {
     count: u32 = 1,
 };
+fn below100(count: u32, w: *std.Io.Writer) !void {
+    if (count >= 100) return field_.fail(w, "is too many at once", .{});
+}
 const i18n_flags = sets.flags(I18nFlags, field_.Set(.{field_.Spec(I18nFlags){ .fields = .{
-    .count = .{ .help = "How many files" },
+    .count = .{ .help = "How many files", .checks = &.{.from(below100)} },
 } }}), .{ .fields = .{
     .count = .{ .short = 'n' },
 } });
@@ -2040,6 +2048,7 @@ const i18n_german: i18n.Translation = .{
         .{ "Remove old files", "Alte Dateien entfernen" },
         .{ "How many files", "Wie viele Dateien" },
         .{ "Deleted {0} files", "{0} Datei gelöscht|{0} Dateien gelöscht" },
+        .{ "is too many at once", "sind zu viele auf einmal" },
     },
 };
 
@@ -2076,6 +2085,12 @@ test "translations: help, the library's sentences, and the app's own, by locale"
     const unknown = try cli_testing.run(app, &.{"clan"}, .{ .env = &.{.{ "LANG", "de" }} });
     defer unknown.deinit();
     try testing.expect(std.mem.startsWith(u8, unknown.err, "app: unbekannter Befehl \"clan\""));
+    // A check's own words too, by their text.
+    const many = try cli_testing.run(app, &.{ "clean", "-n", "100" }, .{
+        .env = &.{.{ "LANG", "de" }},
+    });
+    defer many.deinit();
+    try testing.expect(std.mem.indexOf(u8, many.err, "sind zu viele auf einmal") != null);
     // No translation for the locale, or none set: English.
     const french = try cli_testing.run(
         app,

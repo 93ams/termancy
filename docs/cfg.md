@@ -44,14 +44,19 @@ Highest first:
 | env | `automaticEnv`, `bindEnv` |
 | profile | `useProfile`: the `profiles.<name>` table |
 | file | `loadFile` and the other [sources](#sources), merged in order |
-| default | `setDefault`, `setDefaults` |
+| default | the struct's own defaults; `setDefault`, `setDefaults` |
 
-Tables merge deeply; anything else replaces. `setMerge(key, .append)` (or a key's
+Tables merge deeply; anything else replaces. A choice is the exception: a layer naming
+another variant replaces the lower one's (`--storage-s3-bucket` over `[storage.disk]`). `setMerge(key, .append)` (or a key's
 `.merge = .append`, [below](#reading)) makes lists accumulate across sources instead.
 `explain(key)` names the layer and the file, variable, or flag behind a value.
 
-Defaults can be checked at compile time: a field the struct doesn't have, or a value of the
-wrong type, is a compile error.
+The struct's own defaults are the defaults: `decode` registers the settings type (its keys,
+secrets, variables, merges, and defaults) by itself, and `register(X)` does it earlier, for
+`get` or `explain` before a decode. A flag bound before then is kept or dropped, and keyed,
+once the type says which flags are settings. `setDefaults` is for other defaults, which can
+be checked at compile time: a field the struct doesn't have, or a value of the wrong type,
+is a compile error.
 
 ```zig
 const defaults: Settings = @import("defaults.zon");

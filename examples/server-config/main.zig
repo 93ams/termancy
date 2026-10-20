@@ -52,7 +52,8 @@ fn open(ctx: *cli.Context) !*cfg.Config {
     const flags = try ctx.flags(Flags);
     const config = try ctx.arena.create(cfg.Config);
     config.* = .init(ctx.arena);
-    try config.setDefaults(server, .{});
+    // The struct's defaults, for `explain` in `serve`; `decode` would register them itself.
+    try config.register(server);
     if (flags.config) |file| {
         var diag: cfg.Diagnostic = .{};
         config.loadFile(ctx.io, .cwd(), file, null, &diag) catch |err| switch (err) {

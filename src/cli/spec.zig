@@ -423,7 +423,8 @@ const Report = struct {
             ) catch {},
             .index => |i| index = i,
         };
-        if (path.end == 0) return r.ctx.invalid("{s}", .{message});
+        // A check's own words, in the user's language when the app translates them.
+        if (path.end == 0) return r.ctx.invalid("{s}", .{r.ctx.translate(message)});
         var label_buffer: [256]u8 = undefined;
         var label = r.labelOf(path.buffered(), &label_buffer);
         if (index) |i| label = try std.fmt.allocPrint(
@@ -432,7 +433,7 @@ const Report = struct {
             .{ label, field_.ordinal(i + 1) },
         );
         const m = r.ctx.messages;
-        const a = about orelse return r.ctx.invalid("{s}: {s}", .{ label, message });
+        const a = about orelse return r.ctx.invalid("{s}: {s}", .{ label, r.ctx.translate(message) });
         const arena = r.ctx.arena;
         const line = switch (a) {
             .min => |b| try Messages.allocRender(arena, m.value_at_least, &.{ label, b.text }),

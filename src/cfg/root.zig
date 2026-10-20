@@ -15,7 +15,6 @@
 //!
 //! var config: cfg.Config = .init(gpa);
 //! defer config.deinit();
-//! try config.setDefaults(app, .{});
 //! if (try config.findFile(io, .{
 //!     .name = "app",
 //!     .dirs = &.{ ".", "$HOME/.config/app" },
