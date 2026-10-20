@@ -63,6 +63,7 @@ pub const command = cli.command(.{
             .description =
             \\Start a shell in this terminal and note everything typed in it; when the shell
             \\exits, write it as a tape (Type, the keys, Sleep for pauses) to record later.
+            \\Refuses a file that already exists, as new does.
             ,
             .args = .{ .min = 1, .max = 1, .usage = "<file.tape>" },
             .flags = capture_flags,
@@ -325,11 +326,16 @@ fn newTape(ctx: *cli.Context) !void {
         \\Sleep 2s
         \\
     , .{ file_name, file_name, stem });
-    const exists = if (Io.Dir.cwd().access(ctx.io, file_name, .{})) true else |_| false;
-    if (exists) return ctx.fail("{s}: already exists", .{file_name});
+    try refuseExisting(ctx, file_name);
     Io.Dir.cwd().writeFile(ctx.io, .{ .sub_path = file_name, .data = text }) catch |err|
         return ctx.fail("{s}: {s}", .{ file_name, @errorName(err) });
     try ctx.out.print("created {s}\n", .{file_name});
+}
+
+/// Fails when `path` exists: `new` and `capture` never replace a tape.
+fn refuseExisting(ctx: *cli.Context, path: []const u8) !void {
+    const exists = if (Io.Dir.cwd().access(ctx.io, path, .{})) true else |_| false;
+    if (exists) return ctx.fail("{s}: already exists", .{path});
 }
 
 const CaptureFlags = struct {
@@ -342,6 +348,8 @@ const capture_flags = cli.flags(CaptureFlags, field.Set(.{field.Spec(CaptureFlag
 fn captureTape(ctx: *cli.Context, flags: CaptureFlags) !void {
     const path = ctx.args[0];
     const shell = flags.shell orelse ctx.environ.get("SHELL") orelse session.Config.default_shell;
+    // Before the shell starts, so a tape written by hand is not lost to the capture.
+    try refuseExisting(ctx, path);
     try ctx.err.print("capturing to {s}: exit the shell to finish\n", .{path});
     try ctx.err.flush();
     const keys = capture_zig.capture(
@@ -510,4 +518,21 @@ test "validate reports every tape, and fails" {
         "",
         "termancy: no-such-a.tape: cannot read it\ntermancy: no-such-b.tape: cannot read it\n",
     );
+}
+
+test "capture refuses a tape that exists, before starting the shell" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "mine.tape", .data = "Type \"x\"\n" });
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(dir);
+    const path = try std.fs.path.join(testing.allocator, &.{ dir, "mine.tape" });
+    defer testing.allocator.free(path);
+    const run = try termancy(&.{ "record", "capture", path });
+    defer run.deinit();
+    try testing.expectEqual(1, run.status);
+    try testing.expect(std.mem.endsWith(u8, run.err, "mine.tape: already exists\n"));
+    var buffer: [16]u8 = undefined;
+    const kept = try tmp.dir.readFile(testing.io, "mine.tape", &buffer);
+    try testing.expectEqualStrings("Type \"x\"\n", kept);
 }

@@ -15,7 +15,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 
-const setup =
+/// The script's start: `termancy serve <serve>` running, its standard error in serve.log.
+fn setupServing(comptime serve: []const u8) []const u8 {
+    return
     \\# Absolute, since the script moves to a scratch directory.
     \\case $1 in /*) termancy=$1 ;; *) termancy=$PWD/$1 ;; esac
     \\dir=$(mktemp -d) || exit 90
@@ -26,15 +28,42 @@ const setup =
     \\export HOME="$dir"
     \\port=$((20000 + $$ % 20000))
     \\"$termancy" ssh keygen -f client -C e2e >/dev/null || exit 92
-    \\"$termancy" serve -l 127.0.0.1:$port --host-key host -k client.pub -- \
-    \\    sh -c 'echo "hi $SSH_USER: $SSH_ORIGINAL_COMMAND"; echo oops >&2; exit 7' 2>serve.log &
-    \\pid=$!
+    \\"$termancy" serve -l 127.0.0.1:$port --host-key host -k client.pub
+    ++ serve ++ " 2>serve.log &\n" ++
+        \\pid=$!
+        \\i=0
+        \\until grep -q serving serve.log 2>/dev/null; do
+        \\    i=$((i + 1)); [ $i -gt 200 ] && { cat serve.log >&2; exit 93; }
+        \\    sleep 0.05
+        \\done
+        \\
+    ;
+}
+
+const setup = setupServing(
+    \\ -- sh -c 'echo "hi $SSH_USER: $SSH_ORIGINAL_COMMAND"; echo oops >&2; exit 7'
+);
+
+/// A program that ignores the signals that ask it to end, its client gone: the server
+/// ends it all the same (SIGKILL after a grace), and keeps serving.
+const stubborn = setupServing(
+    \\ -v -- sh -c 'trap "" HUP TERM; exec sleep 30'
+) ++
+    \\"$termancy" ssh run -i client --accept-new -p $port alice@127.0.0.1 -- x >/dev/null 2>&1 &
+    \\client=$!
     \\i=0
-    \\until grep -q serving serve.log 2>/dev/null; do
-    \\    i=$((i + 1)); [ $i -gt 200 ] && { cat serve.log >&2; exit 93; }
+    \\until grep -q "connected from" serve.log; do
+    \\    i=$((i + 1)); [ $i -gt 200 ] && { cat serve.log >&2; exit 95; }
     \\    sleep 0.05
     \\done
-    \\
+    \\kill "$client"
+    \\i=0
+    \\until grep -q "left (exit status" serve.log; do
+    \\    i=$((i + 1)); [ $i -gt 200 ] && { cat serve.log >&2; exit 96; }
+    \\    sleep 0.05
+    \\done
+    \\echo "ended"
+    \\kill -0 "$pid" && echo "still serving"
 ;
 
 const openssh = setup ++
@@ -87,6 +116,10 @@ pub fn addCases(
         \\
     );
     step.dependOn(&client.step);
+
+    const ignoring = shell(b, exe, sh, "e2e: termancy serve ends a program ignoring SIGHUP", stubborn);
+    ignoring.expectStdOutEqual("ended\nstill serving\n");
+    step.dependOn(&ignoring.step);
 
     _ = b.findProgram(.{ .names = &.{"ssh"} }) orelse return;
     const run = shell(b, exe, sh, "e2e: ssh into termancy serve", openssh);

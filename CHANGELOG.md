@@ -532,6 +532,29 @@ From a review before the repository went public:
 - Messages posted from other threads are drawn in one frame per batch, not one each.
 - After a message is posted from another thread, a tui program no longer wakes every 15 ms
   for the rest of its run: `post` wakes it once, through its signal pipe.
+||||||| bbead15
+- `termancy cfg set`, `unset`, `fmt`, `init --force`, and `edit` keep the file's
+  permissions: a `0600` file no longer becomes `0644` when rewritten, and `edit`'s working
+  copy is as private as the file it stands for.
+- `termancy freeze` no longer crashes on a line wider than 65535 columns (it wraps there),
+  and writes its image only once drawn, atomically: a failure (a missing font) leaves the
+  file already at `-o` as it was instead of empty.
+- `termancy ssh verify --signers` enforces a signer's allowed_signers options as
+  `ssh-keygen -Y verify` does: `namespaces=` must take the namespace, `valid-after=` and
+  `valid-before=` must hold now, and `cert-authority` or any other option refuses (it used
+  to accept the signature as good whatever they said). A matching line that allows the
+  signature wins, and the signer is named by its principals.
+- `termancy serve` ends a session's program and its output tasks when the client goes or
+  the server is canceled, instead of leaving them running. A program run without a
+  terminal is sent `SIGHUP` and, if still running a second later, `SIGKILL`; it used to
+  get `SIGTERM` and block the session until it obeyed.
+- `termancy record capture` refuses a tape that already exists, as `record new` does,
+  before starting the shell.
+- `termancy update` gives each download 30 minutes instead of 60 seconds, so a large
+  archive over a slow link no longer times out; the release lookup keeps 60 seconds.
+- `termancy release keygen` links the key into place only once written and synced, so a
+  failure leaves no empty key file blocking the next try; `release sign` writes each
+  `.sig` atomically.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up
