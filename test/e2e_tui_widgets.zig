@@ -625,6 +625,12 @@ const pty_driver =
     \\  feed | limit script -qF "$dir/log" sh -c "$inner" > /dev/null
     \\fi
     \\status=$?
+    \\# A timeout: what the terminal last showed, to see where the command stuck.
+    \\if [ "$status" = 124 ] || [ "$status" = 142 ]; then
+    \\  echo "timed out; the terminal's last output:" >&2
+    \\  tail -c 600 "$dir/log" | cat -v >&2
+    \\  echo >&2
+    \\fi
     \\[ -f "$dir/status" ] && status=$(cat "$dir/status")
     \\cat "$dir/out" 2> /dev/null
     \\exit $status
