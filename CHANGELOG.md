@@ -33,6 +33,12 @@ git history.
   defaults set at those keys rather than merging with them.
 - A layer naming another variant of a choice replaces the lower layer's, instead of both
   being set ("set only one of disk and s3").
+- **Each tui component's file is its type:** `const Select = @import("ui/select.zig");`
+  in place of `@import("ui/select.zig").Select`, and its other declarations are the type's
+  (`Select.Status`, `Form.Field`). The `components` module exports them by type
+  (`components.Input`, not `components.input.Input`), and `Spinner.frames`, the frame sets,
+  is `Spinner.frame_sets`. Likewise `sys.Version` replaces `sys.version.Version`, and
+  `sys.version.parse` is `sys.Version.parse`.
 - A command's checks across its flags' fields run before its hooks (`Command.check`), and
   report every failure; a single value's checks run as it is parsed. Checks only run on
   values given: a default that fails its own checks is no longer an error.
@@ -149,7 +155,8 @@ git history.
 ### Added
 
 - A check's own message is translated by its text, like help and `ctx.tr`, from the app's
-  `translations`.
+  `translations`, or by a template for one with arguments: `"{0} is in use"` translates
+  `"8080 is in use"`.
 - **`field`:** specs and checks (`min`, `max` on numbers or any type with `order`, `minLen`,
   `maxLen`, `oneOf`, `glob`, `from`) that describe themselves for help, docs, schemas, and
   completion; typed field paths; "did you mean" (the one edit distance `cli` and `cfg` share).

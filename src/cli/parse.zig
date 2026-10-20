@@ -535,9 +535,10 @@ const Parser = struct {
                 const shown = flag.shownValue(value);
                 const label = try p.flagLabel(occurrence);
                 const m = p.messages();
+                const said = try i18n.filledIn(p.options.translation, p.arena, reason.buffered());
                 const a = about orelse return p.fail(
                     m.invalid_value,
-                    &.{ shown, label, try p.arena.dupe(u8, i18n.textIn(p.options.translation, reason.buffered())) },
+                    &.{ shown, label, try p.arena.dupe(u8, said) },
                 );
                 return switch (a) {
                     .min => |b| p.fail(m.at_least, &.{ shown, label, b.text }),

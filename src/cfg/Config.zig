@@ -311,7 +311,8 @@ pub fn setDefaults(config: *Config, comptime X: type, value: settings_.Of(X).Typ
 /// Tells the configuration about the settings type `X`: its keys (so `bindFlags` keeps only
 /// flags that are settings, under their keys), the struct's defaults (for `get` and
 /// `explain`; a key `setDefault` set keeps its value), its secrets, variables, merges, and
-/// choices. `decode` and `setDefaults` call it; call it first when reading before them.
+/// choices. `decode` and `setDefaults` call it; call it first when reading before them, as
+/// `get`, `keys`, and `write` leave out the struct's defaults until it is called.
 pub fn register(config: *Config, comptime X: type) Allocator.Error!void {
     const a = config.arena.allocator();
     const name = @typeName(settings_.Of(X));

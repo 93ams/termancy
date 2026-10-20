@@ -49,6 +49,7 @@ const Flag = @import("Flag.zig");
 const values = @import("values.zig");
 const text = @import("text.zig");
 const Messages = @import("Messages.zig");
+const i18n = @import("i18n.zig");
 const sets = @import("sets.zig");
 const field_ = @import("field");
 
@@ -424,7 +425,8 @@ const Report = struct {
             .index => |i| index = i,
         };
         // A check's own words, in the user's language when the app translates them.
-        if (path.end == 0) return r.ctx.invalid("{s}", .{r.ctx.translate(message)});
+        const said = try i18n.filledIn(r.ctx.translation, r.ctx.arena, message);
+        if (path.end == 0) return r.ctx.invalid("{s}", .{said});
         var label_buffer: [256]u8 = undefined;
         var label = r.labelOf(path.buffered(), &label_buffer);
         if (index) |i| label = try std.fmt.allocPrint(
@@ -433,7 +435,7 @@ const Report = struct {
             .{ label, field_.ordinal(i + 1) },
         );
         const m = r.ctx.messages;
-        const a = about orelse return r.ctx.invalid("{s}: {s}", .{ label, r.ctx.translate(message) });
+        const a = about orelse return r.ctx.invalid("{s}: {s}", .{ label, said });
         const arena = r.ctx.arena;
         const line = switch (a) {
             .min => |b| try Messages.allocRender(arena, m.value_at_least, &.{ label, b.text }),

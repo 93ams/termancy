@@ -300,9 +300,10 @@ anything untranslated stays English. A `Translation` holds:
 - command help (summaries, descriptions, groups, flag help, examples);
 - the app's own strings: `ctx.tr("Hello, {0}", .{name})`, and `ctx.plural(n, one, other,
   args)` with CLDR plural rules;
-- what a check of its own says (`field.fail(w, "is reserved", .{})`), looked up by the text
-  it wrote, so it translates when that text is fixed. The built-in checks' messages are the
-  library's sentences.
+- what a check of its own says, looked up by the text it wrote: `field.fail(w, "is
+  reserved", .{})` by `"is reserved"`, and `field.fail(w, "{d} is in use", .{port})` by a
+  template, `.{ "{0} is in use", "{0} ist belegt" }`, whose `{0}`, `{1}`, ... stand for the
+  arguments as written. The built-in checks' messages are the library's sentences.
 
 The locale comes from `App.locale` or `LC_ALL`/`LC_MESSAGES`/`LANG`, `pt_BR` falling back to
 `pt`.

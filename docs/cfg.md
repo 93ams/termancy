@@ -53,7 +53,8 @@ another variant replaces the lower one's (`--storage-s3-bucket` over `[storage.d
 
 The struct's own defaults are the defaults: `decode` registers the settings type (its keys,
 secrets, variables, merges, and defaults) by itself, and `register(X)` does it earlier, for
-`get` or `explain` before a decode. A flag bound before then is kept or dropped, and keyed,
+`get`, `keys`, `write`, or `explain` before a decode: until the type is registered they see
+only what the sources set, and after it, the struct's defaults too. A flag bound before then is kept or dropped, and keyed,
 once the type says which flags are settings. `setDefaults` is for other defaults, which can
 be checked at compile time: a field the struct doesn't have, or a value of the wrong type,
 is a compile error.
