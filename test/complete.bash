@@ -4,7 +4,8 @@ termancy_exe=$1
 shift
 # The completion script calls `termancy` by name; route it to the binary under test.
 termancy() { "$termancy_exe" "$@"; }
-source <(termancy cli completion bash)
+# `eval`, not `source <(...)`, which bash 3.2 (macOS's) reads as empty.
+eval "$(termancy cli completion bash)"
 COMP_WORDS=(termancy "$@")
 COMP_CWORD=$#
 _termancy_complete

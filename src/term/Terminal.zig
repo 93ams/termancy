@@ -121,6 +121,7 @@ const Direction = enum { input, output };
 
 fn openControlling(io: Io, direction: Direction) OpenError!File {
     if (native_os == .windows) return openConsole(direction);
+    if (comptime native_os.isDarwin()) if (try openDevice(io)) |file| return file;
     const file = Io.Dir.cwd().openFile(io, "/dev/tty", .{ .mode = .read_write }) catch |err|
         return switch (err) {
             error.Canceled => error.Canceled,
@@ -130,6 +131,26 @@ fn openControlling(io: Io, direction: Direction) OpenError!File {
     if (!try file.isTty(io)) return error.NotATerminal;
     return file;
 }
+
+/// The terminal device a standard stream is open on (`/dev/ttys003`), if any is: macOS's
+/// `poll` refuses `/dev/tty` itself, so reads from it could not time out (a lone Esc would
+/// wait for the next key).
+fn openDevice(io: Io) Io.Cancelable!?File {
+    for ([_]posix.fd_t{ 2, 1, 0 }) |fd| {
+        var name: [256]u8 = undefined;
+        if (darwin.ttyname_r(fd, &name, name.len) != 0) continue;
+        const path = std.mem.sliceTo(&name, 0);
+        return Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |err| switch (err) {
+            error.Canceled => error.Canceled,
+            else => continue,
+        };
+    }
+    return null;
+}
+
+const darwin = struct {
+    extern "c" fn ttyname_r(fd: c_int, buffer: [*]u8, len: usize) c_int;
+};
 
 const kernel32 = struct {
     extern "kernel32" fn CreateFileW(

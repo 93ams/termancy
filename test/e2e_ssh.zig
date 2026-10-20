@@ -20,7 +20,8 @@ const setup =
     \\case $1 in /*) termancy=$1 ;; *) termancy=$PWD/$1 ;; esac
     \\dir=$(mktemp -d) || exit 90
     \\pid=
-    \\trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; rm -rf "$dir"' EXIT
+    \\# Quietly: bash as `sh` (macOS's) reports the killed server on standard error.
+    \\trap 'exec 2>/dev/null; [ -n "$pid" ] && kill "$pid"; rm -rf "$dir"' EXIT
     \\cd "$dir" || exit 91
     \\export HOME="$dir"
     \\port=$((20000 + $$ % 20000))

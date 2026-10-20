@@ -377,7 +377,9 @@ const PtyCase = struct {
     then_wait_for: []const u8 = "",
     then_count: u8 = 1,
     then_keys: []const u8 = "",
-    /// Needs bash, for job control (`set -m`, `fg`); skipped without it.
+    /// Needs bash, for job control (`set -m`, `fg`); skipped without it, and on macOS, where
+    /// bash under BSD `script` does not resume a stopped job (the program stops, nothing
+    /// runs `fg`).
     bash: bool = false,
 };
 
@@ -584,15 +586,20 @@ const pty_cases = [_]PtyCase{
 /// terminal shows `$4` (for a `tui` command, the end of its first frame: synchronized
 /// output ends with `2026l`), then `$6` once it has shown `$5` `$7` times (when `$5` is
 /// set), and prints what the command wrote to standard output. Exits with the command's
-/// status (124 on a timeout).
+/// status (124 on a timeout, or 142 where perl's alarm stands in for `timeout`).
 /// Works with util-linux `script` (`-qfc command log`) and BSD `script`, as macOS has it
 /// (`-qF log command...`); the status goes through a file, since only util-linux has `-e`.
 const pty_driver =
     \\termancy=$1 keys=$2 command=$3 wait=$4 then_wait=$5 then_keys=$6 then_count=$7
     \\dir=$(mktemp -d) || exit 99
     \\trap 'rm -f "$dir/log" "$dir/out" "$dir/status"; rmdir "$dir"' EXIT
-    \\limit=
-    \\command -v timeout > /dev/null 2>&1 && limit='timeout 60'
+    \\# A minute at most: with `timeout`, else perl's alarm (macOS has no `timeout`).
+    \\limit() { "$@"; }
+    \\if command -v timeout > /dev/null 2>&1; then
+    \\  limit() { timeout 60 "$@"; }
+    \\elif command -v perl > /dev/null 2>&1; then
+    \\  limit() { perl -e 'alarm shift; exec @ARGV' 60 "$@"; }
+    \\fi
     \\shown() {
     \\  i=0
     \\  until [ "$(grep -aoF "$1" "$dir/log" 2> /dev/null | wc -l)" -ge "$2" ]; do
@@ -615,11 +622,17 @@ const pty_driver =
     \\inner="trap : INT; $command > \"$dir/out\"; echo \$? > \"$dir/status\""
     \\export TERMANCY="$termancy"
     \\if script --version > /dev/null 2>&1; then
-    \\  feed | $limit script -qfc "$inner" "$dir/log" > /dev/null
+    \\  feed | limit script -qfc "$inner" "$dir/log" > /dev/null
     \\else
-    \\  feed | $limit script -qF "$dir/log" sh -c "$inner" > /dev/null
+    \\  feed | limit script -qF "$dir/log" sh -c "$inner" > /dev/null
     \\fi
     \\status=$?
+    \\# A timeout: what the terminal last showed, to see where the command stuck.
+    \\if [ "$status" = 124 ] || [ "$status" = 142 ]; then
+    \\  echo "timed out; the terminal's last output:" >&2
+    \\  tail -c 600 "$dir/log" | cat -v >&2
+    \\  echo >&2
+    \\fi
     \\[ -f "$dir/status" ] && status=$(cat "$dir/status")
     \\cat "$dir/out" 2> /dev/null
     \\exit $status
@@ -635,7 +648,7 @@ pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
     };
     const sh = b.findProgram(.{ .names = &.{"sh"} }) orelse return;
     _ = b.findProgram(.{ .names = &.{"script"} }) orelse return;
-    const bash = b.findProgram(.{ .names = &.{"bash"} }) != null;
+    const bash = os == .linux and b.findProgram(.{ .names = &.{"bash"} }) != null;
     for (pty_cases) |case| if (bash or !case.bash) addPtyCase(b, exe, step, sh, case);
 }
 

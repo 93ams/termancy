@@ -4,6 +4,7 @@
 //! module the project now imports.
 
 const std = @import("std");
+const e2e = @import("e2e.zig");
 
 /// A run of `termancy`, or of `zig`, in the chain's directory.
 const Step = struct {
@@ -123,18 +124,13 @@ const list_json = [_][]const u8{
 };
 
 pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.Step) void {
-    // The chain's directory is the output directory of a `termancy version` run. No step has
-    // side effects, so the chain is cached and runs again, in a new directory, only when
-    // termancy or this file changes (the build system never empties a directory it reuses, so
-    // a chain that failed part way must not get the same one back).
-    const seed = b.addRunArtifact(exe);
-    seed.setName("e2e: tui registry: directory");
-    seed.clearEnvironment();
-    seed.addArg("version");
-    seed.addFileInput(b.path("test/e2e_tui_registry.zig"));
-    const dir = seed.captureStdOut(.{ .basename = "tui-registry.txt" }).dirname();
+    // No step has side effects, so the chain is cached and runs again, in a new (empty)
+    // directory, only when termancy or this file changes.
+    const seed = e2e.chainDir(b, exe, "e2e: tui registry: directory", "tui-registry.txt");
+    seed.run.addFileInput(b.path("test/e2e_tui_registry.zig"));
+    const dir = seed.dir;
 
-    var previous = &seed.step;
+    var previous = seed.step;
     for (steps, 1..) |s, index| {
         const run = if (s.zig) zigRun(b, s.args) else termancyRun(b, exe, s);
         run.setName(b.fmt("e2e: tui registry ({d})", .{index}));

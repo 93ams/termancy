@@ -386,8 +386,11 @@ const bash_script =
     \\    local full=${words[n-1]}
     \\    # What bash replaces is `cur`, the end of `full`; candidates lose the rest.
     \\    local strip=${full%"$cur"}
-    \\    local -a lines found
-    \\    lines=($("@NAME@" __complete2 "${words[@]:0:n-1}" "$full" 2>/dev/null))
+    \\    # The words before `full`, without a slice: bash 3.2 (macOS's) joins a slice into one
+    \\    # word when IFS has no space.
+    \\    local -a before=("${words[@]}") lines found
+    \\    unset 'before[n-1]'
+    \\    lines=($("@NAME@" __complete2 "${before[@]}" "$full" 2>/dev/null))
     \\    COMPREPLY=()
     \\    local line path prefix="" value=$full paths=0
     \\    for line in "${lines[@]}"; do

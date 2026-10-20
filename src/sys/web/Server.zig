@@ -1022,7 +1022,8 @@ test "a silent browser is hung up on; one that sends heartbeats is not" {
         .token = "",
         .anyone = true,
         .ping_interval = .fromMilliseconds(20),
-        .idle_timeout = .fromMilliseconds(150),
+        // Ten times a heartbeat's interval, for a loaded machine's late wakeups.
+        .idle_timeout = .fromMilliseconds(500),
     };
     var serving = try io.concurrent(serve, .{ testing.allocator, io, &listener, &config });
     defer serving.cancel(io) catch {};
@@ -1034,7 +1035,8 @@ test "a silent browser is hung up on; one that sends heartbeats is not" {
     defer lively.close();
     try lively.send(.text, "{\"type\":\"resize\",\"cols\":80,\"rows\":24}");
     try expectMessage(&lively, .binary, "size 80x24");
-    for (0..10) |_| {
+    // Twice the idle timeout, so only the heartbeats keep it open.
+    for (0..20) |_| {
         try io.sleep(.fromMilliseconds(50), .awake);
         try lively.send(.text, "{\"type\":\"heartbeat\"}");
     }
