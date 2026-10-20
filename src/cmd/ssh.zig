@@ -395,12 +395,35 @@ fn verify(ctx: *cli.Context, flags: VerifyFlags) !void {
     var fp: [50]u8 = undefined;
     if (flags.signers) |signers_path| {
         const allowed = try keys.parseAuthorizedKeys(ctx.arena, try readFile(ctx, signers_path));
+        const now = Io.Timestamp.now(ctx.io, .real).toSeconds();
+        // As ssh-keygen -Y verify: any line for the key whose options allow it will do.
+        var refused: ?SignerError = null;
         for (allowed) |a| if (a.key.eql(key)) {
-            // An allowed_signers line names its principals before the key.
-            const who = if (a.comment.len > 0) a.comment else a.options;
-            try ctx.out.print("good signature by {s} ({s})\n", .{ who, key.fingerprint(&fp) });
+            const signer_line = parseSigner(a);
+            checkSigner(signer_line.options, flags.namespace, now) catch |err| {
+                refused = err;
+                continue;
+            };
+            try ctx.out.print("good signature by {s} ({s})\n", .{
+                signer_line.principals,
+                key.fingerprint(&fp),
+            });
             return;
         };
+        if (refused) |err| return ctx.fail("{s}: signed by {s}, but {s} {s}", .{
+            path,
+            key.fingerprint(&fp),
+            signers_path,
+            switch (err) {
+                error.CertAuthority => "trusts it only as a certificate authority, " ++
+                    "and certificates are not supported",
+                error.UnknownOption => "gives it an option allowed_signers does not have",
+                error.InvalidTime => "gives it a valid-after or valid-before that is not a time",
+                error.WrongNamespace => "does not allow it this namespace",
+                error.NotYetValid => "does not allow it yet (valid-after)",
+                error.Expired => "no longer allows it (valid-before)",
+            },
+        });
         return ctx.fail("{s}: signed by {s}, which is not in {s}", .{
             path,
             key.fingerprint(&fp),
@@ -411,6 +434,152 @@ fn verify(ctx: *cli.Context, flags: VerifyFlags) !void {
         "good signature by {s} (not checked against a list of signers)\n",
         .{key.fingerprint(&fp)},
     );
+}
+
+/// An allowed_signers line: `principals [options] key`. An authorized_keys line (no
+/// principals, a comment after the key) names the signer by its comment instead.
+const SignerLine = struct { principals: []const u8, options: []const u8 };
+
+fn parseSigner(a: keys.Authorized) SignerLine {
+    if (a.comment.len > 0 and a.options.len == 0) return .{ .principals = a.comment, .options = "" };
+    var i: usize = 0;
+    var quoted = false;
+    while (i < a.options.len and (quoted or (a.options[i] != ' ' and a.options[i] != '\t'))) : (i += 1) {
+        if (a.options[i] == '"') quoted = !quoted;
+    }
+    return .{
+        .principals = std.mem.trim(u8, a.options[0..i], "\""),
+        .options = std.mem.trim(u8, a.options[i..], " \t"),
+    };
+}
+
+const SignerError = error{
+    CertAuthority,
+    UnknownOption,
+    InvalidTime,
+    WrongNamespace,
+    NotYetValid,
+    Expired,
+};
+
+/// Whether an allowed_signers line's `options` let its key sign in `namespace` at `now`
+/// (seconds since the epoch), as ssh-keygen -Y verify decides: `namespaces="a,b*"`
+/// (patterns, `!` to exclude), `valid-after=` and `valid-before=` (YYYYMMDD[HHMM[SS]][Z]).
+/// `cert-authority` and unknown options refuse, as certificates are not supported.
+fn checkSigner(options: []const u8, namespace: []const u8, now: i64) SignerError!void {
+    var i: usize = 0;
+    while (i < options.len) {
+        const start = i;
+        var quoted = false;
+        while (i < options.len and (quoted or options[i] != ',')) : (i += 1) {
+            if (options[i] == '"') quoted = !quoted;
+        }
+        const option = options[start..i];
+        i += 1;
+        const eq = std.mem.indexOfScalar(u8, option, '=');
+        const name = option[0 .. eq orelse option.len];
+        const value = if (eq) |e| std.mem.trim(u8, option[e + 1 ..], "\"") else "";
+        if (std.ascii.eqlIgnoreCase(name, "cert-authority") and eq == null) {
+            return error.CertAuthority;
+        } else if (eq == null) {
+            return error.UnknownOption;
+        } else if (std.ascii.eqlIgnoreCase(name, "namespaces")) {
+            if (!patternListMatches(value, namespace)) return error.WrongNamespace;
+        } else if (std.ascii.eqlIgnoreCase(name, "valid-after")) {
+            const t = try parseTime(value);
+            // shortcut: a time without Z is local time, unknown here; it is taken at the
+            // latest it can be (UTC-12), so it never lets in what ssh-keygen keeps out.
+            // Upgrade if the time zone becomes readable.
+            if (now < t.seconds + @as(i64, if (t.utc) 0 else 12 * 3600)) return error.NotYetValid;
+        } else if (std.ascii.eqlIgnoreCase(name, "valid-before")) {
+            const t = try parseTime(value);
+            // Likewise taken at the earliest (UTC+14) without Z.
+            if (now > t.seconds - @as(i64, if (t.utc) 0 else 14 * 3600)) return error.Expired;
+        } else return error.UnknownOption;
+    }
+}
+
+/// Whether a comma-separated pattern list takes `text`: a pattern matches and no `!`
+/// pattern does, as OpenSSH's match_pattern_list (case kept).
+fn patternListMatches(list: []const u8, text: []const u8) bool {
+    var matched = false;
+    var patterns = std.mem.splitScalar(u8, list, ',');
+    while (patterns.next()) |pattern| {
+        if (pattern.len > 0 and pattern[0] == '!') {
+            if (glob(pattern[1..], text)) return false;
+        } else if (glob(pattern, text)) matched = true;
+    }
+    return matched;
+}
+
+/// `*` (any run) and `?` (one byte) wildcards.
+fn glob(pattern: []const u8, text: []const u8) bool {
+    if (pattern.len == 0) return text.len == 0;
+    if (pattern[0] == '*') {
+        for (0..text.len + 1) |i| if (glob(pattern[1..], text[i..])) return true;
+        return false;
+    }
+    if (text.len == 0 or (pattern[0] != '?' and pattern[0] != text[0])) return false;
+    return glob(pattern[1..], text[1..]);
+}
+
+/// YYYYMMDD, YYYYMMDDHHMM, or YYYYMMDDHHMMSS, then Z for UTC: seconds since the epoch,
+/// as if UTC.
+fn parseTime(text: []const u8) error{InvalidTime}!struct { seconds: i64, utc: bool } {
+    const utc = std.mem.endsWith(u8, text, "Z") or std.mem.endsWith(u8, text, "z");
+    const digits = if (utc) text[0 .. text.len - 1] else text;
+    if (digits.len != 8 and digits.len != 12 and digits.len != 14) return error.InvalidTime;
+    var fields: [6]u32 = .{ 0, 0, 0, 0, 0, 0 };
+    for (&fields, 0..) |*f, n| {
+        const at = if (n == 0) 0 else 2 + 2 * n;
+        const len: usize = if (n == 0) 4 else 2;
+        if (at + len > digits.len) break;
+        f.* = std.fmt.parseInt(u32, digits[at..][0..len], 10) catch return error.InvalidTime;
+    }
+    const year, const month, const day, const hour, const minute, const second = fields;
+    if (month < 1 or month > 12 or day < 1 or day > 31 or hour > 23 or minute > 59 or second > 59)
+        return error.InvalidTime;
+    // Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+    const y: i64 = @as(i64, year) - @intFromBool(month <= 2);
+    const era = @divFloor(y, 400);
+    const yoe = y - era * 400;
+    const m: i64 = month;
+    const doy = @divFloor(153 * (if (m > 2) m - 3 else m + 9) + 2, 5) + day - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    const days = era * 146097 + doe - 719468;
+    return .{ .seconds = days * 86400 + hour * 3600 + minute * 60 + second, .utc = utc };
+}
+
+test parseTime {
+    try std.testing.expectEqual(0, (try parseTime("19700101Z")).seconds);
+    try std.testing.expectEqual(951782400, (try parseTime("20000229Z")).seconds);
+    const full = try parseTime("20300102030405Z");
+    try std.testing.expectEqual(1893553445, full.seconds);
+    try std.testing.expect(full.utc);
+    try std.testing.expect(!(try parseTime("203001020304")).utc);
+    try std.testing.expectError(error.InvalidTime, parseTime("2030"));
+    try std.testing.expectError(error.InvalidTime, parseTime("20301301Z"));
+    try std.testing.expectError(error.InvalidTime, parseTime("2030010x"));
+}
+
+test checkSigner {
+    const now = (try parseTime("20260601Z")).seconds;
+    try checkSigner("", "file", now);
+    try checkSigner("namespaces=\"git,file\"", "file", now);
+    try checkSigner("namespaces=\"f*\"", "file", now);
+    try std.testing.expectError(error.WrongNamespace, checkSigner("namespaces=\"git\"", "file", now));
+    try std.testing.expectError(error.WrongNamespace, checkSigner("namespaces=\"*,!file\"", "file", now));
+    try checkSigner("valid-after=\"20260101Z\",valid-before=\"20270101Z\"", "file", now);
+    try std.testing.expectError(error.NotYetValid, checkSigner("valid-after=20260602Z", "file", now));
+    try std.testing.expectError(error.Expired, checkSigner("valid-before=20260531Z", "file", now));
+    // Local times are taken at their strictest.
+    try std.testing.expectError(error.NotYetValid, checkSigner("valid-after=20260601", "file", now));
+    try checkSigner("valid-after=20260531", "file", now);
+    try std.testing.expectError(error.Expired, checkSigner("valid-before=20260601", "file", now));
+    try std.testing.expectError(error.InvalidTime, checkSigner("valid-before=soon", "file", now));
+    try std.testing.expectError(error.CertAuthority, checkSigner("cert-authority", "file", now));
+    try std.testing.expectError(error.UnknownOption, checkSigner("from=\"10.0.0.1\"", "file", now));
+    try std.testing.expectError(error.UnknownOption, checkSigner("restrict", "file", now));
 }
 
 fn runRemote(ctx: *cli.Context, flags: RunFlags) !void {
@@ -525,4 +694,70 @@ fn runRemote(ctx: *cli.Context, flags: RunFlags) !void {
     };
     const status = session.exitStatus() orelse 255;
     if (status != 0) return ctx.exit(@truncate(@min(status, 255)));
+}
+
+test "verify --signers enforces a signer's namespaces and validity" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const join = struct {
+        fn f(d: []const u8, name: []const u8) ![]u8 {
+            return std.fs.path.join(testing.allocator, &.{ d, name });
+        }
+    }.f;
+    const key = try join(dir, "k");
+    defer gpa.free(key);
+    const file = try join(dir, "f");
+    defer gpa.free(file);
+    const signers = try join(dir, "signers");
+    defer gpa.free(signers);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f", .data = "data" });
+    const app: cli.App = .{ .root = &@import("../main.zig").root, .completion_command = false };
+
+    const made = try cli.testing.run(app, &.{ "ssh", "keygen", "-f", key, "-C", "a" }, .{});
+    defer made.deinit();
+    try testing.expectEqual(0, made.status);
+    const signed = try cli.testing.run(app, &.{ "ssh", "sign", "-k", key, file }, .{});
+    defer signed.deinit();
+    try testing.expectEqual(0, signed.status);
+    const public = try tmp.dir.readFileAlloc(testing.io, "k.pub", gpa, .unlimited);
+    defer gpa.free(public);
+
+    const args = [_][]const u8{ "ssh", "verify", "--signers", signers, file };
+    const plain = try std.fmt.allocPrint(gpa, "alice {s}", .{public});
+    defer gpa.free(plain);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "signers", .data = plain });
+    const good = try cli.testing.run(app, &args, .{});
+    defer good.deinit();
+    try testing.expectEqual(0, good.status);
+
+    const git_only = try std.fmt.allocPrint(gpa, "alice namespaces=\"git\" {s}", .{public});
+    defer gpa.free(git_only);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "signers", .data = git_only });
+    const refused = try cli.testing.run(app, &args, .{});
+    defer refused.deinit();
+    try testing.expectEqual(1, refused.status);
+    try testing.expect(std.mem.endsWith(u8, refused.err, "does not allow it this namespace\n"));
+
+    const lines = try std.fmt.allocPrint(
+        gpa,
+        "alice valid-before=\"20000101Z\" {s}bob namespaces=\"git,file\" {s}",
+        .{ public, public },
+    );
+    defer gpa.free(lines);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "signers", .data = lines });
+    const second = try cli.testing.run(app, &args, .{});
+    defer second.deinit();
+    try testing.expectEqual(0, second.status);
+    try testing.expect(std.mem.startsWith(u8, second.out, "good signature by bob ("));
+
+    const ca = try std.fmt.allocPrint(gpa, "alice cert-authority {s}", .{public});
+    defer gpa.free(ca);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "signers", .data = ca });
+    const as_ca = try cli.testing.run(app, &args, .{});
+    defer as_ca.deinit();
+    try testing.expectEqual(1, as_ca.status);
 }

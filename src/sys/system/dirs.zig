@@ -5,7 +5,8 @@
 //!   (`~/.config`), `$XDG_CACHE_HOME` (`~/.cache`), `$XDG_DATA_HOME` (`~/.local/share`),
 //!   `$XDG_STATE_HOME` (`~/.local/state`), `$XDG_RUNTIME_DIR` (no default).
 //! - macOS: `~/Library/Application Support` for config and data (state in a `state`
-//!   subdirectory), `~/Library/Caches` for cache, `$TMPDIR` (`/tmp`) for runtime.
+//!   subdirectory), `~/Library/Caches` for cache, `$TMPDIR` when absolute (else `/tmp`) for
+//!   runtime.
 //! - Windows: `%APPDATA%` for config; `%LOCALAPPDATA%` for cache, data, and state, each in
 //!   its own subdirectory; `%TEMP%` (then `%TMP%`) for runtime.
 //!
@@ -179,6 +180,23 @@ pub fn separator(os: Os) u8 {
     return if (os == .windows) '\\' else '/';
 }
 
+/// Whether Windows reads the path component `name` as something other than the file it
+/// names: a device (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, ignoring case,
+/// also with an extension, as `nul.txt`), or a name ending in a dot or a space, which
+/// Windows drops. Callers handle `.` and `..` themselves.
+pub fn isWindowsReserved(name: []const u8) bool {
+    if (name.len == 0) return false;
+    const last = name[name.len - 1];
+    if (last == '.' or last == ' ') return true;
+    const stem_end = std.mem.indexOfScalar(u8, name, '.') orelse name.len;
+    const stem = std.mem.trimEnd(u8, name[0..stem_end], " ");
+    for ([_][]const u8{ "CON", "PRN", "AUX", "NUL" }) |device| {
+        if (std.ascii.eqlIgnoreCase(stem, device)) return true;
+    }
+    if (stem.len != 4 or stem[3] < '1' or stem[3] > '9') return false;
+    return std.ascii.eqlIgnoreCase(stem[0..3], "COM") or std.ascii.eqlIgnoreCase(stem[0..3], "LPT");
+}
+
 /// Whether `p` is absolute under the rules of `os`: a leading `/` on POSIX; a drive
 /// (`C:\`) or UNC prefix (`\\server`) on Windows.
 pub fn isAbsolute(os: Os, p: []const u8) bool {
@@ -236,7 +254,7 @@ fn macos(environ: *const Environ.Map, os: Os, kind: Kind) error{HomeNotFound}!Pa
     if (xdgVar(environ, os, kind)) |dir| return .{ .base = dir };
     if (kind == .runtime) {
         const tmp = nonEmpty(environ.get("TMPDIR")) orelse "/tmp";
-        return .{ .base = tmp };
+        return .{ .base = if (isAbsolute(os, tmp)) tmp else "/tmp" };
     }
     const home = try homeDir(environ, os);
     return switch (kind) {
@@ -428,6 +446,11 @@ test "macos uses Library, TMPDIR, and honors explicit XDG" {
     defer xdg_env.deinit();
     try expectPath("/x/termancy", &xdg_env, .macos, .config);
     try expectPath("/tmp/termancy", &xdg_env, .macos, .runtime);
+
+    // A relative TMPDIR would name a directory under whatever the working directory is.
+    var relative_env = try testEnviron(&.{ .{ "HOME", "/Users/ann" }, .{ "TMPDIR", "tmp" } });
+    defer relative_env.deinit();
+    try expectPath("/tmp/termancy", &relative_env, .macos, .runtime);
 }
 
 test "windows known folders" {
@@ -556,6 +579,15 @@ test "temp directory per OS" {
     const fallback = try tempDir(gpa, &empty, .freebsd);
     defer gpa.free(fallback);
     try testing.expectEqualStrings("/tmp", fallback);
+}
+
+test isWindowsReserved {
+    for ([_][]const u8{ "CON", "nul", "Aux.txt", "com1", "LPT9.log", "nul .txt", "a.", "a " }) |name| {
+        try std.testing.expect(isWindowsReserved(name));
+    }
+    for ([_][]const u8{ "console", "nullable.txt", "com0", "COM10", "lpt", "a.b", "session.json", "" }) |name| {
+        try std.testing.expect(!isWindowsReserved(name));
+    }
 }
 
 test "join and isAbsolute" {

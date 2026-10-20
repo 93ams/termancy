@@ -17,12 +17,17 @@ const Value = @import("value.zig").Value;
 const Table = @import("value.zig").Table;
 const Diagnostic = @import("Diagnostic.zig");
 const path = @import("path.zig");
+const bomLength = @import("format.zig").bomLength;
 
 /// What parsing can fail with; the diagnostic says where.
 pub const Error = error{SyntaxError} || Allocator.Error;
 
 /// The deepest `${A:-${B:-...}}` nesting accepted.
 pub const max_depth = 16;
+
+/// The most text expansion may add across a file: `B=$A$A`, `C=$B$B`, ... doubles with
+/// each line, so a few hundred bytes could otherwise ask for gigabytes.
+pub const max_expanded_len = 16 * 1024 * 1024;
 
 /// How `parse` reads names and expands variables.
 pub const ParseOptions = struct {
@@ -45,7 +50,13 @@ pub fn parseWith(
     diag: ?*Diagnostic,
     options: ParseOptions,
 ) Error!Value {
-    var parser: Parser = .{ .arena = arena, .source = source, .diag = diag, .options = options };
+    var parser: Parser = .{
+        .arena = arena,
+        .source = source,
+        .diag = diag,
+        .options = options,
+        .index = bomLength(source),
+    };
     try parser.run();
     if (!options.nest) return .{ .table = parser.flat };
     var root: Value = .empty_table;
@@ -93,6 +104,7 @@ pub fn spans(arena: Allocator, source: []const u8) Error![]const Span {
         .source = source,
         .diag = null,
         .options = .{},
+        .index = bomLength(source),
         .spans = &list,
     };
     try parser.run();
@@ -127,6 +139,8 @@ const Parser = struct {
     flat: Table = .empty,
     /// When set, every entry is recorded here (see `spans`).
     spans: ?*std.ArrayList(Span) = null,
+    /// Bytes expansion has added so far.
+    expanded: usize = 0,
 
     fn run(p: *Parser) Error!void {
         while (p.index < p.source.len) {
@@ -247,8 +261,17 @@ const Parser = struct {
         return std.mem.trimEnd(u8, out.items, " \t");
     }
 
-    /// Expands the reference at `p.index` (which is `$`) into `out`.
+    /// Expands the reference at `p.index` (which is `$`) into `out`, failing when the
+    /// file's expansions add up to more than `max_expanded_len`.
     fn expand(p: *Parser, out: *std.ArrayList(u8)) Error!void {
+        const start = p.index;
+        const before = out.items.len;
+        try p.expandOne(out);
+        p.expanded += out.items.len - before;
+        if (p.expanded > max_expanded_len) return p.failAt(start, "expanded value is too long");
+    }
+
+    fn expandOne(p: *Parser, out: *std.ArrayList(u8)) Error!void {
         assert(p.peek() == '$');
         const text = p.source[p.index + 1 ..];
         if (text.len > 0 and text[0] == '{') {
@@ -596,6 +619,30 @@ test "errors" {
         try testing.expectEqualStrings(case[1], diag.message);
         try testing.expectEqual(case[2], diag.line);
     }
+}
+
+test "expansion stops at max_expanded_len" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var source: std.Io.Writer.Allocating = .init(a);
+    try source.writer.writeAll("V0=");
+    try source.writer.splatByteAll('x', 64);
+    try source.writer.writeByte('\n');
+    for (1..24) |i| try source.writer.print("V{d}=${{V{d}}}$V{d}\n", .{ i, i - 1, i - 1 });
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.SyntaxError, parse(a, source.written(), &diag));
+    try testing.expectEqualStrings("expanded value is too long", diag.message);
+    try testing.expectEqual(19, diag.line);
+
+    // Many lines that each stay under the limit add up to it too.
+    source.clearRetainingCapacity();
+    try source.writer.writeAll("A=");
+    try source.writer.splatByteAll('x', 1024 * 1024);
+    try source.writer.writeByte('\n');
+    for (0..20) |i| try source.writer.print("B{d}=$A\n", .{i});
+    try testing.expectError(error.SyntaxError, parse(a, source.written(), &diag));
+    try testing.expectEqualStrings("expanded value is too long", diag.message);
 }
 
 test "a double underscore at the ends of a name is literal" {

@@ -52,16 +52,18 @@ fn runKeygen(ctx: *cli.Context) !void {
     _ = base64.Encoder.encode(text[0 .. text.len - 1], &seed);
     text[text.len - 1] = '\n';
     defer std.crypto.secureZero(u8, &text);
-    const file = std.Io.Dir.cwd().createFile(ctx.io, path, .{
-        .exclusive = true,
+    // Written whole under another name, then linked into place only if `path` is still
+    // free: a failure leaves no empty key file behind, and an existing key is never replaced.
+    var atomic = std.Io.Dir.cwd().createFileAtomic(ctx.io, path, .{
         .permissions = sys.files.private_file,
-    }) catch |err| switch (err) {
+    }) catch |err| return ctx.fail("{s}: cannot create: {t}", .{ path, err });
+    defer atomic.deinit(ctx.io);
+    atomic.file.writeStreamingAll(ctx.io, &text) catch |err|
+        return ctx.fail("{s}: cannot write: {t}", .{ path, err });
+    atomic.file.sync(ctx.io) catch |err| return ctx.fail("{s}: cannot write: {t}", .{ path, err });
+    atomic.link(ctx.io) catch |err| switch (err) {
         error.PathAlreadyExists => return ctx.fail("{s}: exists; not replacing a key", .{path}),
         else => return ctx.fail("{s}: cannot create: {t}", .{ path, err }),
-    };
-    defer file.close(ctx.io);
-    file.writeStreamingAll(ctx.io, &text) catch |err| {
-        return ctx.fail("{s}: cannot write: {t}", .{ path, err });
     };
     try writeBase64Line(ctx.out, &pair.public_key.toBytes());
 }
@@ -107,10 +109,7 @@ fn runSign(ctx: *cli.Context, flags: SignFlags) !void {
         var line: std.Io.Writer.Allocating = .init(ctx.arena);
         try writeBase64Line(&line.writer, &signature.toBytes());
         const sig_path = try std.fmt.allocPrint(ctx.arena, "{s}.sig", .{path});
-        const written = std.Io.Dir.cwd().writeFile(ctx.io, .{
-            .sub_path = sig_path,
-            .data = line.written(),
-        });
+        const written = sys.files.writeAtomic(ctx.io, std.Io.Dir.cwd(), sig_path, line.written(), .{});
         written catch |err| return ctx.fail("{s}: cannot write: {t}", .{ sig_path, err });
         try ctx.out.print("{s}\n", .{sig_path});
     }
@@ -351,9 +350,21 @@ test "keygen, sign, verify: what sys.update accepts" {
     defer made.deinit();
     try testing.expectEqual(0, made.status);
     const public = std.mem.trimEnd(u8, made.out, "\n");
+    const first_key = try tmp.dir.readFileAlloc(testing.io, "release.key", gpa, .unlimited);
+    defer gpa.free(first_key);
     const again = try termancy(&.{ "release", "keygen", key }, &.{});
     defer again.deinit();
     try testing.expectEqual(1, again.status);
+    // The key there is kept, and no temporary file is left beside it.
+    const kept_key = try tmp.dir.readFileAlloc(testing.io, "release.key", gpa, .unlimited);
+    defer gpa.free(kept_key);
+    try testing.expectEqualStrings(first_key, kept_key);
+    var listed = try tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
+    defer listed.close(testing.io);
+    var entries = listed.iterate();
+    var count: usize = 0;
+    while (try entries.next(testing.io)) |_| count += 1;
+    try testing.expectEqual(2, count); // The asset and the key.
 
     const signed = try termancy(&.{ "release", "sign", "--key", key, asset }, &.{});
     defer signed.deinit();

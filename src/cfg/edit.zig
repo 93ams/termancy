@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
 const Format = @import("format.zig").Format;
+const bomLength = @import("format.zig").bomLength;
 const path = @import("path.zig");
 const toml = @import("toml.zig");
 const dotenv = @import("dotenv.zig");
@@ -348,7 +349,10 @@ fn reformatToml(arena: Allocator, source: []const u8, tree: Value) EditError![]c
                     }
                     w.writeAll(" = ") catch break :write;
                     const value = lookupSegments(tree, span.path) orelse return error.Unsupported;
-                    toml.writeValue(w, value) catch |err| switch (err) {
+                    // Whether a date-like string was a date or a string is only in the text.
+                    if (holdsDateTime(value)) {
+                        w.writeAll(value_text) catch break :write;
+                    } else toml.writeValue(w, value) catch |err| switch (err) {
                         error.WriteFailed => break :write,
                         error.Unrepresentable => return error.Unsupported,
                     };
@@ -773,7 +777,7 @@ fn editToml(arena: Allocator, source: []const u8, change: Change) EditError![]co
                 if (span.kind != .entry or !segmentsEql(span.path, key)) continue;
                 const old = source[span.value_start..span.value_end];
                 const text = try keepSingleQuotes(arena, old, set.value, .toml) orelse
-                    value.written();
+                    try keepDateTimeQuoted(arena, old, set.value) orelse value.written();
                 return splice(arena, source, span.value_start, span.value_end, text);
             }
             return insertToml(arena, source, all, key, value.written());
@@ -808,7 +812,7 @@ fn insertToml(
     const at = best.insert_at;
     const nl = lineBreak(source);
     write: {
-        if (at > 0 and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
+        if (at > bomLength(source) and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
         for (key[best.path.len..], 0..) |segment, i| {
             if (i > 0) w.writeByte('.') catch break :write;
             toml.writeKey(w, segment) catch |err| switch (err) {
@@ -1161,7 +1165,7 @@ fn editIni(arena: Allocator, source: []const u8, change: Change) EditError![]con
         for (sections) |candidate| {
             if (!segmentsEql(candidate.path, section)) continue;
             at = candidate.insert_at;
-            if (at > 0 and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
+            if (at > bomLength(source) and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
             w.print("{s} = {s}{s}", .{ name, value.written(), nl }) catch break :write;
             // A key added to the root just before the first header (or the comment above
             // it): keep a blank line.
@@ -1170,7 +1174,7 @@ fn editIni(arena: Allocator, source: []const u8, change: Change) EditError![]con
             if (before_header) w.writeAll(nl) catch break :write;
             return splice(arena, source, at, at, line.written());
         }
-        if (source.len > 0 and source[source.len - 1] != '\n') w.writeAll(nl) catch break :write;
+        if (source.len > bomLength(source) and source[source.len - 1] != '\n') w.writeAll(nl) catch break :write;
         if (source.len > 0) w.writeAll(nl) catch break :write;
         w.writeByte('[') catch break :write;
         for (section, 0..) |segment, n| {
@@ -1259,7 +1263,7 @@ fn insertYaml(
     const w = &text.writer;
     const nl = lineBreak(source);
     write: {
-        if (at > 0 and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
+        if (at > bomLength(source) and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
         for (key[base..], 0..) |segment, i| {
             w.splatByteAll(' ', indent + 2 * i) catch break :write;
             yaml.writeString(w, segment) catch break :write;
@@ -1435,7 +1439,7 @@ fn editDotenv(arena: Allocator, source: []const u8, change: Change) EditError![]
             const w = &line.writer;
             write: {
                 const nl = lineBreak(source);
-                if (source.len > 0 and source[source.len - 1] != '\n') {
+                if (source.len > bomLength(source) and source[source.len - 1] != '\n') {
                     w.writeAll(nl) catch break :write;
                 }
                 for (key, 0..) |segment, n| {
@@ -1478,6 +1482,33 @@ fn lineBreak(source: []const u8) []const u8 {
 /// `value` is a string that can be written that way; else null, for the format's own
 /// spelling. TOML's literal strings and YAML's single-quoted ones have no escapes, so a
 /// path such as `C:\dir` reads better kept in them.
+/// `value` as a TOML string, when it replaces a string (`old` is quoted) and reads like a
+/// date-time, which `toml.writeValue` would write bare, making it a date.
+fn keepDateTimeQuoted(arena: Allocator, old: []const u8, value: Value) EditError!?[]const u8 {
+    if (value != .string or !toml.isDateTime(value.string)) return null;
+    if (old.len == 0 or (old[0] != '"' and old[0] != '\'')) return null;
+    var out: std.Io.Writer.Allocating = .init(arena);
+    toml.writeString(&out.writer, value.string) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        error.Unrepresentable => return error.Unsupported,
+    };
+    return out.written();
+}
+
+/// Whether `value` is or holds a string that reads like a TOML date-time.
+fn holdsDateTime(value: Value) bool {
+    return switch (value) {
+        .string => |s| toml.isDateTime(s),
+        .array => |a| for (a.items) |item| {
+            if (holdsDateTime(item)) break true;
+        } else false,
+        .table => |t| for (t.values()) |item| {
+            if (holdsDateTime(item)) break true;
+        } else false,
+        else => false,
+    };
+}
+
 fn keepSingleQuotes(
     arena: Allocator,
     old: []const u8,
@@ -1629,6 +1660,26 @@ fn expectEdit(format: Format, source: []const u8, change: Change, expected: ?[]c
         try testing.expectEqualStrings(text, edited orelse return error.TestExpectedEdit);
     } else {
         try testing.expectEqual(null, edited);
+    }
+}
+
+test "edits keep a byte order mark" {
+    const bom = "\xEF\xBB\xBF";
+    try expectEdit(.toml, bom ++ "# c\na = 1\n", setTo("b", .{ .int = 2 }), bom ++ "# c\na = 1\nb = 2\n");
+    try expectEdit(.toml, bom ++ "a = 1\n", setTo("a", .{ .int = 2 }), bom ++ "a = 2\n");
+    try expectEdit(.json, bom ++ "{\"a\": 1}", setTo("a", .{ .int = 2 }), bom ++ "{\"a\": 2}");
+    try expectEdit(.dotenv, bom ++ "A=1\n", setTo("a", .{ .string = "2" }), bom ++ "A=2\n");
+    try expectEdit(.ini, bom ++ "a=1\n", setTo("a", .{ .int = 2 }), bom ++ "a=2\n");
+    try expectEdit(.yaml, bom ++ "a: 1\n", setTo("b", .{ .int = 2 }), bom ++ "a: 1\nb: 2\n");
+    try expectEdit(.toml, bom ++ "[s]\nx = 1\n", setTo("a", .{ .int = 2 }), bom ++ "a = 2\n\n[s]\nx = 1\n");
+    try expectEdit(.dotenv, bom, setTo("a", .{ .string = "1" }), bom ++ "A=1\n");
+    try expectEdit(.zon, bom ++ ".{ .a = 1 }", setTo("a", .{ .int = 2 }), bom ++ ".{ .a = 2 }");
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    for ([_]Format{ .toml, .dotenv }) |format| {
+        const source = if (format == .toml) bom ++ "a   =   1\n" else bom ++ "A=1\n";
+        const formatted = (try reformat(arena.allocator(), format, source)).?;
+        try testing.expect(std.mem.startsWith(u8, formatted, bom));
     }
 }
 
@@ -2296,6 +2347,20 @@ fn expectReformat(format: Format, source: []const u8, expected: ?[]const u8) !vo
     } else {
         try testing.expectEqual(null, formatted);
     }
+}
+
+test "TOML date-like strings stay strings, and date-times stay bare" {
+    try expectReformat(
+        .toml,
+        "s   =   \"2024-01-01\"\nd = 2024-01-01\nl = [ '07:32:00', 1979-05-27 ]\nn   =   1\n",
+        "s = \"2024-01-01\"\nd = 2024-01-01\nl = [ '07:32:00', 1979-05-27 ]\nn = 1\n",
+    );
+    try expectEdit(.toml, "s = \"2024-01-01\"\n", setTo("s", .{ .string = "2025-02-02" }), "s = \"2025-02-02\"\n");
+    try expectEdit(.toml, "d = 2024-01-01\n", setTo("d", .{ .string = "2025-02-02" }), "d = 2025-02-02\n");
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const sorted = (try sort(arena.allocator(), .toml, "s = \"2024-01-01\"\na = 1\n")).?;
+    try testing.expectEqualStrings("a = 1\ns = \"2024-01-01\"\n", sorted);
 }
 
 test "reformat TOML keeps comments" {

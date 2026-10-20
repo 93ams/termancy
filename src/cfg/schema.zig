@@ -497,7 +497,7 @@ const Validator = struct {
         if (std.mem.eql(u8, name, "array")) return value == .array;
         if (std.mem.eql(u8, name, "null")) return value == .null;
         if (std.mem.eql(u8, name, "boolean")) {
-            return value == .bool or (coerce and parseBool(value.string) != null);
+            return value == .bool or (coerce and decoding.parseBool(value.string) != null);
         }
         if (std.mem.eql(u8, name, "integer")) {
             if (value == .int) return true;
@@ -633,16 +633,6 @@ const Validator = struct {
     }
 };
 
-fn parseBool(text: []const u8) ?bool {
-    for ([_][]const u8{ "true", "yes", "on", "1" }) |t| {
-        if (std.ascii.eqlIgnoreCase(text, t)) return true;
-    }
-    for ([_][]const u8{ "false", "no", "off", "0" }) |f| {
-        if (std.ascii.eqlIgnoreCase(text, f)) return false;
-    }
-    return null;
-}
-
 /// Equality for `enum` and `const`, coercing text to the other side's scalar type.
 fn sameValue(expected: Value, value: Value, options: ValidateOptions) bool {
     if (expected.eql(value)) return true;
@@ -650,7 +640,7 @@ fn sameValue(expected: Value, value: Value, options: ValidateOptions) bool {
     return switch (expected) {
         .int => |i| (std.fmt.parseInt(i64, value.string, 0) catch return false) == i,
         .float => |f| (std.fmt.parseFloat(f64, value.string) catch return false) == f,
-        .bool => |b| parseBool(value.string) == b,
+        .bool => |b| decoding.parseBool(value.string) == b,
         else => false,
     };
 }

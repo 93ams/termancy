@@ -181,6 +181,16 @@ pub fn matches(command: *const Command, name: []const u8) bool {
 }
 
 /// The subcommand called `name` (or aliased so).
+/// Whether the command's name or one of its aliases starts with `prefix`, for prefix
+/// matching (`App.prefix_matching`).
+pub fn startsWith(command: *const Command, prefix: []const u8) bool {
+    if (std.mem.startsWith(u8, command.name, prefix)) return true;
+    for (command.aliases) |alias| {
+        if (std.mem.startsWith(u8, alias, prefix)) return true;
+    }
+    return false;
+}
+
 pub fn findSubcommand(command: *const Command, name: []const u8) ?*const Command {
     for (command.subcommands) |*sub| {
         if (sub.matches(name)) return sub;

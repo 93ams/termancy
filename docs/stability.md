@@ -29,7 +29,7 @@ adds, and a patch release only fixes. These are the stable declarations:
 | Specs | `Spec`, `Field`, `Fields`, `Set`, `none`, `specAt` |
 | Checks | `Check` (its built-ins and `from`), `About`, `Bound`, `Error`, `fail`, `matches`, `validate`, `validateExcept`, `Scope`, `checkOne`, `Segment` |
 | Types and paths | `Unwrap`, `isList`, `isGroup`, `isChoice`, `hasParse`, `fieldNames`, `fieldTypes`, `initDefaults`, `initVariant`, `isRequired`, `PathType`, `ptrAt`, `getAt` |
-| Names | `kebab`, `sameName`, `editDistance`, `suggest`, `join`, `ordinal` |
+| Names | `kebab`, `sameName`, `editDistance`, `suggest`, `join` |
 
 **Machine output is stable too:** what `termancy` prints with `-o json` and the other formats
 in [machine-output.md](machine-output.md), its exit statuses, and the completion protocol

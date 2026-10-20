@@ -6,6 +6,7 @@
 const std = @import("std");
 const cli = @import("cli");
 const field = @import("field");
+const sys = @import("sys");
 const term = @import("term");
 const explain = @import("explain.zig");
 const Io = std.Io;
@@ -147,9 +148,6 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
     });
     defer screen.deinit();
 
-    var file = Io.Dir.cwd().createFile(ctx.io, flags.output, .{}) catch |err|
-        return ctx.fail("{s}: {s}", .{ flags.output, @errorName(err) });
-    defer file.close(ctx.io);
     // Drawing a PNG takes a while.
     var spinner: term.live.Spinner = .{
         .title = try std.fmt.allocPrint(ctx.arena, "drawing {s}", .{flags.output}),
@@ -159,9 +157,10 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
     display.start(ctx.io) catch {};
     // Before any failure is printed, as the lines would mix.
     errdefer display.clear() catch {};
-    var buffer: [8192]u8 = undefined;
-    var writer = file.writer(ctx.io, &buffer);
-    const w = &writer.interface;
+    // Drawn in memory, then written whole: a failure leaves the file there as it was.
+    var drawn: Io.Writer.Allocating = .init(ctx.gpa);
+    defer drawn.deinit();
+    const w = &drawn.writer;
     if (svg) {
         try screen.writeSvg(w, .{ .font_size = flags.font_size, .padding = flags.padding });
     } else {
@@ -214,9 +213,9 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
         defer img.deinit(ctx.gpa);
         try term.image.writePng(ctx.gpa, w, &img);
     }
-    w.flush() catch {
+    sys.files.writeAtomic(ctx.io, Io.Dir.cwd(), flags.output, drawn.written(), .{}) catch |err| {
         try display.clear();
-        return ctx.fail("{s}: cannot write it", .{flags.output});
+        return ctx.fail("{s}: cannot write it: {s}", .{ flags.output, @errorName(err) });
     };
     const wrote = try std.fmt.allocPrint(ctx.arena, "wrote {s}", .{flags.output});
     display.lock();
@@ -300,9 +299,11 @@ pub fn layout(gpa: Allocator, text: []const u8, options: Layout) !Screen {
         if (options.wrap > 0) lines += w / options.wrap;
         lines += 1;
     }
-    const columns = if (options.wrap > 0) options.wrap else widest;
+    // A screen side is a u16: longer lines wrap at its limit.
+    const max_side = std.math.maxInt(u16);
+    const columns: usize = @min(if (options.wrap > 0) options.wrap else widest, max_side);
     // Bounded by the emulator's largest grid.
-    const rows = @min(lines, Screen.max_cells / columns);
+    const rows: usize = @min(lines, Screen.max_cells / columns, max_side);
     var source: Screen = try .init(gpa, .{ .width = @intCast(columns), .height = @intCast(rows) });
     defer source.deinit();
     var start: usize = 0;
@@ -355,6 +356,7 @@ pub fn layout(gpa: Allocator, text: []const u8, options: Layout) !Screen {
         while (end > 0 and source.cell(r, end - 1).isBlank()) end -= 1;
         width = @max(width, end);
     }
+    width = @min(width, max_side - gutter);
     var screen: Screen = try .init(gpa, .{
         .width = @intCast(gutter + width),
         .height = @intCast(last_row - first_row),
@@ -432,4 +434,33 @@ test "freeze says what it wrote, and nothing under -q" {
     const quiet = try cli.testing.run(app, &.{ "freeze", "-q", source, "-o", svg }, .{});
     defer quiet.deinit();
     try quiet.expect(0, "", "");
+}
+
+test "layout: a line wider than a screen can be wraps instead of crashing" {
+    const long = try testing.allocator.alloc(u8, 70_000);
+    defer testing.allocator.free(long);
+    @memset(long, 'x');
+    var screen = try layout(testing.allocator, long, .{ .numbers = true });
+    defer screen.deinit();
+    try testing.expect(screen.size.height >= 2);
+}
+
+test "a failed freeze leaves the output as it was" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.zig", .data = "const x = 1;\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.png", .data = "old" });
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(dir);
+    const source = try std.fs.path.join(testing.allocator, &.{ dir, "a.zig" });
+    defer testing.allocator.free(source);
+    const png = try std.fs.path.join(testing.allocator, &.{ dir, "a.png" });
+    defer testing.allocator.free(png);
+    const app: cli.App = .{ .root = &@import("../main.zig").root, .completion_command = false };
+    const args = [_][]const u8{ "freeze", "-q", source, "-o", png, "--font-family", "No Such Font" };
+    const failed = try cli.testing.run(app, &args, .{});
+    defer failed.deinit();
+    try testing.expectEqual(1, failed.status);
+    var buffer: [16]u8 = undefined;
+    try testing.expectEqualStrings("old", try tmp.dir.readFile(testing.io, "a.png", &buffer));
 }

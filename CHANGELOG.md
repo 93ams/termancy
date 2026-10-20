@@ -469,6 +469,125 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new
+  `Messages.nth_value`, translated in the bundled tables, instead of an English
+  `(2nd value)`. `field.ordinal`, now unused, is gone.
+- With `App.prefix_matching`, completion descends through a prefix of a subcommand's alias
+  as the parser does (`app ru <Tab>` for `serve`, alias `run`); it took names only.
+- fish completion runs the program once per Tab, not three times (each `complete`
+  condition ran it again), so slow completers answer three times sooner.
+- bash completion no longer expands candidates as file patterns: `photo[1].jpg` stayed
+  `photo[1].jpg` only when no `photo1.jpg` existed, and under `shopt -s nullglob` a
+  candidate holding `*`, `?`, or `[` (even in its description) disappeared.
+- `field.checkOne` returns the failed check's `About` when its reason does not fit the
+  writer, as `field.validate` does, instead of `error.WriteFailed`.
+- `field`: `.min` and `.max` on a float reject NaN; `--ratio nan` (or `nan` in a TOML file)
+  passed both.
+- `cli`: a switch set to false (`--no-yaml`, or `yaml = false` in a configuration or its
+  variable) no longer counts as given for `.exclusive`, `.together`, and `.requires`, so
+  `serve --json` works with `yaml = false` in the configuration.
+- `term.vt`: a cursor position query (`CSI 6n`) in origin mode with the cursor restored
+  above the scroll region no longer crashes `freeze -x`, `explain`, and `record`.
+- `term.markdown` and `termancy md`: control characters in a document are dropped, so a
+  fetched README can no longer send its own escapes (OSC 52 clipboard writes, titles) to
+  the terminal.
+- `term.Buffer`: a grapheme cluster longer than a cell holds (a 25-byte family emoji) is
+  cut between codepoints, not inside one, so the rest of the row is no longer drawn a
+  column off.
+- `term.input`: a bracketed paste arriving in many reads is searched for its end marker
+  once, not again on every read (an 8 MB paste took seconds to decode). A paste past
+  1 MiB arrives as several `paste` events in order, so memory stays bounded even when its
+  end marker never comes.
+- Windows: `Terminal.enterRaw` puts the console modes back when a later step fails,
+  instead of leaving the console without echo.
+- `term.Pty.deinit` sends `SIGKILL` to the program's process group when it ignores
+  `SIGHUP` for a second, instead of waiting for it forever.
+- `sys.update.removeLeftovers` also deletes `<exe>.zip`, the archive `termancy update`
+  stages next to the executable while unpacking a `.zip` release, which stayed behind when
+  the update was cut short.
+- `sys.log`: strings inside a struct, list, or optional field value are written as text,
+  with known secret values replaced by `[REDACTED]`, in every format. They were written as
+  lists of byte values, which the secret scrubbing could not see, so a secret inside one
+  (an argument list, a request struct) reached the log readable.
+- `sys.dirs` on macOS: a relative `$TMPDIR` no longer makes the runtime directory relative
+  to the working directory; `/tmp` is used instead, as `tempDir` already did.
+- `sys.files.Store` refuses blob names Windows reads as something else: device names
+  (`CON`, `NUL`, `nul.txt`, `COM1`, ...) and names ending in a dot or a space. Writing
+  `nul` reported success and kept nothing; `con` wrote the blob to the console.
+  `sys.sandbox` refuses device names in Windows paths too (`error.UnsupportedPath`). Both use
+  the new `sys.dirs.isWindowsReserved`.
+- `sys.update.install` (and so `termancy update`) syncs the new executable to disk before
+  renaming it into place, so a crash or power loss right after an update cannot leave an
+  empty executable with the rollback copy already removed.
+- `sys.signal` on Windows: closing the console, logging off, or shutting down now waits
+  for the program to clean up and call `uninstall` (up to Windows' own timeout, 5 seconds
+  by default for a closed console). Windows ends the process as soon as the handler
+  returns, so the program never saw the termination before and its cleanup did not run.
+- `sys.signal`: a second `SIGHUP` before `reset` (a reload asked for twice) no longer ends
+  the process; only interrupt, termination, and quit fall back to the default action on a
+  second signal.
+- `sys.ssh.Server.serve` and `sys.web.Server.serve` (and so `termancy serve`) keep serving
+  when an accept fails for one connection (the peer hung up first) or for want of file
+  descriptors (they wait 100 ms and accept again), instead of returning and ending every
+  open session. A peer opening many idle connections could stop the server.
+- termancy puts the terminal back (raw mode off, main screen, cursor shown) before printing
+  a panic, instead of leaving it as a full-screen command had it.
+- A tui program whose first frame fails, or that switched to the alternate screen or turned
+  the mouse on with a command and then fails, turns those modes off again on the way out.
+- A tui program ends on `SIGTERM` or `SIGHUP` as on Ctrl-C, restoring the terminal, instead
+  of being killed with it in raw mode.
+- Turning the mouse off also ends every-movement reporting (`?1003`), which
+  `Cmd.mouse(.motion)` turns on.
+- A tui program resized again before the terminal said where its cursor went no longer
+  learns the wrong thing about whether it rewraps lines, and an answer that comes after the
+  wait no longer reaches the model as a `.report`.
+- The terminal's cursor (`Model.cursor`) sits on the right row below a line that starts
+  with a tab and wraps.
+- `focus.Grid.move` no longer panics when `count` shrank below the focused part.
+- Messages posted from other threads are drawn in one frame per batch, not one each.
+- After a message is posted from another thread, a tui program no longer wakes every 15 ms
+  for the rest of its run: `post` wakes it once, through its signal pipe.
+- `termancy cfg set`, `unset`, `fmt`, `init --force`, and `edit` keep the file's
+  permissions: a `0600` file no longer becomes `0644` when rewritten, and `edit`'s working
+  copy is as private as the file it stands for.
+- `termancy freeze` no longer crashes on a line wider than 65535 columns (it wraps there),
+  and writes its image only once drawn, atomically: a failure (a missing font) leaves the
+  file already at `-o` as it was instead of empty.
+- `termancy ssh verify --signers` enforces a signer's allowed_signers options as
+  `ssh-keygen -Y verify` does: `namespaces=` must take the namespace, `valid-after=` and
+  `valid-before=` must hold now, and `cert-authority` or any other option refuses (it used
+  to accept the signature as good whatever they said). A matching line that allows the
+  signature wins, and the signer is named by its principals.
+- `termancy serve` ends a session's program and its output tasks when the client goes or
+  the server is canceled, instead of leaving them running. A program run without a
+  terminal is sent `SIGHUP` and, if still running a second later, `SIGKILL`; it used to
+  get `SIGTERM` and block the session until it obeyed.
+- `termancy record capture` refuses a tape that already exists, as `record new` does,
+  before starting the shell.
+- `termancy update` gives each download 30 minutes instead of 60 seconds, so a large
+  archive over a slow link no longer times out; the release lookup keeps 60 seconds.
+- `termancy release keygen` links the key into place only once written and synced, so a
+  failure leaves no empty key file blocking the next try; `release sign` writes each
+  `.sig` atomically.
+- `cfg`: an integer setting given a number past 2^53 that was read as a float (JSON, YAML,
+  or ZON past the `i64` range: `"id": 10000000000000000001`) is "integer out of range",
+  instead of decoding as the nearest float, another number.
+- `cfg`: reformatting, sorting, or setting a TOML value keeps a quoted string that reads
+  like a date (`released = "2024-01-01"`) quoted, instead of turning it into a TOML date
+  for every other reader of the file (`termancy cfg fmt`, `cfg set`).
+- `cfg`: expansion adds at most `max_expanded_len` (16 MiB) of text, in a dotenv file
+  (`dotenv.max_expanded_len`, a syntax error past it) and through `${key}` references
+  (`Config.max_expanded_len`, reported by `checkReferences`). A few hundred bytes that
+  double a value line by line used to ask for gigabytes.
+- `cfg`: every format reads a file that starts with a UTF-8 byte order mark, as Windows
+  editors write, and in-place edits keep it. INI used to read the mark into the first key's
+  name, so that key was silently missing; TOML, JSON, JSONC, and dotenv rejected the file.
+- `cfg`: an include cycle through another spelling of the same path (`include = "./a.toml"`
+  or `"../conf/a.toml"`) is `error.IncludeCycle`, instead of reading the file again until
+  the path is too long.
+- `cfg`: with references on, a value that takes text from a secret through `${key}`
+  (`url = "pg://u:${db.password}@h"`) is redacted by `write` and `snapshot` too, instead of
+  printing the secret.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up

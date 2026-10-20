@@ -87,21 +87,6 @@ pub fn join(comptime items: []const []const u8, comptime separator: []const u8) 
     }
 }
 
-/// `n` as an English ordinal for `{f}`: `1st`, `2nd`, `3rd`, `4th`, `11th`.
-pub fn ordinal(n: usize) std.fmt.Alt(usize, writeOrdinal) {
-    return .{ .data = n };
-}
-
-fn writeOrdinal(n: usize, w: *std.Io.Writer) std.Io.Writer.Error!void {
-    const suffix = if (n % 100 >= 11 and n % 100 <= 13) "th" else switch (n % 10) {
-        1 => "st",
-        2 => "nd",
-        3 => "rd",
-        else => "th",
-    };
-    try w.print("{d}{s}", .{ n, suffix });
-}
-
 const testing = std.testing;
 
 test editDistance {
@@ -122,12 +107,4 @@ test suggest {
 test sameName {
     try testing.expect(sameName("dry-run", "DRY_RUN"));
     try testing.expect(!sameName("dry-run", "dryrun"));
-}
-
-test ordinal {
-    var buffer: [64]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buffer, "{f} {f} {f} {f} {f} {f}", .{
-        ordinal(1), ordinal(2), ordinal(3), ordinal(4), ordinal(11), ordinal(22),
-    });
-    try testing.expectEqualStrings("1st 2nd 3rd 4th 11th 22nd", text);
 }

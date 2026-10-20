@@ -574,14 +574,15 @@ pub fn install(
     if (backed_up) dir.deleteFile(io, old_path) catch {};
 }
 
-/// Deletes `<exe>.old` and `<exe>.new` left by an earlier `install`; call it on start.
+/// Deletes `<exe>.old`, `<exe>.new`, and `<exe>.zip` left by an earlier `install` or
+/// `extractExecutable` cut short; call it on start.
 /// Files that do not exist are not an error.
 pub fn removeLeftovers(io: Io, dir: Io.Dir, exe_path: []const u8) error{
     NameTooLong,
     CleanupFailed,
 }!void {
     var buffer: [max_path]u8 = undefined;
-    for ([_][]const u8{ ".old", ".new" }) |suffix| {
+    for ([_][]const u8{ ".old", ".new", ".zip" }) |suffix| {
         const path = try sibling(&buffer, exe_path, suffix);
         dir.deleteFile(io, path) catch |err| switch (err) {
             error.FileNotFound => {},
@@ -599,10 +600,17 @@ fn stage(io: Io, dir: Io.Dir, new_path: []const u8, bytes: []const u8) InstallEr
     const file = dir.createFile(io, new_path, .{ .permissions = .executable_file }) catch
         return error.StageFailed;
     defer file.close(io);
-    file.writeStreamingAll(io, bytes) catch {
+    // Synced before the rename: otherwise a crash can persist the rename but not the data,
+    // leaving an empty executable after `<exe>.old` was removed.
+    writeSynced(io, file, bytes) catch {
         dir.deleteFile(io, new_path) catch {};
         return error.StageFailed;
     };
+}
+
+fn writeSynced(io: Io, file: Io.File, bytes: []const u8) !void {
+    try file.writeStreamingAll(io, bytes);
+    try file.sync(io);
 }
 
 /// Makes `<exe>.old`; false when there was no executable to back up.
@@ -1301,9 +1309,11 @@ test "removeLeftovers: deletes what is there, ignores what is not" {
     try removeLeftovers(testing.io, tmp.dir, "app");
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.old", .data = "x" });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.new", .data = "y" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.zip", .data = "z" });
     try removeLeftovers(testing.io, tmp.dir, "app");
     try expectMissing(tmp.dir, "app.old");
     try expectMissing(tmp.dir, "app.new");
+    try expectMissing(tmp.dir, "app.zip");
 }
 
 /// An in-memory transport: a URL-to-body map, recording what was requested.

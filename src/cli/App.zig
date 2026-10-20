@@ -2052,6 +2052,27 @@ const i18n_german: i18n.Translation = .{
     },
 };
 
+const PutArgs = struct { files: []const []const u8 = &.{} };
+const put_args = sets.args(PutArgs, field_.Set(.{field_.Spec(PutArgs){ .fields = .{
+    .files = .{ .each = &.{.minLen(2)} },
+} }}), .{ .fields = .{ .files = .{ .name = "file" } } });
+
+fn put(_: *Context, _: PutArgs) !void {}
+
+test "which value of a list failed, in the user's language" {
+    const root = comptime spec.command(.{ .name = "app", .args = put_args, .run = put });
+    const app: App = .{ .root = &root, .translations = &.{i18n_german} };
+    try expectRun(app, &.{ "ab", "c" }, 2, "", "app: <file> (value 2): must be at least 2 long\n" ++
+        "Run 'app --help' for usage.\n");
+    const de = try cli_testing.run(app, &.{ "ab", "c" }, .{ .env = &.{.{ "LANG", "de" }} });
+    defer de.deinit();
+    try testing.expect(std.mem.startsWith(
+        u8,
+        de.err,
+        "app: <file> (Wert 2): muss mindestens 2 lang sein\n",
+    ));
+}
+
 test "translations: help, the library's sentences, and the app's own, by locale" {
     const app: App = .{ .root = &i18n_root, .translations = &.{i18n_german} };
     const help_de = try cli_testing.run(app, &.{ "clean", "--help" }, .{

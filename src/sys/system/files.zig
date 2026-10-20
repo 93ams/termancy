@@ -17,6 +17,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const process = @import("process.zig");
+const dirs = @import("dirs.zig");
 
 const Permissions = Io.File.Permissions;
 const has_modes = @hasDecl(Permissions, "fromMode");
@@ -254,9 +255,10 @@ pub const Store = struct {
         };
     }
 
-    /// Whether `name` can name a blob: non-empty, at most 255 bytes, not `.` or `..`, and
-    /// without `/`, `\`, `:`, or control characters, so it stays inside the store on
-    /// every OS.
+    /// Whether `name` can name a blob: non-empty, at most 255 bytes, not `.` or `..`,
+    /// without `/`, `\`, `:`, or control characters, not a Windows device name (`CON`,
+    /// `nul.txt`), and not ending in a dot or a space, so it names a file inside the store
+    /// on every OS.
     pub fn isValidName(name: []const u8) bool {
         if (name.len == 0 or name.len > 255) return false;
         if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
@@ -264,7 +266,7 @@ pub const Store = struct {
             '/', '\\', ':', 0...0x1f, 0x7f => return false,
             else => {},
         };
-        return true;
+        return !dirs.isWindowsReserved(name);
     }
 };
 
@@ -485,7 +487,7 @@ test "store rejects names that would escape it" {
     defer tmp.cleanup();
     const store = try Store.open(testing.io, tmp.dir, "s");
     defer store.close(testing.io);
-    for ([_][]const u8{ "", ".", "..", "a/b", "a\\b", "c:x", "a\nb" }) |name| {
+    for ([_][]const u8{ "", ".", "..", "a/b", "a\\b", "c:x", "a\nb", "nul", "CON.json", "x." }) |name| {
         try testing.expect(!Store.isValidName(name));
         try testing.expectError(error.InvalidName, store.write(testing.io, name, ""));
         try testing.expectError(error.InvalidName, store.delete(testing.io, name));

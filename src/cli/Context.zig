@@ -276,33 +276,14 @@ pub fn plural(
 }
 
 fn renderArgs(arena: Allocator, template: []const u8, args: anytype) Allocator.Error![]const u8 {
-    const info = @typeInfo(@TypeOf(args)).@"struct";
-    var texts: [info.field_names.len][]const u8 = undefined;
-    inline for (info.field_names, info.field_types, 0..) |name, T, i| {
-        const value = @field(args, name);
-        texts[i] = if (comptime isString(T))
-            value
-        else switch (@typeInfo(T)) {
-            .int,
-            .comptime_int,
-            .float,
-            .comptime_float,
-            => try std.fmt.allocPrint(arena, "{d}", .{value}),
-            else => try std.fmt.allocPrint(arena, "{f}", .{value}),
-        };
+    const names = @typeInfo(@TypeOf(args)).@"struct".field_names;
+    var texts: [names.len][]const u8 = undefined;
+    inline for (names, &texts) |name, *text| {
+        var out: Io.Writer.Allocating = .init(arena);
+        field.writeArg(&out.writer, @field(args, name)) catch return error.OutOfMemory;
+        text.* = out.written();
     }
     return Messages.allocRender(arena, template, &texts);
-}
-
-fn isString(comptime T: type) bool {
-    return switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .slice => p.child == u8,
-            .one => @typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8,
-            else => false,
-        },
-        else => false,
-    };
 }
 
 /// Whether `log` writes messages of `level`.
@@ -886,6 +867,33 @@ test fail {
     };
     try testing.expectEqual(error.CommandFailed, ctx.fail("cannot open {s}", .{"x"}));
     try testing.expectEqualStrings("app: cannot open x\n", err.buffered());
+}
+
+test tr {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const ctx: Context = .{
+        .io = testing.io,
+        .gpa = testing.allocator,
+        .arena = arena.allocator(),
+        .environ = undefined,
+        .out = undefined,
+        .err = undefined,
+        .args = &.{},
+        .path = &.{},
+        .occurrences = &.{},
+        .app_name = "app",
+    };
+    const Ms = struct {
+        n: u32,
+        pub fn format(m: @This(), w: *Io.Writer) Io.Writer.Error!void {
+            try w.print("{d}ms", .{m.n});
+        }
+    };
+    try testing.expectEqualStrings(
+        "web: 3 in 1.5s, 20ms",
+        try ctx.tr("{0}: {1} in {2}s, {3}", .{ "web", 3, 1.5, Ms{ .n = 20 } }),
+    );
 }
 
 const Global = struct {

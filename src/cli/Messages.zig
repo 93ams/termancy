@@ -72,6 +72,9 @@ value_too_long: []const u8 = "{0}: must be at most {1} long",
 value_one_of: []const u8 = "{0}: must be one of {1}",
 /// {0} the flag or argument, {1} the pattern.
 value_must_match: []const u8 = "{0}: must match {1}",
+/// {0} a list flag or argument, {1} which of its values (1 for the first), for `{0}` in
+/// the messages above.
+nth_value: []const u8 = "{0} (value {1})",
 /// {0} a flag's environment variable, for `{1}` in the messages above.
 from_env: []const u8 = "(from ${0})",
 /// {0} where `App.defaults` reads, such as a file name, for `{1}` in the messages above.

@@ -11,6 +11,13 @@ const dotenv = @import("dotenv.zig");
 const zon = @import("zon.zig");
 const ini = @import("ini.zig");
 
+/// The length of the UTF-8 byte order mark `source` starts with, 0 or 3. Every parser
+/// starts after it, as editors on Windows often write one; spans keep counting from the
+/// start of `source`, so in-place edits keep it.
+pub fn bomLength(source: []const u8) usize {
+    return if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) 3 else 0;
+}
+
 /// What `Format.parse` can fail with.
 pub const ParseError = error{SyntaxError} || Allocator.Error;
 /// What `Format.write` can fail with.
@@ -248,4 +255,27 @@ test "write dispatch rejects what a format cannot spell" {
     out.clearRetainingCapacity();
     try Format.yaml.write(&out.writer, inf);
     try testing.expectEqualStrings(".inf\n", out.written());
+}
+
+test "every format reads past a byte order mark" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const cases = [_]struct { Format, []const u8 }{
+        .{ .json, "{\"a\": 1}" },
+        .{ .jsonc, "{\"a\": 1, // c\n}" },
+        .{ .toml, "a = 1\n" },
+        .{ .yaml, "a: 1\n" },
+        .{ .dotenv, "A=1\n" },
+        .{ .ini, "a=1\n" },
+        .{ .zon, ".{ .a = 1 }" },
+    };
+    for (cases) |case| {
+        const source = try std.mem.concat(a, u8, &.{ "\xEF\xBB\xBF", case[1] });
+        const tree = try case[0].parse(a, source, null);
+        const value = tree.lookup("a") orelse return error.TestExpectedKey;
+        try testing.expectEqualStrings("1", try std.fmt.allocPrint(a, "{f}", .{value}));
+    }
+    var reader: std.Io.Reader = .fixed("\xEF\xBB\xBF{\"a\": 1}");
+    try testing.expectEqual(1, (try json.parseReader(a, &reader, null)).lookup("a").?.int);
 }

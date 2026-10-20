@@ -92,6 +92,8 @@ pub const Grid = struct {
     /// Moves one step; a move into the short last row lands on its last part.
     pub fn move(grid: *Grid, direction: Direction) void {
         if (grid.count == 0) return;
+        // `count` may have shrunk under the focus (a filter): start from the last part.
+        grid.index = @min(grid.index, grid.count - 1);
         const columns = @max(grid.columns, 1);
         var r = grid.row();
         var c = grid.column();
@@ -181,4 +183,8 @@ test Grid {
     try testing.expectEqual(7, wrapping.index);
     wrapping.move(.down);
     try testing.expectEqual(1, wrapping.index);
+    // Fewer parts than before: focus comes back inside them instead of past the end.
+    var shrunk: Grid = .{ .count = 4, .columns = 3, .index = 7 };
+    shrunk.move(.down);
+    try testing.expectEqual(3, shrunk.index);
 }
