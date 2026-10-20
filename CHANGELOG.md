@@ -9,6 +9,14 @@ git history.
 
 ### Breaking
 
+- **`cfg.Value` has a date-time kind:** `.datetime` holds the text of a TOML offset
+  date-time, local date-time, local date, or local time, and `toml.parse` gives one where it
+  gave a `.string`. An exhaustive `switch` over a `cfg.Value` needs a `.datetime` arm. TOML
+  writes a `.datetime` bare and a `.string` always quoted; JSON and ZON write a date-time as
+  a string, and YAML, INI, and dotenv as plain text, which they read back as a string. A
+  `[]const u8` setting and `cfg.DateTime` decode it, `encode` makes one from a `DateTime`, a
+  schema's `string` type accepts it, and `cfg.infer` (so `cfg set`, `--set`, and flags)
+  infers one from text such as `2024-01-01`.
 - **`pub const meta` is gone; what a field means and how it is spelled are separate:** what
   a field means (help, `secret`, `deprecated`, and checks) is a `field.Spec`, in the new
   `field` library that `cli` and `cfg` both import, keyed by type so one spec covers every
@@ -469,6 +477,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: converting to TOML (`termancy cfg convert`, `toml.write`) no longer turns a string
+  that reads like a date (`{"d": "2024-01-01"}`) into a TOML date for every other reader; it
+  stays a quoted string, and so does a new key set with `cfg set --string`.
 - A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new
   `Messages.nth_value`, translated in the bundled tables, instead of an English
   `(2nd value)`. `field.ordinal`, now unused, is gone.
