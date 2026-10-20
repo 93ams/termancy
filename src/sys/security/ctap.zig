@@ -198,7 +198,8 @@ pub const Channel = struct {
                 },
             }
         };
-        if (len > out.len) return error.InvalidResponse;
+        // Past `max_payload` the u7 sequence numbers run out (and `seq` overflows).
+        if (len > @min(out.len, max_payload)) return error.InvalidResponse;
         const first = @min(len, init_data);
         @memcpy(out[0..first], report[7..][0..first]);
         var filled: usize = first;
@@ -1183,6 +1184,36 @@ test "Channel: INIT, then messages over many packets both ways" {
     key.out_len = 0;
     key.out_read = 0;
     try testing.expectError(error.Timeout, channel.receive(.ping, &out, null));
+}
+
+test "Channel: a reply longer than CTAPHID allows is refused, whatever the buffer" {
+    // A key that announces 65535 bytes, then sends continuation packets forever.
+    const Endless = struct {
+        sent: usize = 0,
+
+        fn read(context: *anyopaque, report: *Report, _: u32) Device.Error!void {
+            const endless: *@This() = @ptrCast(@alignCast(context));
+            report.* = @splat(0);
+            std.mem.writeInt(u32, report[0..4], 7, .big);
+            if (endless.sent == 0) {
+                report[4] = 0x80 | @as(u8, @backingInt(Command.ping));
+                std.mem.writeInt(u16, report[5..7], 0xffff, .big);
+            } else report[4] = @truncate(endless.sent - 1);
+            endless.sent += 1;
+        }
+
+        fn write(_: *anyopaque, _: *const Report) Device.Error!void {}
+    };
+    var endless: Endless = .{};
+    const vtable: Device.VTable = .{ .read = Endless.read, .write = Endless.write };
+    var channel: Channel = .{
+        .device = .{ .context = &endless, .vtable = &vtable },
+        .cid = 7,
+        .io = testing.io,
+    };
+    const out = try testing.allocator.alloc(u8, 0xffff);
+    defer testing.allocator.free(out);
+    try testing.expectError(error.InvalidResponse, channel.receive(.ping, out, null));
 }
 
 test "getInfo" {

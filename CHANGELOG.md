@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `ctap.Channel.transact` refuses a reply longer than CTAPHID's 7609 bytes whatever the size
+  of `out`: with a larger buffer, a key announcing 65535 bytes overflowed the sequence
+  number at its 256th continuation packet.
 - `ctap.getAssertion` reads a credential or user map whose keys are not all text whole: a
   key that was not text was skipped without its value, so a key (`h'bb'` in
   `{1: "id", h'bb': 0}`) could be taken for the ID and the rest of the response misread.
