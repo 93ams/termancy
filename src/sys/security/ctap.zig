@@ -485,7 +485,8 @@ fn readId(r: *cbor.Reader) cbor.Error![]const u8 {
 }
 
 pub const AssertError = CommandError || error{
-    /// The request options name no RP ID and none can be taken from `origin`.
+    /// `origin` has no host for the RP ID, or the request options name an RP ID it may not
+    /// use (`webauthn.rpIdFor`).
     InvalidOrigin,
 };
 
@@ -500,7 +501,7 @@ pub const AssertOptions = struct {
 
 /// A whole `navigator.credentials.get()` against one key: builds clientDataJSON for
 /// `options` and `origin`, asks the key, and returns the assertion, in `arena`. The RP ID
-/// defaults to the host of `origin`.
+/// defaults to the host of `origin`, and must be that host or a domain it is under.
 pub fn assert(
     arena: Allocator,
     channel: *Channel,
@@ -508,7 +509,7 @@ pub fn assert(
     origin: []const u8,
     how: AssertOptions,
 ) AssertError!webauthn.Assertion {
-    const rp_id = options.rp_id orelse hostOf(origin) orelse return error.InvalidOrigin;
+    const rp_id = webauthn.rpIdFor(options.rp_id, origin) orelse return error.InvalidOrigin;
     var client: Io.Writer.Allocating = .init(arena);
     const data: webauthn.ClientData = .{ .challenge = options.challenge, .origin = origin };
     data.writeJson(&client.writer) catch return error.OutOfMemory;
@@ -803,14 +804,6 @@ pub fn getPinToken(
         return token;
     }
     return error.RequestTooLarge;
-}
-
-/// The host of an origin such as `https://example.com:8443`.
-fn hostOf(origin: []const u8) ?[]const u8 {
-    const scheme_end = std.mem.indexOf(u8, origin, "://") orelse return null;
-    const rest = origin[scheme_end + 3 ..];
-    const end = std.mem.indexOfAny(u8, rest, ":/") orelse rest.len;
-    return if (end == 0) null else rest[0..end];
 }
 
 /// Whether a HID report descriptor declares the FIDO usage page (0xF1D0) and the CTAPHID
@@ -1265,6 +1258,11 @@ test "assert: an assertion from the key verifies with webauthn.verify" {
     };
     try testing.expectError(error.NoCredentials, assert(a, &channel, unknown, origin, .{}));
     try testing.expectError(error.InvalidOrigin, assert(a, &channel, unknown, "example", .{}));
+    // The key holds a credential for another RP: an origin may not ask for its ID.
+    var phish = options;
+    phish.rp_id = "example.com";
+    const evil = "https://evil.example";
+    try testing.expectError(error.InvalidOrigin, assert(a, &channel, phish, evil, .{}));
 }
 
 test "assert with a PIN, over either protocol" {
@@ -1344,13 +1342,6 @@ test statusError {
     try testing.expectEqual(error.PinInvalid, statusError(0x31));
     try testing.expectEqual(error.PinBlocked, statusError(0x32));
     try testing.expectEqual(error.AuthenticatorError, statusError(0x7f));
-}
-
-test hostOf {
-    try testing.expectEqualStrings("example.com", hostOf("https://example.com").?);
-    try testing.expectEqualStrings("a.example", hostOf("https://a.example:8443/x").?);
-    try testing.expectEqual(null, hostOf("https://"));
-    try testing.expectEqual(null, hostOf("example.com"));
 }
 
 test isFido {

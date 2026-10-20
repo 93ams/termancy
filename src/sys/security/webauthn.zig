@@ -280,6 +280,23 @@ fn writeCcdString(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
     try writer.writeByte('"');
 }
 
+/// The RP ID a client may ask for on behalf of `origin` (WebAuthn §5.1.4.1): `rp_id` when it
+/// is the origin's host or a domain the host is under, the host when `rp_id` is null, else
+/// null, as for an `https://evil.example` that asks for `bank.example`.
+// shortcut: no public suffix list, so `com` passes for any .com origin (no key holds a
+// credential for it); upgrade if a caller relies on this to refuse public suffixes.
+pub fn rpIdFor(rp_id: ?[]const u8, origin: []const u8) ?[]const u8 {
+    const scheme_end = std.mem.indexOf(u8, origin, "://") orelse return null;
+    const rest = origin[scheme_end + 3 ..];
+    const end = std.mem.indexOfAny(u8, rest, ":/") orelse rest.len;
+    if (end == 0) return null;
+    const host = rest[0..end];
+    const id = rp_id orelse return host;
+    const under = std.mem.endsWith(u8, host, id) and
+        (host.len == id.len or host[host.len - id.len - 1] == '.');
+    return if (id.len > 0 and under) id else null;
+}
+
 /// What the relying party expects of an assertion.
 pub const Expected = struct {
     ceremony: Ceremony = .get,
@@ -884,6 +901,20 @@ test "verifyAssertion and the challenge check" {
     short.authenticator_data = short.authenticator_data[0..10];
     try e(error.InvalidAuthenticatorData, verifyAssertion(a, short, expected));
     try e(error.InvalidJson, verifyClientData(a, "not json", expected));
+}
+
+test rpIdFor {
+    const eq = std.testing.expectEqualStrings;
+    try eq("example.com", rpIdFor(null, "https://example.com").?);
+    try eq("a.example", rpIdFor(null, "https://a.example:8443/x").?);
+    try eq("example.com", rpIdFor("example.com", "https://example.com").?);
+    try eq("example.com", rpIdFor("example.com", "https://login.example.com:8443").?);
+    try std.testing.expectEqual(null, rpIdFor("bank.example", "https://evil.example"));
+    try std.testing.expectEqual(null, rpIdFor("example.com", "https://notexample.com"));
+    try std.testing.expectEqual(null, rpIdFor("login.example.com", "https://example.com"));
+    try std.testing.expectEqual(null, rpIdFor("", "https://example.com"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://"));
+    try std.testing.expectEqual(null, rpIdFor(null, "example.com"));
 }
 
 test "AuthenticatorData.parse" {

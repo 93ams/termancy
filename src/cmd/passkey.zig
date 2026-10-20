@@ -142,6 +142,9 @@ fn attachmentOf(authenticator: Authenticator) windows_hello.Attachment {
     };
 }
 
+const invalid_origin = "--origin names no host, or the options name an RP ID that is not " ++
+    "its host or a domain it is under";
+
 fn helloFailed(ctx: *cli.Context, err: windows_hello.Error) error{ CommandFailed, OutOfMemory } {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
@@ -151,7 +154,7 @@ fn helloFailed(ctx: *cli.Context, err: windows_hello.Error) error{ CommandFailed
             "this authenticator already has a credential for the account",
             .{},
         ),
-        error.InvalidOrigin => ctx.fail("--origin names no host, and the options no RP ID", .{}),
+        error.InvalidOrigin => ctx.fail(invalid_origin, .{}),
         error.Unavailable => ctx.fail("Windows Hello is not available here (webauthn.dll)", .{}),
         error.Failed => ctx.fail("Windows Hello refused the request", .{}),
     };
@@ -163,6 +166,7 @@ fn securityKeyAssert(
     options: webauthn.RequestOptions,
     flags: GetFlags,
 ) !webauthn.Assertion {
+    if (webauthn.rpIdFor(options.rp_id, flags.origin) == null) return ctx.fail(invalid_origin, .{});
     const paths = try ctap.Hidraw.list(ctx.arena, ctx.io);
     if (paths.len == 0) return ctx.fail("no FIDO security key found (in /dev/hidraw*)", .{});
     var hid = ctap.Hidraw.open(ctx.io, paths[0]) catch |err|
