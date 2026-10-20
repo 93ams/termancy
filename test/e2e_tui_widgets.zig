@@ -377,7 +377,9 @@ const PtyCase = struct {
     then_wait_for: []const u8 = "",
     then_count: u8 = 1,
     then_keys: []const u8 = "",
-    /// Needs bash, for job control (`set -m`, `fg`); skipped without it.
+    /// Needs bash, for job control (`set -m`, `fg`); skipped without it, and on macOS, where
+    /// bash under BSD `script` does not resume a stopped job (the program stops, nothing
+    /// runs `fg`).
     bash: bool = false,
 };
 
@@ -646,7 +648,7 @@ pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
     };
     const sh = b.findProgram(.{ .names = &.{"sh"} }) orelse return;
     _ = b.findProgram(.{ .names = &.{"script"} }) orelse return;
-    const bash = b.findProgram(.{ .names = &.{"bash"} }) != null;
+    const bash = os == .linux and b.findProgram(.{ .names = &.{"bash"} }) != null;
     for (pty_cases) |case| if (bash or !case.bash) addPtyCase(b, exe, step, sh, case);
 }
 
