@@ -30,6 +30,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const display = @import("term").width;
+const isString = @import("field").isString;
 
 /// What `-o`/`--output` chooses.
 pub const Format = @import("spec.zig").Output;
@@ -381,17 +382,6 @@ fn cell(arena: Allocator, value: anytype) Allocator.Error![]const u8 {
 fn hasFormat(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .@"struct", .@"enum", .@"union" => @hasDecl(T, "format"),
-        else => false,
-    };
-}
-
-fn isString(comptime T: type) bool {
-    return switch (@typeInfo(T)) {
-        .pointer => |p| switch (p.size) {
-            .slice => p.child == u8,
-            .one => @typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8,
-            else => false,
-        },
         else => false,
     };
 }

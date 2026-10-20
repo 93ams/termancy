@@ -27,15 +27,6 @@ pub const Error = error{
     TrailingBackslash,
 } || Allocator.Error;
 
-/// A message for a tokenizing error, for the user.
-pub fn describe(err: Error) []const u8 {
-    return switch (err) {
-        error.UnterminatedQuote => "unterminated quote",
-        error.TrailingBackslash => "line ends with a backslash",
-        error.OutOfMemory => "out of memory",
-    };
-}
-
 const State = enum { space, word, comment, single, double };
 
 /// Splits `line` into words. Words and the list are allocated from `arena`; the caller frees
@@ -203,7 +194,6 @@ test "tokenize: errors" {
     try expectError("say \"hi", error.UnterminatedQuote);
     try expectError("\"\\\"", error.UnterminatedQuote);
     try expectError("tail\\", error.TrailingBackslash);
-    try testing.expectEqualStrings("unterminated quote", describe(error.UnterminatedQuote));
 }
 
 test quote {
