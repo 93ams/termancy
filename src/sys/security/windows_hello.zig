@@ -8,7 +8,12 @@
 //! ```zig
 //! if (windows_hello.apiVersion() == null) return error.NoWindowsHello;
 //! const registration = try windows_hello.register(arena, creation, "https://example.com", .{});
-//! const credential = try registration.credential(); // what the relying party keeps
+//! // What the relying party keeps, once it has checked the registration.
+//! const credential = try registration.credential(arena, .{
+//!     .challenge = creation.challenge,
+//!     .origin = "https://example.com",
+//!     .rp_id = "example.com",
+//! });
 //! const assertion = try windows_hello.assert(arena, options, "https://example.com", .{});
 //! try assertion.writeJson(out);
 //! ```

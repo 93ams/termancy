@@ -655,9 +655,22 @@ pub const Registration = struct {
     /// The CBOR attestation object, for a relying party that checks attestation.
     attestation_object: []const u8,
 
-    /// What the relying party keeps: the public key and the first signature count. The
-    /// caller still checks clientDataJSON (type `webauthn.create`, challenge, origin).
-    pub fn credential(r: Registration) (PublicKey.Error || error{InvalidAuthenticatorData})!Credential {
+    /// What the relying party keeps: the public key and the first signature count, once
+    /// the checks of WebAuthn §7.1 that need no stored state pass, as `verifyAssertion`
+    /// makes them (`expected.ceremony` is taken as `create`). Attestation is not checked.
+    pub fn credential(
+        r: Registration,
+        arena: Allocator,
+        expected: Expected,
+    ) (VerifyError || PublicKey.Error)!Credential {
+        var create = expected;
+        create.ceremony = .create;
+        try verifyAssertion(arena, .{
+            .raw_id = r.raw_id,
+            .client_data_json = r.client_data_json,
+            .authenticator_data = r.authenticator_data,
+            .signature = "",
+        }, create);
         const attested = try attestedCredential(r.authenticator_data);
         if (!std.mem.eql(u8, attested.id, r.raw_id)) return error.InvalidAuthenticatorData;
         const data: AuthenticatorData = try .parse(r.authenticator_data);
@@ -930,10 +943,14 @@ test "AuthenticatorData.parse" {
 }
 
 test "a registration's credential: ID, COSE key, and first count" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
     const point = EcdsaP256.KeyPair.generate(std.testing.io).public_key.toUncompressedSec1();
     const cose = testCoseEs256(point);
     const id = "credential-7";
     var bytes: [AuthenticatorData.min_len + 18 + id.len + cose.len + 1]u8 = @splat(0);
+    Sha256.hash("example.com", bytes[0..32], .{});
     bytes[32] = 0xc5; // user present and verified, attested credential and extension data
     std.mem.writeInt(u32, bytes[33..37], 3, .big);
     bytes[37] = 0xaa; // first byte of the AAGUID
@@ -946,19 +963,42 @@ test "a registration's credential: ID, COSE key, and first count" {
     try std.testing.expectEqualStrings(id, attested.id);
     try std.testing.expectEqualSlices(u8, &cose, attested.public_key);
 
+    const challenge = "0123456789abcdef";
+    const origin = "https://example.com";
+    var client: Io.Writer.Allocating = .init(a);
+    const data: ClientData = .{ .ceremony = .create, .challenge = challenge, .origin = origin };
+    try data.writeJson(&client.writer);
     const registration: Registration = .{
         .raw_id = id,
-        .client_data_json = "{}",
+        .client_data_json = client.written(),
         .authenticator_data = &bytes,
         .attestation_object = &.{},
     };
-    const credential = try registration.credential();
+    const rp_id = "example.com";
+    const expected: Expected = .{ .challenge = challenge, .origin = origin, .rp_id = rp_id };
+    const credential = try registration.credential(a, expected);
     try std.testing.expectEqualSlices(u8, &point, &credential.public_key.es256);
     try std.testing.expectEqual(3, credential.sign_count);
 
+    const e = std.testing.expectError;
     var other = registration;
     other.raw_id = "another";
-    try std.testing.expectError(error.InvalidAuthenticatorData, other.credential());
+    try e(error.InvalidAuthenticatorData, other.credential(a, expected));
+    // Made for another RP, without the user's touch, or with an assertion's client data.
+    var elsewhere = expected;
+    elsewhere.rp_id = "evil.example";
+    try e(error.RpIdMismatch, registration.credential(a, elsewhere));
+    bytes[32] = 0xc4;
+    try e(error.UserNotPresent, registration.credential(a, expected));
+    bytes[32] = 0xc1;
+    var verified = expected;
+    verified.user_verification = .required;
+    try e(error.UserNotVerified, registration.credential(a, verified));
+    other = registration;
+    var get: Io.Writer.Allocating = .init(a);
+    try (ClientData{ .challenge = challenge, .origin = origin }).writeJson(&get.writer);
+    other.client_data_json = get.written();
+    try e(error.WrongCeremony, other.credential(a, expected));
     bytes[32] = 0x05; // no attested credential data
     try std.testing.expectError(error.InvalidAuthenticatorData, attestedCredential(&bytes));
     bytes[32] = 0x45;

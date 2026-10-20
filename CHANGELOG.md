@@ -469,6 +469,10 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `webauthn.Registration.credential(arena, expected)` makes the registration checks
+  `verifyAssertion` makes for a sign-in (client data of type `webauthn.create`, challenge,
+  origin, RP ID hash, user presence, and verification when required): it read the key of a
+  credential made for any RP, without the user's touch.
 - `passkey get` and `create`, `ctap.assert`, and `windows_hello.assert` and `register` refuse
   an RP ID that is not the host of `--origin` or a domain it is under (WebAuthn's client
   check): options from `https://evil.example` naming `rpId` `bank.example` were signed for
