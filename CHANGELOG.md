@@ -481,6 +481,8 @@ From a review before the repository went public:
   passes over it, 16 lanes) and checked before they are paid; a file from elsewhere
   saying `m=4294967295` ran the machine out of memory, `t=4294967295` for hours.
   `encrypted.encrypt` refuses the same costs, so what it writes can be read.
+- `encrypted.encrypt` and `cfg encrypt --passphrase ''` refuse an empty passphrase
+  (`error.EmptyPassphrase`), which made a file anyone could open.
 - `cfg`: `Config.markSecret` after a `get` also redacts the references that had already
   expanded the secret (`url = "pg://u:${password}@h"`); `write` and `snapshot` showed them
   in plain text.

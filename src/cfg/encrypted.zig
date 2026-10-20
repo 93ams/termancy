@@ -66,6 +66,8 @@ pub const Error = error{
     WeakParameters,
     /// The system has no secure random numbers to give.
     EntropyUnavailable,
+    /// `encrypt` was given an empty passphrase, which protects nothing.
+    EmptyPassphrase,
 } || Allocator.Error;
 
 const salt_len = 16;
@@ -87,6 +89,7 @@ pub fn encrypt(
     format: Format,
     params: Params,
 ) Error![]const u8 {
+    if (passphrase.len == 0) return error.EmptyPassphrase;
     const header = try std.fmt.allocPrint(arena, "{s} v1 argon2id t={d} m={d} p={d} format={t}", .{
         magic, params.t, params.m, params.p, format,
     });
@@ -278,4 +281,11 @@ test "costs past the ceiling are refused before they are paid" {
     const greedy: Params = .{ .t = 1, .m = 2 * Params.max_m };
     const sealed = encrypt(a, testing.io, "a = 1", "p", .toml, greedy);
     try testing.expectError(error.WeakParameters, sealed);
+}
+
+test "an empty passphrase is refused" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const sealed = encrypt(arena.allocator(), testing.io, "a = 1", "", .toml, test_params);
+    try testing.expectError(error.EmptyPassphrase, sealed);
 }
