@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `oauth.DevicePoll.next` no longer overflows when a server that sent an `interval` near
+  2^32 then answers `slow_down`; the interval stops at its largest.
 - `webauthn.Registration.credential(arena, expected)` makes the registration checks
   `verifyAssertion` makes for a sign-in (client data of type `webauthn.create`, challenge,
   origin, RP ID hash, user presence, and verification when required): it read the key of a
