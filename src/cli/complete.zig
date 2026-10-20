@@ -238,7 +238,7 @@ fn subcommandFor(cmd: *const Command, word: []const u8, prefix: bool) ?*const Co
     if (!prefix or word.len == 0) return null;
     var found: ?*const Command = null;
     for (cmd.subcommands) |*sub| {
-        if (!advertised(sub.*) or !std.mem.startsWith(u8, sub.name, word)) continue;
+        if (!advertised(sub.*) or !sub.startsWith(word)) continue;
         if (found != null) return null;
         found = sub;
     }
@@ -371,6 +371,10 @@ const bash_script =
     \\_@IDENT@_complete() {
     \\    local cur="${COMP_WORDS[COMP_CWORD]}"
     \\    local IFS=$'\n'
+    \\    # Candidates are words, not patterns: `lines=($(...))` must not expand `photo[1].jpg`.
+    \\    local glob=1
+    \\    [[ $- == *f* ]] && glob=0
+    \\    set -f
     \\    # bash splits `--flag=value` at the `=`; join the pieces back into one word.
     \\    local -a words=()
     \\    local i n=0 joined=0
@@ -418,6 +422,7 @@ const bash_script =
     \\    elif ((paths)); then
     \\        compopt -o filenames 2>/dev/null
     \\    fi
+    \\    ((glob)) && set +f
     \\    return 0
     \\}
     \\complete -o default -F _@IDENT@_complete @NAME@
@@ -476,7 +481,15 @@ const fish_script =
     \\    set -l current (commandline -ct)
     \\    set -l prefix ''
     \\    set -l value $current
-    \\    for line in (@NAME@ __complete2 $tokens[2..-1] $current 2>/dev/null)
+    \\    set -l lines (@NAME@ __complete2 $tokens[2..-1] $current 2>/dev/null)
+    \\    # Nothing to offer: file names, here rather than in a second `complete` whose
+    \\    # condition would run the program again on every Tab.
+    \\    if test (count $lines) -eq 0
+    \\        set -l found $current*
+    \\        printf '%s\n' $found
+    \\        return
+    \\    end
+    \\    for line in $lines
     \\        switch $line
     \\            case ':prefix *'
     \\                set prefix (string sub -s 9 -- $line)
@@ -495,9 +508,7 @@ const fish_script =
     \\        end
     \\    end
     \\end
-    \\complete -c @NAME@ -f -n 'test (count (__@IDENT@_complete)) -gt 0' \
-    \\    -a '(__@IDENT@_complete)'
-    \\complete -c @NAME@ -F -n 'test (count (__@IDENT@_complete)) -eq 0'
+    \\complete -c @NAME@ -f -a '(__@IDENT@_complete)'
     \\
 ;
 
@@ -698,6 +709,7 @@ const test_root = spec.command(.{
     .subcommands = .{
         spec.command(.{
             .name = "serve",
+            .aliases = &.{"run"},
             .summary = "Start",
             .flags = sets.flags(struct {
                 port: u16 = 1,
@@ -1017,6 +1029,10 @@ test "completion descends through an unambiguous prefix when the app accepts one
     try testing.expectEqualStrings("", out.written());
     out.clearRetainingCapacity();
     try candidates(&out.writer, &test_root, words, .{ .prefix_matching = true });
+    try testing.expectEqualStrings("--port\t\n", out.written());
+    // A prefix of an alias, as the parser takes it.
+    out.clearRetainingCapacity();
+    try candidates(&out.writer, &test_root, &.{ "ru", "--p" }, .{ .prefix_matching = true });
     try testing.expectEqualStrings("--port\t\n", out.written());
 }
 

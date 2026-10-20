@@ -400,7 +400,7 @@ fn wasGiven(ctx: *const Context, flag: *const Flag) bool {
 }
 
 /// Names a failed check by what the user typed: `--public-port: must be at least 1`,
-/// `--public-*: ...` for a group, `<src>: ...` for a positional, `--tag (2nd value): ...`.
+/// `--public-*: ...` for a group, `<src>: ...` for a positional, `--tag (value 2): ...`.
 const Report = struct {
     ctx: *Context,
     flags: []const Flag = &.{},
@@ -429,12 +429,12 @@ const Report = struct {
         if (path.end == 0) return r.ctx.invalid("{s}", .{said});
         var label_buffer: [256]u8 = undefined;
         var label = r.labelOf(path.buffered(), &label_buffer);
-        if (index) |i| label = try std.fmt.allocPrint(
-            r.ctx.arena,
-            "{s} ({f} value)",
-            .{ label, field_.ordinal(i + 1) },
-        );
         const m = r.ctx.messages;
+        if (index) |i| label = try Messages.allocRender(
+            r.ctx.arena,
+            m.nth_value,
+            &.{ label, try std.fmt.allocPrint(r.ctx.arena, "{d}", .{i + 1}) },
+        );
         const a = about orelse return r.ctx.invalid("{s}: {s}", .{ label, said });
         const arena = r.ctx.arena;
         const line = switch (a) {

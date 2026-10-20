@@ -469,6 +469,23 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new
+  `Messages.nth_value`, translated in the bundled tables, instead of an English
+  `(2nd value)`. `field.ordinal`, now unused, is gone.
+- With `App.prefix_matching`, completion descends through a prefix of a subcommand's alias
+  as the parser does (`app ru <Tab>` for `serve`, alias `run`); it took names only.
+- fish completion runs the program once per Tab, not three times (each `complete`
+  condition ran it again), so slow completers answer three times sooner.
+- bash completion no longer expands candidates as file patterns: `photo[1].jpg` stayed
+  `photo[1].jpg` only when no `photo1.jpg` existed, and under `shopt -s nullglob` a
+  candidate holding `*`, `?`, or `[` (even in its description) disappeared.
+- `field.checkOne` returns the failed check's `About` when its reason does not fit the
+  writer, as `field.validate` does, instead of `error.WriteFailed`.
+- `field`: `.min` and `.max` on a float reject NaN; `--ratio nan` (or `nan` in a TOML file)
+  passed both.
+- `cli`: a switch set to false (`--no-yaml`, or `yaml = false` in a configuration or its
+  variable) no longer counts as given for `.exclusive`, `.together`, and `.requires`, so
+  `serve --json` works with `yaml = false` in the configuration.
 - `term.vt`: a cursor position query (`CSI 6n`) in origin mode with the cursor restored
   above the scroll region no longer crashes `freeze -x`, `explain`, and `record`.
 - `term.markdown` and `termancy md`: control characters in a document are dropped, so a

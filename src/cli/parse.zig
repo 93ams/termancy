@@ -264,10 +264,7 @@ const Parser = struct {
         var found: ?*const Command = null;
         for (current.subcommands) |*sub| {
             if (sub.hidden or sub.deprecated != null) continue;
-            const matches = std.mem.startsWith(u8, sub.name, prefix) or for (sub.aliases) |alias| {
-                if (std.mem.startsWith(u8, alias, prefix)) break true;
-            } else false;
-            if (!matches) continue;
+            if (!sub.startsWith(prefix)) continue;
             if (found) |other| return p.fail(
                 p.messages().ambiguous_command,
                 &.{ prefix, try p.pathText(), other.name, sub.name },
@@ -596,6 +593,7 @@ const Parser = struct {
             }
         }
         for (p.occurrences.items) |occurrence| {
+            if (!inUse(occurrence)) continue;
             for (occurrence.flag.requires) |name| {
                 if (!p.givenName(name)) {
                     return p.fail(p.messages().requires_flag, &.{ occurrence.flag.name, name });
@@ -685,9 +683,11 @@ const Parser = struct {
         return false;
     }
 
+    /// Whether the flag `name` is in use (see `inUse`): `--no-x` and `x = false` in a
+    /// configuration are not.
     fn givenName(p: *const Parser, name: []const u8) bool {
         for (p.occurrences.items) |occurrence| {
-            if (std.mem.eql(u8, occurrence.flag.name, name)) return true;
+            if (std.mem.eql(u8, occurrence.flag.name, name) and inUse(occurrence)) return true;
         }
         return false;
     }
@@ -697,6 +697,11 @@ const Parser = struct {
     }
 };
 
+/// Whether `occurrence` uses its flag, for constraints: a switch set to false is not used.
+fn inUse(occurrence: Occurrence) bool {
+    return occurrence.flag.kind != .bool or !std.mem.eql(u8, occurrence.value, "false");
+}
+
 /// Whether `value` is one of a string flag's `.one_of` values. Enums are checked by their
 /// own parser, so other kinds always pass.
 fn inChoices(flag: *const Flag, value: []const u8) bool {
@@ -705,7 +710,6 @@ fn inChoices(flag: *const Flag, value: []const u8) bool {
     return false;
 }
 
-/// A flag value as a number, for bounds: integers in any base the flag accepts, or floats.
 /// The count a counter flag's environment variable holds, or null when it is not one.
 pub fn envCount(value: []const u8) ?usize {
     return std.fmt.parseInt(usize, value, 10) catch null;
@@ -1039,6 +1043,25 @@ test "together and one_required constraints" {
             try testing.expectEqualStrings(case.message, usage.message);
         }
     }
+}
+
+test "a switch set to false does not count against exclusive flags" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var usage: Usage = .{};
+    _ = try parseTest(arena.allocator(), &.{ "serve", "--no-yaml", "--json" }, &usage);
+    const config = struct {
+        fn lookup(_: ?*anyopaque, _: []const *const Command, flag: *const Flag) ?[]const u8 {
+            return if (std.mem.eql(u8, flag.name, "yaml")) "false" else null;
+        }
+    };
+    const options: Options = .{ .defaults = .{ .lookup = config.lookup } };
+    _ = try parse(arena.allocator(), &test_root, &.{ "serve", "--json" }, options, &usage);
+    try testing.expectError(
+        error.UsageError,
+        parseTest(arena.allocator(), &.{ "serve", "--yaml", "--json" }, &usage),
+    );
+    try testing.expectEqualStrings("flags --json and --yaml cannot be used together", usage.message);
 }
 
 test "split values from the environment are checked element by element" {

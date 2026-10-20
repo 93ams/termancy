@@ -19,7 +19,8 @@ pub fn fail(w: *std.Io.Writer, comptime template: []const u8, args: anytype) Err
     var texts: std.Io.Writer = .fixed(&bytes);
     var ends: [fields.len]usize = undefined;
     inline for (fields, 0..) |field_name, i| {
-        writeArg(&texts, @field(args, field_name));
+        // One that does not fit is cut short.
+        writeArg(&texts, @field(args, field_name)) catch {};
         ends[i] = texts.end;
     }
     var slices: [fields.len][]const u8 = undefined;
@@ -54,19 +55,19 @@ fn checkTemplate(comptime template: []const u8, comptime count: usize) void {
     }
 }
 
-/// Writes one argument as text: a string as it is, a number in decimal, anything else with
-/// its `format` method. One that does not fit is cut short.
-fn writeArg(w: *std.Io.Writer, arg: anytype) void {
+/// Writes one argument of a template as text: a string as it is, a number in decimal,
+/// anything else with its `format` method.
+pub fn writeArg(w: *std.Io.Writer, arg: anytype) std.Io.Writer.Error!void {
     const T = @TypeOf(arg);
-    (if (comptime isString(T))
-        w.writeAll(arg)
-    else switch (@typeInfo(T)) {
+    if (comptime isString(T)) return w.writeAll(arg);
+    return switch (@typeInfo(T)) {
         .int, .comptime_int, .float, .comptime_float => w.print("{d}", .{arg}),
         else => w.print("{f}", .{arg}),
-    }) catch {};
+    };
 }
 
-fn isString(comptime T: type) bool {
+/// Whether `T` is a string: a slice of bytes, or a pointer to an array of them.
+pub fn isString(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .pointer => |p| switch (p.size) {
             .slice => p.child == u8,
@@ -280,7 +281,9 @@ pub fn Check(comptime V: type) type {
         }
 
         fn less(a: V, b: V) bool {
-            if (@typeInfo(V) == .int or @typeInfo(V) == .float) return a < b;
+            if (@typeInfo(V) == .int) return a < b;
+            // Not `a < b`: NaN must fail both `.min` and `.max`.
+            if (@typeInfo(V) == .float) return !(a >= b);
             return V.order(a, b) == .lt;
         }
 
@@ -384,6 +387,12 @@ test "built-in checks pass, fail with a reason, and describe themselves" {
     const check: Check(u16) = .max(10);
     try testing.expectEqual(10, check.about.?.max.number.?);
     try testing.expectEqualStrings("10", check.about.?.max.text);
+}
+
+test "NaN is out of every bound" {
+    try testing.expectEqualStrings("must be at least 0", try runs(f64, .min(0), std.math.nan(f64)));
+    try testing.expectEqualStrings("must be at most 1", try runs(f64, .max(1), std.math.nan(f64)));
+    try testing.expectEqualStrings("", try runs(f64, .max(1), 1));
 }
 
 const Millis = struct {
