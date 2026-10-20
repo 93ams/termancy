@@ -469,6 +469,10 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: expansion adds at most `max_expanded_len` (16 MiB) of text, in a dotenv file
+  (`dotenv.max_expanded_len`, a syntax error past it) and through `${key}` references
+  (`Config.max_expanded_len`, reported by `checkReferences`). A few hundred bytes that
+  double a value line by line used to ask for gigabytes.
 - `cfg`: every format reads a file that starts with a UTF-8 byte order mark, as Windows
   editors write, and in-place edits keep it. INI used to read the mark into the first key's
   name, so that key was silently missing; TOML, JSON, JSONC, and dotenv rejected the file.

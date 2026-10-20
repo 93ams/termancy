@@ -75,6 +75,10 @@ pub const redacted = "<redacted>";
 
 /// Files larger than this are refused by `loadFile`.
 pub const max_file_size = 16 * 1024 * 1024;
+/// The most text `${key}` references may add to the effective tree: `b = "${a}${a}"`,
+/// `c = "${b}${b}"`, ... doubles with each key. A reference past it stays as written, and
+/// `checkReferences` reports it.
+pub const max_expanded_len = max_file_size;
 
 gpa: Allocator,
 /// Long-lived: layers, their sources, settings, decoded results.
@@ -1694,6 +1698,8 @@ const Expander = struct {
     chain: std.ArrayList([]const u8) = .empty,
     /// When set, only these keys need expanding; every other value already is.
     pending: ?*const std.StringHashMapUnmanaged(void) = null,
+    /// Bytes references have added so far.
+    expanded: usize = 0,
 
     /// Expands the value at `key` in place; returns whether that succeeded.
     fn expand(e: *Expander, key: []const u8) Allocator.Error!bool {
@@ -1741,8 +1747,13 @@ const Expander = struct {
                 break;
             };
             const target = try e.config.foldKey(text[i + 2 .. close]);
-            const replacement = try e.lookup(key, target);
+            var replacement = try e.lookup(key, target);
+            if (replacement) |r| if (e.expanded + r.len > max_expanded_len) {
+                try e.report(key, "expanded value is too long");
+                replacement = null;
+            };
             if (replacement) |r| {
+                e.expanded += r.len;
                 try out.appendSlice(e.arena, r);
             } else {
                 ok = false;
@@ -3323,6 +3334,23 @@ test "references expand across layers, and cycles and missing keys are reported"
     try testing.expectEqualStrings("reference cycle: a -> b -> a", diag.message);
     try testing.expectEqualStrings("${b}", (try config.get("a")).?.string);
     try testing.expectEqualStrings("${missing}", (try config.get("c")).?.string);
+}
+
+test "references stop adding text at max_expanded_len" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    config.useReferences();
+    var source: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer source.deinit();
+    try source.writer.writeAll("k0 = \"");
+    try source.writer.splatByteAll('x', 64);
+    try source.writer.writeAll("\"\n");
+    for (1..24) |i| try source.writer.print("k{d} = \"${{k{d}}}${{k{d}}}\"\n", .{ i, i - 1, i - 1 });
+    try config.loadSource("a.toml", source.written(), .toml, null);
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.BadReference, config.checkReferences(&diag));
+    try testing.expectEqualStrings("expanded value is too long", diag.message);
+    try testing.expectEqualStrings("${k22}${k22}", (try config.get("k23")).?.string);
 }
 
 test "secret references resolve at load and are redacted" {
