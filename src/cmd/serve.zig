@@ -333,7 +333,12 @@ fn runOnPty(
     var pump = try io.concurrent(pumpPty(@TypeOf(session)), .{ &child, session, &ended });
     // Input until the program's output ends (it exited) or they go.
     while (!ended.load(.acquire)) {
-        switch (try session.next(poll)) {
+        // Canceled (the server stops): end the program, and clean up below as when it ends.
+        const event = session.next(poll) catch {
+            child.kill();
+            break;
+        };
+        switch (event) {
             .data => |bytes| child.write(bytes) catch break,
             .resize => |new| child.resize(.{ .width = new.width, .height = new.height }) catch {},
             .signal => |name| if (isStopSignal(name)) child.kill(),
@@ -383,7 +388,11 @@ fn runPiped(served: *Served, session: *ssh.Session, env: *const std.process.Envi
     var err_pump = try io.concurrent(pumpFile, .{ io, child.stderr.?, session, true, &ended });
     var stdin: ?Io.File = child.stdin;
     while (ended.load(.acquire) < 2) {
-        switch (try session.next(poll)) {
+        const event = session.next(poll) catch {
+            child.kill(io);
+            break;
+        };
+        switch (event) {
             .data => |bytes| if (stdin) |f| f.writeStreamingAll(io, bytes) catch {},
             .eof => if (stdin) |f| {
                 f.close(io);
