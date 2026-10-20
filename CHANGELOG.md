@@ -469,6 +469,13 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `sys.signal` on Windows: closing the console, logging off, or shutting down now waits
+  for the program to clean up and call `uninstall` (up to Windows' own timeout, 5 seconds
+  by default for a closed console). Windows ends the process as soon as the handler
+  returns, so the program never saw the termination before and its cleanup did not run.
+- `sys.signal`: a second `SIGHUP` before `reset` (a reload asked for twice) no longer ends
+  the process; only interrupt, termination, and quit fall back to the default action on a
+  second signal.
 - `sys.ssh.Server.serve` and `sys.web.Server.serve` (and so `termancy serve`) keep serving
   when an accept fails for one connection (the peer hung up first) or for want of file
   descriptors (they wait 100 ms and accept again), instead of returning and ending every
