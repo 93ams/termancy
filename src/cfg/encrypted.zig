@@ -70,7 +70,7 @@ pub const Error = error{
     EntropyUnavailable,
     /// `encrypt` was given an empty passphrase, which protects nothing.
     EmptyPassphrase,
-} || Allocator.Error;
+} || Allocator.Error || Io.Cancelable;
 
 const salt_len = 16;
 const key_len = Aead.key_length;
@@ -219,6 +219,7 @@ fn deriveKey(
     argon2.kdf(scratch, key, passphrase, salt, argon_params, .argon2id, io) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
+            error.Canceled => error.Canceled,
             else => error.WeakParameters,
         };
     };

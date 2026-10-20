@@ -488,6 +488,8 @@ From a review before the repository went public:
   redacted where the profile puts them; `cfg show --profile prod` printed them.
 - `encrypted.encrypt` and `cfg encrypt --passphrase ''` refuse an empty passphrase
   (`error.EmptyPassphrase`), which made a file anyone could open.
+- Cancelling during an encrypted file's key derivation is `error.Canceled`, not
+  `WeakParameters` (or `CorruptEncryption` from `Config.loadFile`).
 - `cfg`: `Config.markSecret` after a `get` also redacts the references that had already
   expanded the secret (`url = "pg://u:${password}@h"`); `write` and `snapshot` showed them
   in plain text.

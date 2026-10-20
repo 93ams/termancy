@@ -698,6 +698,7 @@ fn readFile(
         const opened = encrypted.decrypt(a, io, source, passphrase) catch |err| {
             return switch (err) {
                 error.OutOfMemory => error.OutOfMemory,
+                error.Canceled => error.Canceled,
                 error.WrongPassphrase => error.WrongPassphrase,
                 else => error.CorruptEncryption,
             };
