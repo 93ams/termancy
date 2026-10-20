@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: an include cycle through another spelling of the same path (`include = "./a.toml"`
+  or `"../conf/a.toml"`) is `error.IncludeCycle`, instead of reading the file again until
+  the path is too long.
 - `cfg`: with references on, a value that takes text from a secret through `${key}`
   (`url = "pg://u:${db.password}@h"`) is redacted by `write` and `snapshot` too, instead of
   printing the secret.

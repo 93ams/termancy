@@ -614,15 +614,18 @@ fn loadIncluding(
     chain: *std.ArrayList([]const u8),
     out: *std.ArrayList(FileSource),
 ) LoadError!void {
+    // Compared without `.` and `..`, so `./a.toml` from `a.toml` is the same file.
+    const resolved = try std.fs.path.resolveAlloc(config.gpa, &.{file_path});
+    defer config.gpa.free(resolved);
     for (chain.items, 0..) |pending, i| {
-        if (!std.mem.eql(u8, pending, file_path)) continue;
+        if (!std.mem.eql(u8, pending, resolved)) continue;
         const a = config.arena.allocator();
         var cycle: std.ArrayList(u8) = .empty;
         for (chain.items[i..]) |link| {
             try cycle.appendSlice(a, link);
             try cycle.appendSlice(a, " -> ");
         }
-        try cycle.appendSlice(a, file_path);
+        try cycle.appendSlice(a, resolved);
         if (diag) |d| d.* = .{ .key = config.include_key.?, .message = cycle.items };
         return error.IncludeCycle;
     }
@@ -630,7 +633,7 @@ fn loadIncluding(
     errdefer file.arena.deinit();
     file.included = chain.items.len > 0;
     if (config.include_key) |key| if (file.tree.table.fetchOrderedRemove(key)) |entry| {
-        try chain.append(config.gpa, file.name);
+        try chain.append(config.gpa, resolved);
         defer _ = chain.pop();
         const includes: []const Value = switch (entry.value) {
             .string => &.{entry.value},
@@ -3400,6 +3403,16 @@ test "includes load first, relative to the including file, and cycles are errors
     const cycle = config.loadFile(io, tmp.dir, "a.toml", null, &diag);
     try testing.expectError(error.IncludeCycle, cycle);
     try testing.expectEqualStrings("a.toml -> b.toml -> a.toml", diag.message);
+
+    // The same file spelled another way is still a cycle.
+    try tmp.dir.createDirPath(io, "conf");
+    try tmp.dir.writeFile(io, .{ .sub_path = "conf/self.toml", .data = "include = \"./self.toml\"\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "conf/up.toml", .data = "include = \"../conf/up.toml\"\n" });
+    const self = config.loadFile(io, tmp.dir, "conf/self.toml", null, &diag);
+    try testing.expectError(error.IncludeCycle, self);
+    try testing.expect(std.mem.endsWith(u8, diag.message, "self.toml"));
+    const up = config.loadFile(io, tmp.dir, "conf/up.toml", null, &diag);
+    try testing.expectError(error.IncludeCycle, up);
 
     // A missing include loads nothing of its tree.
     const c = "include = [\"d.toml\", \"gone.toml\"]\n";
