@@ -55,8 +55,12 @@ pub const source: update.Source = .{ .owner = "93ams", .repo = "termancy" };
 /// carry a valid `<archive>.sig` made with its secret half, the TERMANCY_SIGNING_KEY secret.
 const public_key = "Km3RAUtsq/6Nw0K18QyRO/69uUdhz4ezAf3SmC0PPhU=";
 
-/// How long one request may take, connection to last byte.
+/// How long the release lookup may take, connection to last byte.
 const timeout: std.Io.Duration = .fromSeconds(60);
+
+/// How long each download (archive, checksum, signature) may take, connection to last
+/// byte: enough for a large archive over a slow link (100 MB at 60 KB/s).
+const download_timeout: std.Io.Duration = .fromSeconds(30 * 60);
 
 /// The executable to replace: `path`, relative to `dir`.
 const Destination = struct { dir: std.Io.Dir, path: []const u8 };
@@ -67,12 +71,17 @@ fn run(ctx: *cli.Context, flags: UpdateFlags) !void {
     if (!flags.check and !ctx.interactive) try ctx.confirm("", .{});
     var client: std.http.Client = .{ .allocator = ctx.gpa, .io = ctx.io };
     defer client.deinit();
-    var http: update.HttpTransport = .{
+    var lookup: update.HttpTransport = .{
         .client = &client,
         .timeout = timeout,
         .user_agent = "termancy/" ++ version,
     };
-    try runWith(ctx, flags, http.transport(), defaultOptions(), null);
+    var download = lookup;
+    download.timeout = download_timeout;
+    try runWith(ctx, flags, .{
+        .lookup = lookup.transport(),
+        .download = download.transport(),
+    }, defaultOptions(), null);
 }
 
 /// The update options for this build of termancy, without an install check.
@@ -93,16 +102,20 @@ fn decodeKey(comptime text: []const u8) [std.crypto.sign.Ed25519.PublicKey.encod
     return key;
 }
 
-/// Checks for an update through `transport` and, unless `flags.check`, installs it at
+/// The transports `runWith` fetches through: the release lookup is small and quick, the
+/// downloads may be large and slow.
+const Transports = struct { lookup: update.Transport, download: update.Transport };
+
+/// Checks for an update through `transports` and, unless `flags.check`, installs it at
 /// `destination` (null: the running executable, which must then pass `runsVersion`).
 fn runWith(
     ctx: *cli.Context,
     flags: UpdateFlags,
-    transport: update.Transport,
+    transports: Transports,
     options: update.Options,
     destination: ?Destination,
 ) !void {
-    var watched: Watched = .{ .inner = transport, .ctx = ctx };
+    var watched: Watched = .{ .inner = transports.lookup, .ctx = ctx };
     const signed = options.public_key != null;
     var phases = [_]live.Steps.Step{
         .{ .name = "look up the latest release" },
@@ -139,6 +152,7 @@ fn runWith(
     update.removeLeftovers(ctx.io, target.dir, target.path) catch {};
     phases[1].name = try std.fmt.allocPrint(ctx.arena, "download {s}", .{plan.binary.name});
     var progress: Progress = try .init(ctx, phases[1..]);
+    watched.inner = transports.download;
     watched.progress = &progress;
     watched.archive = plan.binary.url;
     try progress.advance(0, .running);
@@ -366,6 +380,10 @@ const MemoryTransport = struct {
         return .{ .context = memory, .getFn = get };
     }
 
+    fn both(memory: *MemoryTransport) Transports {
+        return .{ .lookup = memory.transport(), .download = memory.transport() };
+    }
+
     fn get(
         context: *anyopaque,
         gpa: std.mem.Allocator,
@@ -456,7 +474,7 @@ test "no release published: a clear message, status 1" {
     t.init();
     defer t.deinit();
     var memory: MemoryTransport = .{ .routes = &.{} };
-    const result = runWith(&t.ctx, .{ .check = true }, memory.transport(), testOptions(), null);
+    const result = runWith(&t.ctx, .{ .check = true }, memory.both(), testOptions(), null);
     try testing.expectError(error.CommandFailed, result);
     const expected = "✗ look up the latest release\ntermancy: no release of 93ams/termancy found: " ++
         "none is published yet (GitHub answered 404 Not Found)\n";
@@ -468,7 +486,7 @@ test "up to date" {
     t.init();
     defer t.deinit();
     var memory: MemoryTransport = .{ .routes = &.{.{ latest_url, releaseJson("v" ++ version) }} };
-    try runWith(&t.ctx, .{}, memory.transport(), testOptions(), null);
+    try runWith(&t.ctx, .{}, memory.both(), testOptions(), null);
     try testing.expectEqualStrings("termancy " ++ version ++ " is up to date\n", t.out.written());
 }
 
@@ -478,7 +496,7 @@ test "--check reports a newer release and downloads nothing" {
     defer t.deinit();
     var memory: MemoryTransport = .{ .routes = &.{.{ latest_url, releaseJson("v99.0.0") }} };
     t.ctx.log_level = .debug; // As -v -v sets it.
-    try runWith(&t.ctx, .{ .check = true }, memory.transport(), testOptions(), null);
+    try runWith(&t.ctx, .{ .check = true }, memory.both(), testOptions(), null);
     try testing.expectEqualStrings(
         "termancy 99.0.0 is available (this is " ++ version ++ ")\n",
         t.out.written(),
@@ -500,15 +518,22 @@ test "--yes downloads, verifies, and installs" {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(archive, &digest, .{});
     const sums = std.fmt.bytesToHex(digest, .lower) ++ "  " ++ asset_name ++ "\n";
-    const routes = [_][2][]const u8{
-        .{ latest_url, releaseJson("v99.0.0") },
+    // The lookup and the downloads go through transports of their own (timeouts apart).
+    var lookup: MemoryTransport = .{ .routes = &.{.{ latest_url, releaseJson("v99.0.0") }} };
+    const downloads = [_][2][]const u8{
         .{ "https://dl/" ++ asset_name, archive },
         .{ "https://dl/SHA256SUMS", sums },
     };
-    var memory: MemoryTransport = .{ .routes = &routes };
+    var download: MemoryTransport = .{ .routes = &downloads };
     const destination: Destination = .{ .dir = tmp.dir, .path = "termancy" };
     t.ctx.yes = true;
-    try runWith(&t.ctx, .{}, memory.transport(), testOptions(), destination);
+    const transports: Transports = .{
+        .lookup = lookup.transport(),
+        .download = download.transport(),
+    };
+    try runWith(&t.ctx, .{}, transports, testOptions(), destination);
+    try testing.expectEqual(1, lookup.requests);
+    try testing.expectEqual(2, download.requests);
     try testing.expectEqualStrings(
         "termancy 99.0.0 is available (this is " ++ version ++ ")\nupdated termancy to termancy 99.0.0\n",
         t.out.written(),
@@ -539,7 +564,7 @@ test "a corrupted download is not installed" {
     const destination: Destination = .{ .dir = tmp.dir, .path = "termancy" };
     const options = testOptions();
     t.ctx.yes = true;
-    const result = runWith(&t.ctx, .{}, memory.transport(), options, destination);
+    const result = runWith(&t.ctx, .{}, memory.both(), options, destination);
     try testing.expectError(error.CommandFailed, result);
     try testing.expectEqualStrings("✓ look up the latest release\n✓ download " ++ asset_name ++
         "\n✗ verify the checksum\ntermancy: " ++ asset_name ++
