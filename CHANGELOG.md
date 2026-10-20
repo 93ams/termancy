@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A JPEG of more than 100 scans is refused, and blocks past the end of a scan's data are left
+  blank (as libjpeg leaves them) instead of decoded from zeros: 8 KB of empty scans took 19 s.
 - A JPEG of more than `image.max_pixels` (8192 by 8192) is refused, as a PNG or GIF is: a
   file of a few megabytes claiming 32768 by 32768 allocated gigabytes.
 - A GIF's frames larger than its screen count toward `image.max_pixels`: a few kilobytes of

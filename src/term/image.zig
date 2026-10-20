@@ -1141,6 +1141,8 @@ const Bits = struct {
     buffer: u64 = 0,
     count: u7 = 0,
     marker: bool = false,
+    /// The zeros put in after the data: more than `count` once one of them was taken.
+    padding: usize = 0,
 
     fn fill(b: *Bits) void {
         while (b.count <= 56) {
@@ -1154,11 +1156,17 @@ const Bits = struct {
                 } else {
                     b.marker = true;
                     byte = 0;
+                    b.padding += 8;
                 }
-            }
+            } else b.padding += 8;
             b.buffer |= @as(u64, byte) << @intCast(56 - b.count);
             b.count += 8;
         }
+    }
+
+    /// Whether bits past the data were taken: the scan (or restart interval) ran out.
+    fn exhausted(b: *const Bits) bool {
+        return b.padding > b.count;
     }
 
     fn take(b: *Bits, n: u5) u16 {
@@ -1201,6 +1209,7 @@ const Bits = struct {
         b.buffer = 0;
         b.count = 0;
         b.marker = false;
+        b.padding = 0;
         while (b.at + 1 < b.data.len) : (b.at += 1) {
             if (b.data[b.at] != 0xff or b.data[b.at + 1] == 0 or b.data[b.at + 1] == 0xff)
                 continue;
@@ -1425,6 +1434,9 @@ const Jpeg = struct {
             if (se > 0 and !j.ac[c.ac_table].defined) return error.InvalidImage;
             c.dc = 0;
         }
+        // Each scan walks every block again: many small ones took time quadratic in the
+        // file's size. Encoders write about ten.
+        if (j.scans == 100) return error.UnsupportedImage;
         j.scans += 1;
         j.eobrun = 0;
         var bits: Bits = .{ .data = j.data, .at = start };
@@ -1474,6 +1486,9 @@ const Jpeg = struct {
         b: *[64]i16,
         s: Scan,
     ) DecodeError!void {
+        // Past the data the blocks stay as they are, as libjpeg leaves them: decoding the
+        // zeros there cost what real data does, for data that is not there.
+        if (bits.exhausted()) return;
         if (s.ss == 0) {
             if (s.ah == 0) {
                 const size = try bits.symbol(&j.dc[c.dc_table]);
@@ -1888,4 +1903,32 @@ test "JPEG: more than max_pixels is refused before it is allocated" {
     const sof = "\xff\xd8\xff\xc0\x00\x0b\x08\x20\x01\x20\x00\x01\x01\x11\x00";
     @memcpy(data[0..sof.len], sof);
     try testing.expectError(error.UnsupportedImage, readJpeg(gpa, data));
+}
+
+test "JPEG: more scans than encoders write are refused" {
+    const gpa = testing.allocator;
+    // 8 by 8 progressive grayscale, its AC table one code, of length 1; then empty scans.
+    var data: std.ArrayList(u8) = .empty;
+    defer data.deinit(gpa);
+    try data.appendSlice(gpa, "\xff\xd8\xff\xdb\x00\x43\x00");
+    try data.appendNTimes(gpa, 1, 64);
+    try data.appendSlice(gpa, "\xff\xc2\x00\x0b\x08\x00\x08\x00\x08\x01\x01\x11\x00");
+    try data.appendSlice(gpa, "\xff\xc4\x00\x14\x10\x01");
+    try data.appendNTimes(gpa, 0, 15);
+    try data.append(gpa, 1);
+    for (0..100) |_| try data.appendSlice(gpa, "\xff\xda\x00\x08\x01\x01\x00\x01\x3f\x00");
+    var img = try readJpeg(gpa, data.items);
+    img.deinit(gpa);
+    try data.appendSlice(gpa, "\xff\xda\x00\x08\x01\x01\x00\x01\x3f\x00");
+    try testing.expectError(error.UnsupportedImage, readJpeg(gpa, data.items));
+}
+
+test "JPEG: blocks past the end of a scan's data are left blank" {
+    const gpa = testing.allocator;
+    const original = @embedFile("testdata/jpeg/rgb_33x17_444.jpg");
+    // Six bytes into the scan: the zeros after them were decoded, into noise.
+    const sos = std.mem.indexOf(u8, original, "\xff\xda").?;
+    var img = try readJpeg(gpa, original[0 .. sos + 20]);
+    defer img.deinit(gpa);
+    for (0..img.width) |x| try testing.expect(img.at(x, 16).eql(.{ .r = 128, .g = 128, .b = 128 }));
 }

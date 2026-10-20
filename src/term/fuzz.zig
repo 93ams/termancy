@@ -322,6 +322,11 @@ const image_regressions = [_][]const u8{
     // Frames of 8192 by 8192 on a 1 by 1 screen were each decoded, outside the budget.
     "GIF89a\x01\x00\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00" ++
         repeat(",\x00\x00\x00\x00\x00\x20\x00\x20\x00\x02\x00", 600) ++ ";",
+    // 800 empty scans of a 2032 by 2032 JPEG, each decoding every block from zeros.
+    "\xff\xd8\xff\xdb\x00\x43\x00" ++ repeat("\x01", 64) ++
+        "\xff\xc2\x00\x0b\x08\x07\xf0\x07\xf0\x01\x01\x11\x00" ++
+        "\xff\xc4\x00\x14\x10\x01" ++ repeat("\x00", 15) ++ "\x01" ++
+        repeat("\xff\xda\x00\x08\x01\x01\x00\x01\x3f\x00", 800) ++ "\xff\xd9",
 };
 
 // TrueType.
