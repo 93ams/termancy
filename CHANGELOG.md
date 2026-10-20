@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `sys.update.removeLeftovers` also deletes `<exe>.zip`, the archive `termancy update`
+  stages next to the executable while unpacking a `.zip` release, which stayed behind when
+  the update was cut short.
 - `sys.log`: strings inside a struct, list, or optional field value are written as text,
   with known secret values replaced by `[REDACTED]`, in every format. They were written as
   lists of byte values, which the secret scrubbing could not see, so a secret inside one
