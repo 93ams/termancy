@@ -33,6 +33,11 @@ pub const Error = error{GoldenMismatch} || Allocator.Error || Io.Cancelable;
 /// or rewrites it when updating. A missing file is a mismatch that says how to make it.
 /// On a mismatch, the lines that differ are printed (to standard error).
 pub fn expect(io: Io, path: []const u8, actual: []const u8, options: Options) Error!void {
+    return compare(io, path, actual, options, true);
+}
+
+/// `expect`, printing why it fails only when `report` is set.
+fn compare(io: Io, path: []const u8, actual: []const u8, options: Options, report: bool) Error!void {
     const gpa = std.heap.page_allocator;
     const text = if (options.escape) try escape(gpa, actual) else try gpa.dupe(u8, actual);
     defer gpa.free(text);
@@ -41,7 +46,7 @@ pub fn expect(io: Io, path: []const u8, actual: []const u8, options: Options) Er
     if (update) {
         if (std.fs.path.dirname(path)) |dir| cwd.createDirPath(io, dir) catch {};
         cwd.writeFile(io, .{ .sub_path = path, .data = text }) catch |err| {
-            std.debug.print("golden: cannot write {s}: {s}\n", .{ path, @errorName(err) });
+            if (report) std.debug.print("golden: cannot write {s}: {s}\n", .{ path, @errorName(err) });
             return error.GoldenMismatch;
         };
         return;
@@ -50,7 +55,7 @@ pub fn expect(io: Io, path: []const u8, actual: []const u8, options: Options) Er
         error.OutOfMemory => return error.OutOfMemory,
         error.Canceled => return error.Canceled,
         else => {
-            std.debug.print("golden: cannot read {s} ({s}); run with {s}=1 to write it\n", .{
+            if (report) std.debug.print("golden: cannot read {s} ({s}); run with {s}=1 to write it\n", .{
                 path, @errorName(err), update_variable,
             });
             return error.GoldenMismatch;
@@ -64,7 +69,7 @@ pub fn expect(io: Io, path: []const u8, actual: []const u8, options: Options) Er
     _ = diff.unified(arena.allocator(), &out.writer, path, expected, "actual", text, .{
         .context = 2,
     }) catch return error.OutOfMemory;
-    std.debug.print("golden: {s} differs ({s}=1 updates it):\n{s}", .{
+    if (report) std.debug.print("golden: {s} differs ({s}=1 updates it):\n{s}", .{
         path, update_variable, out.written(),
     });
     return error.GoldenMismatch;
@@ -113,9 +118,10 @@ test "write, match, mismatch" {
         .{tmp.sub_path},
     );
     defer testing.allocator.free(path);
+    // Quietly: a test that writes to standard error reads as failed in the build's output.
     try testing.expectError(
         error.GoldenMismatch,
-        expect(testing.io, path, "x", .{ .update = false }),
+        compare(testing.io, path, "x", .{ .update = false }, false),
     );
     try expect(testing.io, path, "a\n\x1b[1mb\x1b[0m\nc\n", .{ .update = true });
     try expect(testing.io, path, "a\n\x1b[1mb\x1b[0m\nc\n", .{ .update = false });
