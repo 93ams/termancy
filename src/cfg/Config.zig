@@ -719,9 +719,14 @@ fn readFile(
         // Parsers may borrow strings from the text, which is about to be wiped.
         tree = try tree.clone(a);
         source = "";
-        // Everything in an encrypted file is treated as secret.
+        // Everything in an encrypted file is treated as secret, a profile's values also
+        // where `useProfile` puts them.
         var leaves: std.ArrayList([]const u8) = .empty;
         try tree.leafPaths(a, "", &leaves);
+        const profiles = if (tree == .table) tree.table.get(config.profiles_key) else null;
+        if (profiles) |table| if (table == .table) for (table.table.values()) |profile| {
+            try profile.leafPaths(a, "", &leaves);
+        };
         for (leaves.items) |leaf| try config.markSecret(leaf);
     }
     try config.expandSecrets(io, a, &tree, diag);
@@ -3822,7 +3827,7 @@ test "an encrypted file loads with the passphrase, and its keys are secret" {
     const envelope = try encrypted.encrypt(
         arena.allocator(),
         io,
-        "[db]\npassword = \"hunter2\"\n",
+        "[db]\npassword = \"hunter2\"\n[profiles.prod.db]\nuser = \"admin\"\n",
         "pass",
         .toml,
         .{ .t = 1, .m = 64, .p = 1 },
@@ -3840,6 +3845,12 @@ test "an encrypted file loads with the passphrase, and its keys are secret" {
     try config.loadFile(io, tmp.dir, "secrets.toml.enc", null, null);
     try testing.expectEqualStrings("hunter2", (try config.get("db.password")).?.string);
     try testing.expect(config.isSecret("db.password"));
+    // A profile's values are secret where it puts them, too.
+    try config.useProfile("prod");
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try config.write(&out.writer, .json, .{});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "admin") == null);
 }
 
 test "set patches the effective tree exactly as a rebuild would" {

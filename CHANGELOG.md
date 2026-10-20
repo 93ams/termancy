@@ -484,6 +484,8 @@ From a review before the repository went public:
 - Argon2's working memory, from which an encrypted file's key could be derived again, is
   unmapped once the key is made instead of staying (64 MiB, unwiped) in the file's arena
   for as long as the `Config` lives.
+- With a profile active, the values an encrypted file holds under `profiles.<name>` are
+  redacted where the profile puts them; `cfg show --profile prod` printed them.
 - `encrypted.encrypt` and `cfg encrypt --passphrase ''` refuse an empty passphrase
   (`error.EmptyPassphrase`), which made a file anyone could open.
 - `cfg`: `Config.markSecret` after a `get` also redacts the references that had already
