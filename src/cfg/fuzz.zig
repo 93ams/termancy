@@ -41,6 +41,7 @@ const path = @import("path.zig");
 const decoding = @import("decode.zig");
 const scalar = @import("scalar.zig");
 const settings_ = @import("settings.zig");
+const encrypted = @import("encrypted.zig");
 const field = @import("field");
 
 const testing = std.testing;
@@ -1379,4 +1380,68 @@ test "every key of a document is located" {
         }
         try testing.expect(located > 300);
     }
+}
+
+// Encrypted envelopes.
+
+/// What the envelopes these tests start from seal, and under what passphrase.
+const envelope_plaintext = "token = \"s3cret\"\n";
+const envelope_passphrase = "correct horse";
+
+fn sealedEnvelope(arena: Allocator) ![]const u8 {
+    const cheap: encrypted.Params = .{ .t = 1, .m = 64, .p = 1 };
+    const plaintext = envelope_plaintext;
+    return encrypted.encrypt(arena, testing.io, plaintext, envelope_passphrase, .toml, cheap);
+}
+
+/// Fails unless `text` opens to what was sealed or fails with an error: a changed envelope
+/// never opens to something else. Whether it opened. Argon2 costs what the header says, so
+/// an envelope asking more than a test should spend is not opened.
+fn expectEnvelope(text: []const u8) !bool {
+    const line = text[0 .. std.mem.indexOfScalar(u8, text, '\n') orelse text.len];
+    if (encrypted.parseHeader(std.mem.trimEnd(u8, line, "\r"))) |header| {
+        const costs = header.params;
+        if (costs.t > 2 or costs.m > 256 or costs.p > 4) return false;
+    } else |_| {}
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const opened = encrypted.decrypt(a, testing.io, text, envelope_passphrase) catch |err| {
+        return if (err == error.OutOfMemory) err else false;
+    };
+    try testing.expectEqualStrings(envelope_plaintext, opened.plaintext);
+    return true;
+}
+
+test "changed envelopes fail, and never open to something else" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const sealed = try sealedEnvelope(arena_state.allocator());
+    try testing.expect(try expectEnvelope(sealed));
+    for (0..300) |i| {
+        const seed = 0xe7c0_0000 + i;
+        var prng: std.Random.DefaultPrng = .init(seed);
+        const doc = try mutate(prng.random(), testing.allocator, sealed);
+        defer testing.allocator.free(doc);
+        _ = expectEnvelope(doc) catch |err| {
+            report(.toml, seed, "envelope", doc);
+            return err;
+        };
+    }
+}
+
+fn fuzzEnvelope(_: void, smith: *testing.Smith) anyerror!void {
+    var buffer: [4096]u8 = undefined;
+    _ = try expectEnvelope(buffer[0..smith.slice(&buffer)]);
+}
+
+test "fuzz: encrypted envelopes" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    // As `fuzzInputs` lays them out, but made at run time: a salt and a nonce are random.
+    const sealed = try sealedEnvelope(a);
+    const len: [4]u8 = @bitCast(std.mem.nativeToLittle(u32, @intCast(sealed.len)));
+    const input = try std.mem.concat(a, u8, &.{ &len, sealed });
+    try testing.fuzz({}, fuzzEnvelope, .{ .corpus = &.{input} });
 }

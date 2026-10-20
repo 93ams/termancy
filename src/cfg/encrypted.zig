@@ -157,12 +157,15 @@ pub fn decrypt(
     return .{ .plaintext = plaintext, .format = parsed.format };
 }
 
-const Header = struct {
+/// What an envelope's first line says.
+pub const Header = struct {
     params: Params,
     format: Format,
 };
 
-fn parseHeader(header: []const u8) Error!Header {
+/// Reads an envelope's first line, without its line ending. `decrypt` calls it; it is
+/// public so a fuzzer can see an envelope's costs before paying them.
+pub fn parseHeader(header: []const u8) Error!Header {
     var words = std.mem.tokenizeScalar(u8, header, ' ');
     if (!std.mem.eql(u8, words.next() orelse "", magic)) return error.NotEncrypted;
     if (!std.mem.eql(u8, words.next() orelse "", "v1")) return error.Unsupported;
