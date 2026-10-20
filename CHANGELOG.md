@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- fish completion runs the program once per Tab, not three times (each `complete`
+  condition ran it again), so slow completers answer three times sooner.
 - bash completion no longer expands candidates as file patterns: `photo[1].jpg` stayed
   `photo[1].jpg` only when no `photo1.jpg` existed, and under `shopt -s nullglob` a
   candidate holding `*`, `?`, or `[` (even in its description) disappeared.

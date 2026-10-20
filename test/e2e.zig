@@ -2492,6 +2492,8 @@ const fish_cases = [_]ShellCase{
         .words = &.{ "cfg", "--config=se" },
         .stdout = "--config=seeds.toml\n--config=servers.toml\n",
     },
+    // Nothing to offer: the script falls back to file names.
+    .{ .words = &.{ "cfg", "get", "no" }, .stdout = "notes.txt\n" },
 };
 
 const powershell_cases = [_]ShellCase{

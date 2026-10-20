@@ -481,7 +481,15 @@ const fish_script =
     \\    set -l current (commandline -ct)
     \\    set -l prefix ''
     \\    set -l value $current
-    \\    for line in (@NAME@ __complete2 $tokens[2..-1] $current 2>/dev/null)
+    \\    set -l lines (@NAME@ __complete2 $tokens[2..-1] $current 2>/dev/null)
+    \\    # Nothing to offer: file names, here rather than in a second `complete` whose
+    \\    # condition would run the program again on every Tab.
+    \\    if test (count $lines) -eq 0
+    \\        set -l found $current*
+    \\        printf '%s\n' $found
+    \\        return
+    \\    end
+    \\    for line in $lines
     \\        switch $line
     \\            case ':prefix *'
     \\                set prefix (string sub -s 9 -- $line)
@@ -500,9 +508,7 @@ const fish_script =
     \\        end
     \\    end
     \\end
-    \\complete -c @NAME@ -f -n 'test (count (__@IDENT@_complete)) -gt 0' \
-    \\    -a '(__@IDENT@_complete)'
-    \\complete -c @NAME@ -F -n 'test (count (__@IDENT@_complete)) -eq 0'
+    \\complete -c @NAME@ -f -a '(__@IDENT@_complete)'
     \\
 ;
 
