@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const sys = @import("sys");
 const term = @import("ui/term.zig");
@@ -22,18 +23,23 @@ const Flags = struct {
     all: bool = false,
     hyperlinks: bool = true,
     preserve_newlines: bool = false,
-    pub const meta = .{
-        .style = .{ .short = 's', .help = "dark, light, auto, notty, ascii, dracula, " ++
-            "tokyo-night, pink, or a JSON style sheet", .env = "GLAMOUR_STYLE" },
-        .width = .{ .short = 'w', .help = "Columns to wrap to (default: the terminal's, at " ++
-            "most 120)" },
-        .pager = .{ .short = 'p', .help = "Show it through $PAGER instead of the reader" },
-        .print = .{ .help = "Print it, even at a terminal" },
-        .all = .{ .short = 'a', .help = "Also list hidden files and directories" },
-        .hyperlinks = .{ .help = "Make links clickable where the terminal can" },
-        .preserve_newlines = .{ .help = "Keep the line breaks inside paragraphs" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .style = .{ .help = "dark, light, auto, notty, ascii, dracula, " ++
+        "tokyo-night, pink, or a JSON style sheet" },
+    .width = .{ .help = "Columns to wrap to (default: the terminal's, at " ++
+        "most 120)" },
+    .pager = .{ .help = "Show it through $PAGER instead of the reader" },
+    .print = .{ .help = "Print it, even at a terminal" },
+    .all = .{ .help = "Also list hidden files and directories" },
+    .hyperlinks = .{ .help = "Make links clickable where the terminal can" },
+    .preserve_newlines = .{ .help = "Keep the line breaks inside paragraphs" },
+} }}), .{ .fields = .{
+    .style = .{ .short = 's', .env = "GLAMOUR_STYLE" },
+    .width = .{ .short = 'w' },
+    .pager = .{ .short = 'p' },
+    .all = .{ .short = 'a' },
+} });
 
 pub const command = cli.command(.{
     .name = "md",
@@ -48,7 +54,7 @@ pub const command = cli.command(.{
     \\--print) it is printed, without colors where they would not show.
     ,
     .args = .{ .max = 1, .usage = "[source]" },
-    .flags = Flags,
+    .flags = flags_flags,
     .examples =
     \\termancy md README.md
     \\termancy md github.com/ziglang/zig
@@ -330,7 +336,7 @@ const Reader = struct {
     document: Document,
     /// The source as read last; owned when reloaded.
     owned: ?[]u8 = null,
-    doc: registry.markdown.Markdown,
+    doc: registry.Markdown,
     /// Back to the list on esc (opened from one), or quit.
     from_list: bool,
     /// Asked to go back to the list.
@@ -439,12 +445,12 @@ const Reader = struct {
 
 /// The list of files to read, filtered as you type, and the reader for the chosen one.
 fn browse(ctx: *cli.Context, paths: []const []const u8, options: markdown.Options) !void {
-    var filter: registry.filter.Filter = try .init(ctx.gpa, paths);
+    var filter: registry.Filter = try .init(ctx.gpa, paths);
     defer filter.deinit();
     filter.header = "Markdown files";
     while (true) {
         filter.status = .active;
-        if (try term.run(ctx, registry.filter.Filter, &filter, .{ .alt_screen = true })) {
+        if (try term.run(ctx, registry.Filter, &filter, .{ .alt_screen = true })) {
             return term.exitInterrupted(ctx);
         }
         if (filter.status != .submitted) return;

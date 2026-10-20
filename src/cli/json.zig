@@ -47,6 +47,8 @@
 //! element; bare `--name` for a true boolean, `--no-name` for false), `--`, and `args`.
 
 const std = @import("std");
+const sets = @import("sets.zig");
+const field_ = @import("field");
 const assert = std.debug.assert;
 const Writer = std.Io.Writer;
 const Stringify = std.json.Stringify;
@@ -166,8 +168,8 @@ fn flagObject(json: *Stringify, path: []const *const Command, flag: *const Flag)
     try field(json, "inherited", isInherited(path, flag));
     try field(json, "deprecated", flag.deprecated);
     try field(json, "aliases", flag.aliases);
-    try field(json, "minimum", flag.min);
-    try field(json, "maximum", flag.max);
+    try field(json, "minimum", if (flag.minimum()) |b| b.number else null);
+    try field(json, "maximum", if (flag.maximum()) |b| b.number else null);
     try json.endObject();
 }
 
@@ -225,8 +227,12 @@ fn noop(_: *Context) !void {}
 
 const Global = struct {
     verbose: u8 = 0,
-    pub const meta = .{ .verbose = .{ .short = 'v', .count = true, .help = "More output" } };
 };
+const global_flags = sets.flags(Global, field_.Set(.{field_.Spec(Global){ .fields = .{
+    .verbose = .{ .help = "More output" },
+} }}), .{ .fields = .{
+    .verbose = .{ .short = 'v', .count = true },
+} });
 
 const SetFlags = struct {
     file: []const u8,
@@ -235,17 +241,19 @@ const SetFlags = struct {
     ratio: f32 = 0.5,
     dry_run: bool = false,
     secret: bool = false,
-    pub const meta = .{
-        .file = .{ .short = 'f', .help = "File to \"edit\"", .env = "APP_FILE" },
-        .tag = .{ .deprecated = "use labels" },
-        .secret = .{ .hidden = true },
-    };
 };
+const set_flags = sets.flags(SetFlags, field_.Set(.{field_.Spec(SetFlags){ .fields = .{
+    .file = .{ .help = "File to \"edit\"" },
+    .tag = .{ .deprecated = "use labels" },
+} }}), .{ .fields = .{
+    .file = .{ .short = 'f', .env = "APP_FILE" },
+    .secret = .{ .hidden = true },
+}, .exclusive = &.{&.{ .dry_run, .ratio }} });
 
 const test_root = spec.command(.{
     .name = "app",
     .summary = "An app",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = .{
         spec.command(.{
             .name = "set",
@@ -255,8 +263,7 @@ const test_root = spec.command(.{
             .examples = "app set a 1",
             .deprecated = "use put",
             .args = .{ .min = 2, .max = null, .usage = "<key> <value>..." },
-            .flags = SetFlags,
-            .exclusive = &.{&.{ "dry-run", "ratio" }},
+            .flags = set_flags,
             .run = noop,
         }),
         spec.command(.{ .name = "hidden", .hidden = true, .run = noop }),
@@ -486,7 +493,7 @@ test "a nearer flag shadows an inherited one of the same name" {
 }
 
 test schemaType {
-    const flags_list = comptime spec.flagsOf(struct {
+    const flags_list = comptime sets.flags(struct {
         a: bool = false,
         b: u8 = 0,
         c: i32 = 0,
@@ -494,8 +501,7 @@ test schemaType {
         e: []const u8 = "",
         f: enum { x } = .x,
         g: []const bool = &.{},
-        pub const meta = .{ .b = .{ .count = true } };
-    });
+    }, field_.none, .{ .fields = .{ .b = .{ .count = true } } }).list;
     const expected = [_][]const u8{
         "boolean", "integer", "integer", "number", "string", "string", "boolean",
     };

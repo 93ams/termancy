@@ -10,8 +10,9 @@
 //! The key of a flag is the path of the command that declares it, without the root, then
 //! the flag's long name: `tool serve --port` reads `serve.port`, and a persistent flag of
 //! the root reads its bare name. `Options.prefix` puts a section in front (`tool.serve.port`);
-//! a flag's `.key` meta replaces the whole key. The value is used only when the flag is
-//! given neither on the command line nor in its environment variable.
+//! a flag with a configuration key (`Flag.key`, below a command's `.settings`) reads that key
+//! instead. The value is used only when the flag is given neither on the command line nor in
+//! its environment variable.
 //!
 //! `cli` does not import `cfg`: the source is any pointer whose type has
 //! `fn flagText(source, key: []const u8) ?[]const u8` (or `!?[]const u8`, an error counting

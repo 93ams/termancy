@@ -4,29 +4,31 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const live = @import("term").live;
 const term = @import("../ui/term.zig");
 const plain = @import("../ui/plain.zig");
-const List = @import("registry/list.zig").List;
-const MultiSelect = @import("registry/multiselect.zig").MultiSelect;
+const List = @import("registry/list.zig");
+const MultiSelect = @import("registry/multiselect.zig");
 const catalog = @import("project/catalog.zig");
 const manifest = @import("project/manifest.zig");
 const status = @import("project/status.zig");
-const workspace = @import("project/workspace.zig");
-const Workspace = workspace.Workspace;
+const Workspace = @import("project/workspace.zig");
 const group = @import("init.zig").group;
 
 const AddFlags = struct {
     force: bool = false,
     prune: bool = false,
     project: []const u8 = ".",
-    pub const meta = .{
-        .force = .{ .help = "Replace files modified since termancy tui add wrote them" },
-        .prune = .{ .help = "Remove files a component no longer has, unless edited" },
-        .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-    };
 };
+const add_flags = cli.flags(AddFlags, field.Set(.{field.Spec(AddFlags){ .fields = .{
+    .force = .{ .help = "Replace files modified since termancy tui add wrote them" },
+    .prune = .{ .help = "Remove files a component no longer has, unless edited" },
+    .project = .{ .help = "The project directory" },
+} }}), .{ .fields = .{
+    .project = .{ .short = 'C', .value_name = "path" },
+} });
 
 pub const command = cli.command(.{
     .name = "add",
@@ -52,7 +54,7 @@ pub const command = cli.command(.{
     \\enter adds, esc cancels. Elsewhere, name at least one.
     ,
     .group = group,
-    .flags = AddFlags,
+    .flags = add_flags,
     .dry_run = true,
     .args = .{ .max = null, .usage = "<component>..." },
     .examples =
@@ -71,7 +73,7 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
     var m = try ws.loadManifest(ctx) orelse return ctx.fail("{s}{s}: not found (run termancy " ++
         "tui init first)", .{ ws.prefix, manifest.file_name });
     ws.manifest_before = try ws.loadManifest(ctx);
-    const components = try workspace.components(ctx);
+    const components = try Workspace.components(ctx);
     const wanted = if (ctx.args.len > 0) ctx.args else try ask(ctx, components);
     const order = try resolve(ctx, components, wanted);
 
@@ -100,7 +102,10 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
     if (!ctx.dry_run) {
         try ws.commit(ctx);
         for (removals.items) |path| ws.dir.deleteFile(ctx.io, path) catch |err| {
-            return ctx.fail("{s}: cannot remove: {s}", .{ try ws.show(ctx.arena, path), @errorName(err) });
+            return ctx.fail(
+                "{s}: cannot remove: {s}",
+                .{ try ws.show(ctx.arena, path), @errorName(err) },
+            );
         };
     }
     try ctx.out.writeAll(report.written());
@@ -229,7 +234,7 @@ fn addComponent(
     var record: manifest.Files = .empty;
     var any_skipped = false;
     for (component.files) |name| {
-        const registry = try workspace.source(ctx, name);
+        const registry = try Workspace.source(ctx, name);
         const path = try manifest.filePath(ctx.arena, m.*, name);
         const recorded = m.recorded(component.name, name);
         const action = status.decide(try ws.read(ctx, path), recorded, registry, force);

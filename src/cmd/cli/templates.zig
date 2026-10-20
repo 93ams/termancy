@@ -51,6 +51,7 @@ pub fn buildZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\        .imports = &.{{
         \\            .{{ .name = "cli", .module = termancy.module("cli") }},
         \\            .{{ .name = "cfg", .module = termancy.module("cfg") }},
+        \\            .{{ .name = "field", .module = termancy.module("field") }},
         \\        }},
         \\    }});
         \\    const exe = b.addExecutable(.{{ .name = "{s}", .root_module = root_module }});
@@ -71,7 +72,10 @@ pub fn buildZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\        .root_module = b.createModule(.{{
         \\            .root_source_file = b.path("src/settings.zig"),
         \\            .target = b.graph.host,
-        \\            .imports = &.{{.{{ .name = "cfg", .module = host_termancy.module("cfg") }}}},
+        \\            .imports = &.{{
+        \\                .{{ .name = "cfg", .module = host_termancy.module("cfg") }},
+        \\                .{{ .name = "field", .module = host_termancy.module("field") }},
+        \\            }},
         \\        }}),
         \\    }});
         \\    const schema_json = b.addRunArtifact(schema).captureStdOut(.{{}});
@@ -182,6 +186,7 @@ pub fn settingsZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\
         \\const std = @import("std");
         \\const cfg = @import("cfg");
+        \\const field = @import("field");
         \\
         \\pub const Settings = struct {{
         \\    log_level: enum {{ debug, info, warn, err }} = .info,
@@ -189,15 +194,20 @@ pub fn settingsZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\        host: []const u8 = "localhost",
         \\        port: u16 = 8080,
         \\    }} = .{{}},
-        \\
-        \\    pub const meta = .{{ .log_level = .{{ .help = "How much to log" }} }};
         \\}};
+        \\
+        \\/// What the settings mean: help for the schema, checks for decoding.
+        \\pub const settings = cfg.settings(Settings, Specs, .{{}});
+        \\
+        \\const Specs = field.Set(.{{field.Spec(Settings){{ .fields = .{{
+        \\    .log_level = .{{ .help = "How much to log" }},
+        \\}} }}}});
         \\
         \\/// For `zig build schema`: prints the JSON Schema of `Settings`.
         \\pub fn main(init: std.process.Init) !void {{
         \\    var buffer: [4096]u8 = undefined;
         \\    var out = std.Io.File.stdout().writer(init.io, &buffer);
-        \\    try cfg.schema.write(Settings, init.arena.allocator(), &out.interface);
+        \\    try cfg.schema.write(settings, init.arena.allocator(), &out.interface);
         \\    try out.interface.flush();
         \\}}
         \\
@@ -205,9 +215,9 @@ pub fn settingsZig(w: *Writer, name: []const u8) Writer.Error!void {
         \\    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
         \\    defer arena.deinit();
         \\
-    ++ "    const settings = try cfg.decode(Settings, arena.allocator(), .empty_table, " ++
+    ++ "    const decoded = try cfg.decode(settings, arena.allocator(), .empty_table, " ++
         ".{{}}, null);\n" ++
-        \\    try std.testing.expectEqual(8080, settings.server.port);
+        \\    try std.testing.expectEqual(8080, decoded.server.port);
         \\}}
         \\
     , .{ name, name });
@@ -301,7 +311,9 @@ pub fn leaf(w: *Writer, l: Leaf) Writer.Error!void {
     try w.writeAll("//! `");
     try writeWords(w, l.path);
     if (l.summary.len > 0) try w.print("`: {s}\n", .{l.summary}) else try w.writeAll("`.\n");
-    try w.writeAll("\nconst std = @import(\"std\");\nconst cli = @import(\"cli\");\n\n");
+    try w.writeAll("\nconst std = @import(\"std\");\nconst cli = @import(\"cli\");\n");
+    if (l.flags.len > 0) try w.writeAll("const field = @import(\"field\");\n");
+    try w.writeAll("\n");
     if (l.flags.len > 0) try flagsStruct(w, "Flags", l.flags);
     try commandSpec(w, l);
     try handler(w, l);
@@ -326,25 +338,43 @@ fn flagsStruct(w: *Writer, name: []const u8, flags: []const Spec) Writer.Error!v
         }
         try w.writeAll(",\n");
     }
+    try w.writeAll("};\n\n");
+    if (hasHelp(flags)) {
+        try w.writeAll("/// What the flags mean.\n");
+        try w.print("const Specs = field.Set(.{{field.Spec({s}){{ .fields = .{{\n", .{name});
+        for (flags) |s| if (s.help.len > 0) {
+            try w.print(
+                "    .{s} = .{{ .help = \"{f}\" }},\n",
+                .{ s.field, std.zig.fmtString(s.help) },
+            );
+        };
+        try w.writeAll("} }});\n\n");
+    }
     var any = false;
+    for (flags) |s| any = any or s.short != null or s.count;
+    try w.print("/// How they are spelled.\nconst flag_flags = cli.flags({s}, {s}, ", .{
+        name,
+        if (hasHelp(flags)) "Specs" else "field.none",
+    });
+    if (!any) return w.writeAll(".{});\n\n");
+    try w.writeAll(".{ .fields = .{\n");
     for (flags) |s| {
-        if (s.short == null and s.help.len == 0 and !s.count) continue;
-        if (!any) try w.writeAll("\n    pub const meta = .{\n");
-        any = true;
-        try w.print("        .{s} = .{{", .{s.field});
+        if (s.short == null and !s.count) continue;
+        try w.print("    .{s} = .{{", .{s.field});
         var first = true;
-        if (s.short) |short| try metaEntry(w, &first, "short", "'{c}'", short);
-        if (s.count) try metaEntry(w, &first, "count", "{s}", "true");
-        if (s.help.len > 0) {
-            try metaEntry(w, &first, "help", "\"{f}\"", std.zig.fmtString(s.help));
-        }
+        if (s.short) |short| try entry(w, &first, "short", "'{c}'", short);
+        if (s.count) try entry(w, &first, "count", "{s}", "true");
         try w.writeAll(" },\n");
     }
-    if (any) try w.writeAll("    };\n");
-    try w.writeAll("};\n\n");
+    try w.writeAll("} });\n\n");
 }
 
-fn metaEntry(
+fn hasHelp(flags: []const Spec) bool {
+    for (flags) |s| if (s.help.len > 0) return true;
+    return false;
+}
+
+fn entry(
     w: *Writer,
     first: *bool,
     comptime name: []const u8,
@@ -387,7 +417,7 @@ fn commandSpec(w: *Writer, l: Leaf) Writer.Error!void {
     if (l.summary.len > 0) {
         try w.print("    .summary = \"{f}\",\n", .{std.zig.fmtString(l.summary)});
     }
-    if (l.flags.len > 0) try w.writeAll("    .flags = Flags,\n");
+    if (l.flags.len > 0) try w.writeAll("    .flags = flag_flags,\n");
     if (l.args_max == null or l.args_max.? > 0) {
         try w.print("    .args = .{{ .min = {d}, .max = ", .{l.args_min});
         if (l.args_max) |max| try w.print("{d}", .{max}) else try w.writeAll("null");
@@ -489,6 +519,7 @@ pub fn flowLeaf(w: *Writer, l: Leaf) Writer.Error!void {
         \\
         \\const std = @import("std");
         \\const cli = @import("cli");
+        \\const field = @import("field");
         \\
         \\/// What the steps share. Every field is also a flag.
         \\
@@ -546,7 +577,7 @@ pub fn flowLeaf(w: *Writer, l: Leaf) Writer.Error!void {
         try w.print("    .summary = \"{f}\",\n", .{std.zig.fmtString(l.summary)});
     }
     try w.writeAll(
-        \\    .flags = State,
+        \\    .flags = flag_flags,
         \\    .dry_run = true,
         \\    .run = run,
         \\});
@@ -745,6 +776,7 @@ test leaf {
         \\
         \\const std = @import("std");
         \\const cli = @import("cli");
+        \\const field = @import("field");
         \\
         \\const Flags = struct {
         \\    name: []const u8 = "world",
@@ -753,16 +785,22 @@ test leaf {
         \\    mode: enum { plain, fancy },
         \\    tag: []const []const u8 = &.{},
         \\    limit: ?i64 = null,
-        \\
-        \\    pub const meta = .{
-        \\        .name = .{ .short = 'n', .help = "Who to \"greet\"" },
-        \\    };
         \\};
+        \\
+        \\/// What the flags mean.
+        \\const Specs = field.Set(.{field.Spec(Flags){ .fields = .{
+        \\    .name = .{ .help = "Who to \"greet\"" },
+        \\} }});
+        \\
+        \\/// How they are spelled.
+        \\const flag_flags = cli.flags(Flags, Specs, .{ .fields = .{
+        \\    .name = .{ .short = 'n' },
+        \\} });
         \\
         \\pub const command = cli.command(.{
         \\    .name = "greet",
         \\    .summary = "Say hello",
-        \\    .flags = Flags,
+        \\    .flags = flag_flags,
         \\    .args = .{ .min = 0, .max = 1, .usage = "[arg]" },
         \\    .run = run,
         \\});

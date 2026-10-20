@@ -27,13 +27,14 @@ Commands are data: `cli.command(.{ ... })` runs at compile time and yields a pla
 | `group` | the help heading the command is listed under |
 | `hidden`, `deprecated` | not listed / a notice when used |
 | `topic` | a help page, not a command |
-| `flags`, `persistent_flags` | the command's flags; persistent ones are inherited by descendants |
+| `flags`, `persistent_flags` | the command's flags ([below](#flags)); persistent ones are inherited by descendants |
 | `args` | positionals ([below](#positionals)) |
-| `exclusive`, `together`, `one_required` | flag groups |
+| `settings` | a field of the flags read from configuration too ([below](#settings)) |
 | `subcommands` | child commands |
 | `run` and the hooks | [handlers](#handlers-and-context) |
 
-Mistakes such as a duplicate flag or a constraint naming an unknown flag are compile errors.
+Mistakes such as a duplicate flag, a flag group naming a field the struct lacks, or an option
+on a field it does not fit are compile errors.
 
 ## Positionals
 
@@ -43,7 +44,9 @@ Either counted words or a typed struct:
   the first one; `.passthrough = true` hands everything after `--` to `ctx.passthrough`
   untouched.
 - **Typed:** `.args = struct { key: []const u8, value: ?[]const u8 = null }` decodes like flags.
-  The usage line, counts, completion of enums, and docs are derived from the struct.
+  The usage line, counts, completion of enums, and docs are derived from the struct;
+  `cli.args(Args, Specs, .{ .fields = .{ .key = .{ .name = "k", .prompt = "Key" } } })` adds
+  help and checks from specs, and per field a `.name`, a `.complete`, and a `.prompt`.
 
 ## Handlers and `Context`
 
@@ -69,50 +72,123 @@ persistent_pre_run (root first) → pre_run → run → post_run → persistent_
 | `out`, `err` | standard output and error |
 | `args`, `path` | the arguments and the command path |
 | `ctx.data(*T)` | typed app data |
-| `ctx.flags(T)` | any visible flags struct |
+| `ctx.flags(T)` | any visible flags struct, from the command line, the environment, and `App.defaults` |
 | `ctx.fail(fmt, args)` | fail with exit 1 |
 | `ctx.usageError(fmt, args)` | fail with exit 2 and a pointer to the command's help |
+| `ctx.configError(fmt, args)` | fail with exit 78: the configuration cannot be used |
 | `ctx.exit(status)` | any other status |
 | `ctx.warn` | a warning, silenced by `-q` |
 
 ## Flags
 
-Flags are struct fields; `pub const meta` refines them:
+Flags are struct fields. What each field means comes from `field` specs, shared with `cfg`;
+how it is spelled on the command line comes from `cli.flags`' options:
 
 ```zig
 const ServeFlags = struct {
     port: u16 = 8080,
-    pub const meta = .{ .port = .{ .short = 'p', .help = "Port to listen on" } };
+    tags: []const []const u8 = &.{},
+    verbose: u8 = 0,
 };
+
+const Specs = field.Set(.{field.Spec(ServeFlags){ .fields = .{
+    .port = .{ .help = "Port to listen on", .checks = &.{ .min(1), .from(notReserved) } },
+    .tags = .{ .help = "Labels", .each = &.{.minLen(1)} },
+} }});
+
+const serve_flags = cli.flags(ServeFlags, Specs, .{ .fields = .{
+    .port = .{ .short = 'p', .env = "PORT" },
+    .tags = .{ .name = "tag", .split = ',' },
+    .verbose = .{ .short = 'v', .count = true },
+} });
+
+const serve = cli.command(.{ .name = "serve", .flags = serve_flags, .run = run });
+fn run(ctx: *cli.Context, flags: ServeFlags) !void { ... }
 ```
 
-| meta option | effect |
+A plain struct works too (`.flags = ServeFlags`): every field a flag under its own name.
+
+**What a field means** (`field.Spec`; see the `field` library):
+
+| spec | effect |
+|---|---|
+| `.help` | help text, also in docs and in `cfg`'s schema |
+| `.checks = &.{ .min(1), .max(64) }` | checks on the value: `.min`, `.max` (numbers, or types with `order`), `.minLen`, `.maxLen`, `.oneOf` (strings), `.glob`, and `.from(fn)` for your own |
+| `.each` | checks on each element of a list |
+| `.secret` | never echoed: redacted in help, docs, messages, and `ctx.secretValues` |
+| `.deprecated = "use --x"` | accepted, with this notice when used |
+| `Spec(T).checks` | checks across the struct's fields |
+
+A check is a plain function, `fn (V, *std.Io.Writer) !void`, that writes why a value is
+wrong and returns `error.Invalid` (`field.fail` does both). Specs are keyed by type: one
+`field.Spec(Listener)` applies wherever a `Listener` is, nested or listed.
+
+**How a field is spelled** (`cli.flags` options, per field):
+
+| option | effect |
 |---|---|
 | `.short = 'p'` | `-p` spelling |
-| `.help`, `.value_name` | help text and placeholder |
 | `.name` | long name (default: field name in kebab case) |
+| `.value_name` | placeholder in help |
 | `.env = "PORT"` | read the variable when the flag is absent |
 | `.count = true` | integer field counts occurrences (`-vvv`) |
 | `.split = ','` | list field also splits each value |
-| `.hidden`, `.deprecated = "use --x"` | not shown / notice when used |
+| `.hidden` | accepted, not shown |
 | `.aliases = &.{"colour"}` | other names, for renames that keep scripts working |
-| `.min`, `.max`, `.one_of` | bounds on numbers, a fixed set for strings (checked, completed, shown in help) |
-| `.min_len`, `.max_len` | bounds on a value's length |
-| `.requires = &.{"cert"}` | other flags this one needs |
-| `.complete = fn` | values for shell completion, beyond an enum's choices, or `.files("toml")` / `.directories` |
-| `.prompt = "Port"`, `.secret` | ask for a missing required flag when the run is interactive |
-| `.key = "fetch.concurrency"` | the configuration key `App.defaults` reads and `bindFlags` sets |
+| `.requires = &.{.cert}` | sibling fields that must be given with this one |
+| `.complete = .from(fn)` | values for shell completion, beyond an enum's choices, or `.files("toml")` / `.directories` |
+| `.prompt = "Port"` | ask for a missing required flag when the run is interactive |
 | `.feature = "APP_BETA"` | hidden until the feature is on |
 | `.internal = true` | state, such as a flow's, that is not a flag |
 
+Beside `.fields`, `.exclusive`, `.together`, and `.one_required` take groups of fields:
+`.exclusive = &.{&.{ .json, .yaml }}`.
+
 **Types:** `bool`, integers (`0x`, `0o`, `0b` accepted), floats, `[]const u8`, enums, `?T`,
 `[]const T` (repeatable), and any type with `pub fn parse([]const u8) !T`. A field without a
-default and without `?` is required.
+default and without `?` is required. A struct field is a group of flags named after it
+(`--public-port`; `.name` renames the prefix, `.name = ""` drops it). A tagged union is a
+choice: `--storage s3` names the variant, and its fields are a group under it
+(`--storage-s3-bucket`, which also picks `s3`; naming another variant too is an error).
 
 **Spellings:** `--port 80`, `--port=80`, `-p80`, `-vvp 80`, `--no-force`, `--`.
 
-Unknown commands, flags, and enum values get "Did you mean" suggestions. A flags struct may
-declare `pub fn validate(flags: T, ctx: *cli.Context) !void` for checks across fields.
+**Checks:** a value given is checked as it is parsed, against its type and its field's
+checks; a failure is a usage error naming the flag. Checks that need the whole value (across
+fields, or a list's own) run once every flag is parsed, before the command's hooks, and every
+failure is reported. Unknown commands, flags, and enum values get "Did you mean" suggestions.
+
+### Settings
+
+A command whose flags are settings read from configuration too names their field and a
+loader:
+
+```zig
+const Flags = struct {
+    config: ?[]const u8 = null,
+    settings: Settings = .{}, // --port, --workers, ...: every setting is a flag
+};
+
+const serve = cli.command(.{
+    .name = "serve",
+    .flags = cli.flags(Flags, Specs, .{ .fields = .{ .settings = .{ .name = "" } } }),
+    .settings = .{
+        .field = .settings,
+        .load = load, // fn (*cli.Context) !Settings, usually with cfg
+        .sources = cfg.sourcesOf(settings, .{ .file = "app.toml", .env_prefix = "APP" }),
+    },
+    .run = run,
+});
+```
+
+The loader layers the flags over the file and the environment (`ctx.changedFlags()` gives
+each its field's path as its configuration key), and the handler gets what it returns. Its
+flags are never required on the command line, and their checks are the loader's to run;
+`.sources` lets help say where else each can be set. In the loader,
+`config.nameFlags(try ctx.flagKeys(), .{})` lets a missing key's message name its flag,
+`config.askWith(ctx.settingsAsker())` asks for it at a terminal with the flag's `.prompt`,
+and `ctx.configError` reports a configuration that cannot be used with exit status 78.
+[examples/server-config](../examples/server-config/main.zig) does all of it.
 
 ## Built-in commands and flags
 
@@ -135,8 +211,9 @@ declare `pub fn validate(flags: T, ctx: *cli.Context) !void` for checks across f
   ENVIRONMENT section for the variables its flags read and an EXIT STATUS section
   (`App.exit_statuses` adds the app's own codes, a command's `.exit_statuses` its own).
   `cli.docs.command` mounts it as `docs`.
-- **Exit statuses:** 0 success, 1 failure, 2 usage error, 141 when stdout closes early
-  (`app | head`). `App.exit_status` can map errors to others.
+- **Exit statuses:** 0 success, 1 failure, 2 usage error, 78 configuration error
+  (`ctx.configError`), 141 when stdout closes early (`app | head`). `App.exit_status` can map
+  errors to others.
 
 ## Per-command options
 
@@ -222,7 +299,11 @@ anything untranslated stays English. A `Translation` holds:
 - the library's sentences (`cli.i18n.messages.german`, `spanish`, `french`, `portuguese`);
 - command help (summaries, descriptions, groups, flag help, examples);
 - the app's own strings: `ctx.tr("Hello, {0}", .{name})`, and `ctx.plural(n, one, other,
-  args)` with CLDR plural rules.
+  args)` with CLDR plural rules;
+- what a check of its own says, looked up by the text it wrote: `field.fail(w, "is
+  reserved", .{})` by `"is reserved"`, and `field.fail(w, "{d} is in use", .{port})` by a
+  template, `.{ "{0} is in use", "{0} ist belegt" }`, whose `{0}`, `{1}`, ... stand for the
+  arguments as written. The built-in checks' messages are the library's sentences.
 
 The locale comes from `App.locale` or `LC_ALL`/`LC_MESSAGES`/`LANG`, `pt_BR` falling back to
 `pt`.

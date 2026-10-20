@@ -4,40 +4,39 @@
 //! Decoding coerces, because environment variables and flags are always text: `"8080"`
 //! decodes into a `u16`, `"a,b"` into a `[]const []const u8`, `"yes"` into a `bool`.
 //!
-//! A struct may refine its fields with a `pub const meta` declaration:
+//! What a type decodes from is a settings type (`settings.zig`): the struct, the `field`
+//! specs saying what its fields mean, and the keys they are spelled with. A plain struct
+//! decodes too, with no specs, each field under its own name. Specs give:
 //!
-//! ```zig
-//! pub const meta = .{
-//!     .password = .{ .secret = true },      // redacted when written
-//!     .tls_cert = .{ .key = "certificate" }, // stored under a different key
-//!     .port = .{ .help = "Port to listen on", .min = 1024, .max = 49151 },
-//!     .level = .{ .one_of = &[_][]const u8{ "debug", "info" } },
-//!     .host = .{ .pattern = "*.example.com" }, // `*` and `?` wildcards
-//!     .plugins = .{ .merge = .append },      // lists accumulate across files
-//!     .timeout = .{ .renamed_from = "request_timeout" }, // the old key still works
-//!     .legacy = .{ .deprecated = "set by the server now" }, // read, with a warning
-//!     .token = .{ .env = "API_TOKEN" },     // read from $API_TOKEN (`Config` binds it)
-//! };
-//! ```
+//! - checks on each value (`.checks`, and `.each` for a list's elements), and on a whole
+//!   struct across its fields, run once every field of it decoded;
+//! - `.deprecated`: the key is read, with a warning when it is set;
+//! - `.secret`: `Config` redacts the key when writing.
 //!
-//! `.min` and `.max` bound numbers (each element, for a list); `.one_of` and `.pattern`
-//! check strings. A struct may also declare `pub fn validate(self: T) ?[]const u8`, for
-//! rules across fields: it returns what is wrong, or null.
+//! The keys give `.key` (stored under another name), `.renamed_from` (an old key still
+//! read, with a warning), `.env`, and `.merge` (see `settings.zig`).
+//!
+//! A tagged union is a choice between its variants (`storage: union(enum) { disk: Disk,
+//! s3: S3, memory }`): a string names the variant, which takes its defaults
+//! (`storage = "s3"`), or a table with one key names it and holds its fields
+//! (`[storage.s3]`, `bucket = "b"`).
 //!
 //! With `Options.errors`, decoding does not stop at the first problem: every one is
 //! collected, so a configuration can be fixed in one pass.
-//!
-//! Options this module does not know are ignored, so one struct can carry metadata for
-//! both `cfg` and `cli`. Entries that name no field are a compile error.
 
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
+const field = @import("field");
 const Value = @import("value.zig").Value;
 const Table = @import("value.zig").Table;
 const Array = @import("value.zig").Array;
 const Diagnostic = @import("Diagnostic.zig");
 const path = @import("path.zig");
+const settings_ = @import("settings.zig");
+
+/// The message of a required key that nothing set; `Config.decode` adds how to set it.
+pub const missing_message = "required key is missing";
 
 /// What decoding can fail with; the diagnostic names the key.
 pub const Error = error{ InvalidValue, MissingField, UnknownField } || Allocator.Error;
@@ -53,25 +52,26 @@ pub const Options = struct {
     /// Collect every problem here, in the decode arena, instead of stopping at the first.
     /// Decoding still fails, with the first problem's error and in `diag`.
     errors: ?*std.ArrayList(Diagnostic) = null,
-    /// Notes on keys read under a name `meta` marks `.renamed_from`, in the decode arena:
-    /// `key` is the old name, `message` says which to use instead. Also keys `meta` marks
-    /// `.deprecated` that are set: `message` is "deprecated: " and the reason. Also keys
-    /// no field claims, with `warn_unknown`.
+    /// Notes on keys read under a name their place marks `.renamed_from`, in the decode
+    /// arena: `key` is the old name, `message` says which to use instead. Also keys a spec
+    /// marks `.deprecated` that are set: `message` is "deprecated: " and the reason. Also
+    /// keys no field claims, with `warn_unknown`.
     warnings: ?*std.ArrayList(Diagnostic) = null,
 };
 
-/// Decodes `value` as a `T`. Slices and strings in the result are allocated in `arena` or
-/// borrowed from the tree, so the result lives as long as both. On failure, `diag` names the
-/// key and the problem.
+/// Decodes `value` as `X`: a settings type (`cfg.settings`) or a plain type. Slices and
+/// strings in the result are allocated in `arena` or borrowed from the tree, so the result
+/// lives as long as both. On failure, `diag` names the key and the problem.
 pub fn decode(
-    comptime T: type,
+    comptime X: type,
     arena: Allocator,
     value: Value,
     options: Options,
     diag: ?*Diagnostic,
-) Error!T {
+) Error!settings_.Of(X).Type {
+    const Set = settings_.Of(X);
     var decoder: Decoder = .{ .arena = arena, .options = options, .diag = diag };
-    const result = try decoder.any(T, value, "");
+    const result = try decoder.any(Set.Type, Set.Specs, Set.root, value, "");
     if (decoder.first) |err| return err;
     return result;
 }
@@ -106,11 +106,19 @@ const Decoder = struct {
         return d.options.errors != null and err != error.OutOfMemory;
     }
 
-    fn any(d: *Decoder, comptime T: type, value: Value, key: []const u8) Error!T {
+    fn any(
+        d: *Decoder,
+        comptime T: type,
+        comptime S: type,
+        comptime place: anytype,
+        value: Value,
+        key: []const u8,
+    ) Error!T {
         if (T == Value) return value;
         if (comptime hasParse(T)) return d.parsed(T, value, key);
+        if (comptime settings_.isChoice(T)) return d.choice(T, S, place, value, key);
         return switch (@typeInfo(T)) {
-            .optional => |o| if (value == .null) null else try d.any(o.child, value, key),
+            .optional => |o| if (value == .null) null else try d.any(o.child, S, place, value, key),
             .bool => d.boolean(value, key),
             .int => d.int(T, value, key),
             .float => d.float(T, value, key),
@@ -118,9 +126,9 @@ const Decoder = struct {
             .pointer => |p| {
                 if (p.size != .slice) @compileError("cfg cannot decode " ++ @typeName(T));
                 if (p.child == u8) return d.string(value, key);
-                return d.slice(p.child, value, key);
+                return d.slice(p.child, S, place, value, key);
             },
-            .@"struct" => d.structure(T, value, key),
+            .@"struct" => d.structure(T, S, place, value, key),
             else => @compileError("cfg cannot decode " ++ @typeName(T)),
         };
     }
@@ -177,14 +185,23 @@ const Decoder = struct {
     }
 
     fn enumeration(d: *Decoder, comptime T: type, value: Value, key: []const u8) Error!T {
-        const message = "expected one of: " ++ comptime enumNames(T);
-        if (value != .string) return d.fail(key, error.InvalidValue, message);
-        inline for (@typeInfo(T).@"enum".field_names, 0..) |name, i| {
-            if (namesMatch(name, value.string)) {
-                return @fromBackingInt(@intCast(@typeInfo(T).@"enum".field_values[i]));
+        const names = @typeInfo(T).@"enum".field_names;
+        if (value == .string) {
+            inline for (names, 0..) |name, i| {
+                if (field.sameName(name, value.string)) {
+                    return @fromBackingInt(@intCast(@typeInfo(T).@"enum".field_values[i]));
+                }
             }
         }
-        return d.fail(key, error.InvalidValue, message);
+        return d.fail(key, error.InvalidValue, try d.oneOf(names, value));
+    }
+
+    /// "expected one of: a, b", with "did you mean" when `value` is text close to one.
+    fn oneOf(d: *Decoder, comptime names: []const [:0]const u8, value: Value) Error![]const u8 {
+        const message = "expected one of: " ++ comptime nameList(names);
+        if (value != .string) return message;
+        const near = path.suggest(value.string, &comptime nameSlices(names)) orelse return message;
+        return std.fmt.allocPrint(d.arena, "{s}; did you mean '{s}'?", .{ message, near });
     }
 
     fn string(d: *Decoder, value: Value, key: []const u8) Error![]const u8 {
@@ -205,7 +222,16 @@ const Decoder = struct {
         return T.parse(text) catch d.fail(key, error.InvalidValue, message);
     }
 
-    fn slice(d: *Decoder, comptime Child: type, value: Value, key: []const u8) Error![]const Child {
+    fn slice(
+        d: *Decoder,
+        comptime Child: type,
+        comptime S: type,
+        comptime place: anytype,
+        value: Value,
+        key: []const u8,
+    ) Error![]const Child {
+        // The elements of a list of tables have their fields' places; others, none.
+        const item_place = comptime elementPlace(Child, place);
         switch (value) {
             .array => |a| {
                 const out = try d.arena.alloc(Child, a.items.len);
@@ -214,7 +240,7 @@ const Decoder = struct {
                         try std.fmt.allocPrint(d.arena, "{d}", .{i})
                     else
                         try std.fmt.allocPrint(d.arena, "{s}.{d}", .{ key, i });
-                    slot.* = d.any(Child, item, item_key) catch |err| {
+                    slot.* = d.any(Child, S, item_place, item, item_key) catch |err| {
                         if (!d.recover(err)) return err;
                         slot.* = undefined; // The decode fails; nothing reads it.
                         continue;
@@ -234,7 +260,7 @@ const Decoder = struct {
                 var it = std.mem.splitScalar(u8, s, ',');
                 for (out) |*slot| {
                     const part = std.mem.trim(u8, it.next().?, " ");
-                    slot.* = try d.any(Child, .{ .string = part }, key);
+                    slot.* = try d.any(Child, S, item_place, .{ .string = part }, key);
                 }
                 return out;
             },
@@ -242,32 +268,47 @@ const Decoder = struct {
         }
     }
 
-    fn structure(d: *Decoder, comptime T: type, value: Value, key: []const u8) Error!T {
-        comptime checkMeta(T);
+    fn structure(
+        d: *Decoder,
+        comptime T: type,
+        comptime S: type,
+        comptime place: anytype,
+        value: Value,
+        key: []const u8,
+    ) Error!T {
         if (value != .table) return d.fail(key, error.InvalidValue, "expected a table");
         const info = @typeInfo(T).@"struct";
+        const spec = comptime S.of(T);
         var result: T = undefined;
         var failed = false;
-        inline for (info.field_names, info.field_types, info.field_attrs) |name, Field, attrs| {
-            const field_key = comptime fieldKey(T, name);
-            const child_key = try path.join(d.arena, key, field_key);
-            if (try d.findOrRenamed(T, name, value.table, key, child_key)) |found| {
+        // Which fields took their defaults: named when a check across fields fails.
+        var defaulted: [info.field_names.len]bool = @splat(false);
+        inline for (
+            info.field_names,
+            info.field_types,
+            info.field_attrs,
+            0..,
+        ) |name, Field, attrs, i| {
+            const field_place = @field(place.fields, name);
+            const field_spec = @field(spec.fields, name);
+            const child_key = try path.join(
+                d.arena,
+                key,
+                comptime settings_.keyOf(field_place, name),
+            );
+            if (try d.findOrRenamed(field_place, name, value.table, key, child_key)) |found| {
                 const child = found.value;
                 // Problems name the key the value is under, the old one when it was renamed.
                 const at = found.key;
-                if (comptime metaHas(T, name, "deprecated")) {
-                    const reason: []const u8 = @field(T.meta, name).deprecated;
+                if (field_spec.deprecated) |reason| {
                     if (d.options.warnings) |list| try list.append(d.arena, .{
                         .key = at,
                         .message = try std.fmt.allocPrint(d.arena, "deprecated: {s}", .{reason}),
                     });
                 }
-                if (d.any(Field, child, at)) |decoded| {
+                if (d.any(Field, S, field_place, child, at)) |decoded| {
                     @field(result, name) = decoded;
-                    d.constrain(T, name, Field, decoded, at) catch |err| {
-                        if (!d.recover(err)) return err;
-                        failed = true;
-                    };
+                    if (!try d.checkField(Field, field_spec, decoded, at)) failed = true;
                 } else |err| {
                     if (!d.recover(err)) return err;
                     failed = true;
@@ -275,46 +316,198 @@ const Decoder = struct {
                 }
             } else if (comptime defaultOf(Field, attrs)) |default| {
                 @field(result, name) = default;
+                defaulted[i] = true;
             } else if (@typeInfo(Field) == .optional) {
                 @field(result, name) = null;
+            } else if (comptime settings_.isTable(Field)) {
+                // A table whose own fields all have defaults may be left out.
+                @field(result, name) = d.any(
+                    Field,
+                    S,
+                    field_place,
+                    .empty_table,
+                    child_key,
+                ) catch |err| blk: {
+                    if (!d.recover(err)) return err;
+                    failed = true;
+                    break :blk undefined;
+                };
             } else {
-                const err = d.fail(child_key, error.MissingField, "required key is missing");
+                const err = d.fail(child_key, error.MissingField, missing_message);
                 if (!d.recover(err)) return err;
                 failed = true;
                 @field(result, name) = undefined;
             }
         }
         const warn = d.options.warn_unknown and d.options.warnings != null;
-        if (d.options.strict or warn) d.unknownKeys(
-            T,
-            value.table,
-            key,
-        ) catch |err| {
+        if (d.options.strict or warn) d.unknownKeys(T, place, value.table, key) catch |err| {
             if (!d.recover(err)) return err;
         };
-        // Rules across fields need every field decoded.
-        if (!failed and comptime @hasDecl(T, "validate")) {
-            const message: ?[]const u8 = result.validate();
-            if (message) |text| try d.failRecoverable(key, text);
-        }
+        // Checks across fields need every field decoded.
+        if (!failed) inline for (spec.checks) |c| {
+            d.runCheck(
+                T,
+                c,
+                result,
+                key,
+                defaultsNote(T, &defaulted, value.table.count() > 0),
+            ) catch |err| {
+                if (!d.recover(err)) return err;
+            };
+        };
         return result;
     }
 
-    /// The field's value and the key it is under: its own, or the key `meta` says it was
-    /// renamed from, with a warning.
+    /// A choice: a string naming the variant, or a table with one key naming it.
+    fn choice(
+        d: *Decoder,
+        comptime U: type,
+        comptime S: type,
+        comptime place: anytype,
+        value: Value,
+        key: []const u8,
+    ) Error!U {
+        const names = comptime field.fieldNames(U);
+        const keys = comptime blk: {
+            var out: [names.len][]const u8 = undefined;
+            for (names, &out) |name, *k| k.* = settings_.keyOf(@field(place.variants, name), name);
+            break :blk out;
+        };
+        const spec = comptime S.of(U);
+        var chosen: ?U = null;
+        var failed = false;
+        switch (value) {
+            .string => |text| inline for (names, keys) |name, variant_key| {
+                if (field.sameName(variant_key, text)) {
+                    const at = try path.join(d.arena, key, variant_key);
+                    chosen = try d.variant(U, S, place, name, .empty_table, at, &failed);
+                }
+            },
+            .table => |t| {
+                var found: ?[]const u8 = null;
+                inline for (names, keys) |name, variant_key| {
+                    if (findKey(t, variant_key)) |payload| {
+                        if (found) |other| {
+                            const message = try std.fmt.allocPrint(
+                                d.arena,
+                                "set only one of {s} and {s}",
+                                .{ other, variant_key },
+                            );
+                            return d.fail(key, error.InvalidValue, message);
+                        }
+                        found = variant_key;
+                        const at = try path.join(d.arena, key, variant_key);
+                        chosen = try d.variant(U, S, place, name, payload, at, &failed);
+                    }
+                }
+            },
+            else => {},
+        }
+        const result = chosen orelse {
+            const message = "expected one of: " ++ comptime nameList(&keys);
+            const near = if (value == .string) path.suggest(value.string, &keys) else null;
+            return d.fail(key, error.InvalidValue, if (near) |n|
+                try std.fmt.allocPrint(d.arena, "{s}; did you mean '{s}'?", .{ message, n })
+            else
+                message);
+        };
+        if (!failed) inline for (spec.checks) |c| {
+            d.runCheck(U, c, result, key, no_note) catch |err| {
+                if (!d.recover(err)) return err;
+            };
+        };
+        return result;
+    }
+
+    fn variant(
+        d: *Decoder,
+        comptime U: type,
+        comptime S: type,
+        comptime place: anytype,
+        comptime name: []const u8,
+        payload: Value,
+        at: []const u8,
+        failed: *bool,
+    ) Error!U {
+        const P = @FieldType(U, name);
+        if (P == void) return @unionInit(U, name, {});
+        const decoded = d.any(P, S, @field(place.variants, name), payload, at) catch |err| {
+            if (!d.recover(err)) return err;
+            failed.* = true;
+            return @unionInit(U, name, undefined); // The decode fails; nothing reads it.
+        };
+        const variant_spec = @field((comptime S.of(U)).fields, name);
+        if (!try d.checkField(P, variant_spec, decoded, at)) failed.* = true;
+        return @unionInit(U, name, decoded);
+    }
+
+    /// Runs a field's checks on its decoded value, and `.each` on a list's elements.
+    /// Whether they all passed.
+    fn checkField(
+        d: *Decoder,
+        comptime Field: type,
+        comptime spec: anytype,
+        decoded: Field,
+        key: []const u8,
+    ) Error!bool {
+        const C = field.Unwrap(Field);
+        const value: C = if (@typeInfo(Field) == .optional) decoded orelse return true else decoded;
+        var ok = true;
+        inline for (spec.checks) |c| {
+            d.runCheck(C, c, value, key, no_note) catch |err| {
+                if (!d.recover(err)) return err;
+                ok = false;
+            };
+        }
+        if (comptime field.isList(C)) {
+            if (spec.each.len > 0) for (value, 0..) |item, i| {
+                const item_key = try std.fmt.allocPrint(d.arena, "{s}.{d}", .{ key, i });
+                inline for (spec.each) |c| {
+                    d.runCheck(@TypeOf(item), c, item, item_key, no_note) catch |err| {
+                        if (!d.recover(err)) return err;
+                        ok = false;
+                    };
+                }
+            };
+        }
+        return ok;
+    }
+
+    fn runCheck(
+        d: *Decoder,
+        comptime V: type,
+        comptime c: field.Check(V),
+        value: V,
+        key: []const u8,
+        note: anytype,
+    ) Error!void {
+        var message: std.Io.Writer.Allocating = .init(d.arena);
+        c.run(value, &message.writer) catch |err| switch (err) {
+            // An allocating writer fails only for want of memory.
+            error.WriteFailed => return error.OutOfMemory,
+            error.Invalid => {
+                note.write(&message.writer) catch return error.OutOfMemory;
+                return d.fail(key, error.InvalidValue, message.written());
+            },
+        };
+    }
+
+    /// The field's value and the key it is under: its own, or the key its place says it
+    /// was renamed from, with a warning.
     fn findOrRenamed(
         d: *Decoder,
-        comptime T: type,
+        comptime place: anytype,
         comptime name: []const u8,
         table: Table,
         key: []const u8,
         child_key: []const u8,
     ) Error!?struct { value: Value, key: []const u8 } {
-        if (findKey(table, comptime fieldKey(T, name))) |child| {
+        if (findKey(table, comptime settings_.keyOf(place, name))) |child| {
             return .{ .value = child, .key = child_key };
         }
-        if (comptime !metaHas(T, name, "renamed_from")) return null;
-        const old: []const u8 = @field(T.meta, name).renamed_from;
+        const renamed = comptime renamedFrom(place);
+        if (renamed == null) return null;
+        const old: []const u8 = renamed.?;
         const found = (Value{ .table = table }).lookup(old) orelse return null;
         // `old` is a path below this table, not one key.
         const old_key = if (key.len == 0)
@@ -328,94 +521,30 @@ const Decoder = struct {
         return .{ .value = found, .key = old_key };
     }
 
-    /// `fail`, but returning normally when problems are being collected.
-    fn failRecoverable(d: *Decoder, key: []const u8, message: []const u8) Error!void {
-        const err = d.fail(key, error.InvalidValue, message);
-        if (!d.recover(err)) return err;
-    }
-
-    /// Checks `meta`'s `.min`, `.max`, `.one_of`, and `.pattern` for the field `name`.
-    fn constrain(
-        d: *Decoder,
-        comptime T: type,
-        comptime name: []const u8,
-        comptime Field: type,
-        decoded: Field,
-        key: []const u8,
-    ) Error!void {
-        switch (@typeInfo(Field)) {
-            .optional => if (decoded) |inner| {
-                return d.constrain(T, name, @typeInfo(Field).optional.child, inner, key);
-            },
-            .int, .float => {
-                const number: f64 = if (@typeInfo(Field) == .int)
-                    @floatFromInt(decoded)
-                else
-                    @floatCast(decoded);
-                if (comptime metaHas(T, name, "min")) {
-                    const min: f64 = @field(T.meta, name).min;
-                    if (number < min) return d.fail(key, error.InvalidValue, try std.fmt.allocPrint(
-                        d.arena,
-                        "must be at least {d}",
-                        .{min},
-                    ));
-                }
-                if (comptime metaHas(T, name, "max")) {
-                    const max: f64 = @field(T.meta, name).max;
-                    if (number > max) return d.fail(key, error.InvalidValue, try std.fmt.allocPrint(
-                        d.arena,
-                        "must be at most {d}",
-                        .{max},
-                    ));
-                }
-            },
-            .pointer => |p| if (p.size == .slice and p.child == u8) {
-                if (comptime metaHas(T, name, "one_of")) {
-                    const choices: []const []const u8 = @field(T.meta, name).one_of;
-                    for (choices) |choice| {
-                        if (std.mem.eql(u8, choice, decoded)) break;
-                    } else return d.fail(key, error.InvalidValue, try std.fmt.allocPrint(
-                        d.arena,
-                        "must be one of {s}",
-                        .{try std.mem.join(d.arena, ", ", choices)},
-                    ));
-                }
-                if (comptime metaHas(T, name, "pattern")) {
-                    const pattern: []const u8 = @field(T.meta, name).pattern;
-                    if (!glob(pattern, decoded)) return d.fail(
-                        key,
-                        error.InvalidValue,
-                        try std.fmt.allocPrint(d.arena, "must match {s}", .{pattern}),
-                    );
-                }
-            } else if (p.size == .slice) {
-                for (decoded, 0..) |item, i| {
-                    const item_key = try std.fmt.allocPrint(d.arena, "{s}.{d}", .{ key, i });
-                    try d.constrain(T, name, p.child, item, item_key);
-                }
-            },
-            else => {},
-        }
-    }
-
     /// Fails on the first table key no field of `T` claims, when strict; else adds a
     /// warning for each (`warn_unknown`).
-    fn unknownKeys(d: *Decoder, comptime T: type, table: Table, key: []const u8) Error!void {
+    fn unknownKeys(
+        d: *Decoder,
+        comptime T: type,
+        comptime place: anytype,
+        table: Table,
+        key: []const u8,
+    ) Error!void {
         const names = @typeInfo(T).@"struct".field_names;
         const keys = comptime blk: {
             var out: [names.len][]const u8 = undefined;
-            for (names, &out) |name, *k| k.* = fieldKey(T, name);
+            for (names, &out) |name, *k| k.* = settings_.keyOf(@field(place.fields, name), name);
             break :blk out;
         };
         var it = table.iterator();
         outer: while (it.next()) |entry| {
-            inline for (@typeInfo(T).@"struct".field_names) |name| {
-                if (namesMatch(comptime fieldKey(T, name), entry.key_ptr.*)) continue :outer;
+            inline for (names, keys) |name, field_key| {
+                if (field.sameName(field_key, entry.key_ptr.*)) continue :outer;
                 // A key the field was renamed from is known too, while it is still read.
-                if (comptime metaHas(T, name, "renamed_from")) {
-                    var segments = path.iterate(@field(T.meta, name).renamed_from);
+                if (comptime renamedFrom(@field(place.fields, name))) |old| {
+                    var segments = path.iterate(old);
                     const first = segments.next() catch null;
-                    if (first != null and namesMatch(first.?.text, entry.key_ptr.*)) {
+                    if (first != null and field.sameName(first.?.text, entry.key_ptr.*)) {
                         continue :outer;
                     }
                 }
@@ -435,20 +564,150 @@ const Decoder = struct {
     }
 };
 
+/// The place of each element of a list at `place`: a list of tables gives its elements'
+/// fields; anything else, none.
+fn elementPlace(comptime Child: type, comptime place: anytype) settings_.Place(Child) {
+    if (comptime settings_.isTable(field.Unwrap(Child)) and @hasField(@TypeOf(place), "fields")) {
+        return .{ .fields = place.fields };
+    }
+    return .{};
+}
+
+fn renamedFrom(comptime place: anytype) ?[]const u8 {
+    return if (@hasField(@TypeOf(place), "renamed_from")) place.renamed_from else null;
+}
+
+/// After a failed check across a struct's fields: the fields that took their defaults
+/// though the table was there, which the check may have read without the user seeing them.
+fn defaultsNote(comptime T: type, defaulted: []const bool, present: bool) DefaultsNote(T) {
+    return .{ .defaulted = defaulted, .present = present };
+}
+
+fn DefaultsNote(comptime T: type) type {
+    return struct {
+        defaulted: []const bool,
+        present: bool,
+
+        fn write(note: @This(), w: *std.Io.Writer) std.Io.Writer.Error!void {
+            if (!note.present) return;
+            const info = @typeInfo(T).@"struct";
+            var first = true;
+            inline for (
+                info.field_names,
+                info.field_types,
+                info.field_attrs,
+                0..,
+            ) |name, F, attrs, i| {
+                if (note.defaulted[i] and comptime isScalar(F)) {
+                    const default = comptime defaultOf(F, attrs).?;
+                    try w.writeAll(if (first) " (defaults: " else ", ");
+                    first = false;
+                    try writeScalar(F, default, name, w);
+                }
+            }
+            if (!first) try w.writeAll(")");
+        }
+    };
+}
+
+fn isScalar(comptime F: type) bool {
+    return switch (@typeInfo(F)) {
+        .bool, .int, .float, .@"enum" => true,
+        .pointer => F == []const u8,
+        else => false,
+    };
+}
+
+fn writeScalar(
+    comptime F: type,
+    value: F,
+    name: []const u8,
+    w: *std.Io.Writer,
+) std.Io.Writer.Error!void {
+    switch (@typeInfo(F)) {
+        .@"enum" => try w.print("{s} = {s}", .{ name, @tagName(value) }),
+        .pointer => try w.print("{s} = \"{s}\"", .{ name, value }),
+        else => try w.print("{s} = {}", .{ name, value }),
+    }
+}
+
+/// No note: what `runCheck` takes for checks on one value.
+const no_note = struct {
+    fn write(_: @This(), _: *std.Io.Writer) std.Io.Writer.Error!void {}
+}{};
+
 /// What encoding can fail with: a value no tree can hold.
 pub const EncodeError = error{Unrepresentable} || Allocator.Error;
 
-/// Encodes a Zig value as a tree in `arena`. Optional fields that are `null` are left out
-/// of tables, since most formats cannot spell null. Types with a `format` method and a
-/// `parse` function encode as their text.
+/// Encodes a Zig value as a tree in `arena`, each field under its own name. Optional
+/// fields that are `null` are left out of tables, since most formats cannot spell null.
+/// Types with a `format` method and a `parse` function encode as their text.
 pub fn encode(arena: Allocator, value: anytype) EncodeError!Value {
+    return encodeAt(settings_.Of(@TypeOf(value)).root, arena, value);
+}
+
+/// Encodes `value`, a `settings_.Of(X).Type`, under the keys `X` gives its fields.
+pub fn encodeAs(comptime X: type, arena: Allocator, value: settings_.Of(X).Type) EncodeError!Value {
+    return encodeAt(settings_.Of(X).root, arena, value);
+}
+
+/// The struct's own defaults as the settings type `X` spells them. A field without one is
+/// left out, but for a table, which holds its fields' defaults; so is a default the tree
+/// cannot hold (an integer beyond `i64`), which `decode` still falls back to.
+pub fn encodeDefaults(comptime X: type, arena: Allocator) Allocator.Error!Value {
+    const S = settings_.Of(X);
+    if (comptime !settings_.isTable(S.Type)) return .empty_table;
+    return encodeDefaultsAt(S.Type, S.root, arena);
+}
+
+fn encodeDefaultsAt(comptime T: type, comptime place: anytype, arena: Allocator) Allocator.Error!Value {
+    var table: Table = .empty;
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_names, info.field_types, info.field_attrs) |name, F, attrs| {
+        const field_place = comptime @field(place.fields, name);
+        const key = comptime settings_.keyOf(field_place, name);
+        if (attrs.default_value_ptr) |d| {
+            const default = @as(*const F, @ptrCast(@alignCast(d))).*;
+            const skip = @typeInfo(F) == .optional and default == null;
+            if (!skip) if (encodeAt(field_place, arena, default)) |encoded| {
+                var kept = encoded;
+                if (comptime settings_.isTable(F)) dropRequired(F, field_place, &kept);
+                try table.put(arena, key, kept);
+            } else |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Unrepresentable => {},
+            };
+        } else if (comptime settings_.isTable(F)) {
+            try table.put(arena, key, try encodeDefaultsAt(F, field_place, arena));
+        }
+    }
+    return .{ .table = table };
+}
+
+/// Leaves out of `value` the fields of `T` that have no default of their own (a table that
+/// is given must give them, so its default does not stand in for them).
+fn dropRequired(comptime T: type, comptime place: anytype, value: *Value) void {
+    if (value.* != .table) return;
+    inline for (comptime field.fieldNames(T), comptime field.fieldTypes(T)) |name, F| {
+        const field_place = comptime @field(place.fields, name);
+        const key = comptime settings_.keyOf(field_place, name);
+        if (comptime settings_.isTable(F)) {
+            if (value.table.getPtr(key)) |child| dropRequired(F, field_place, child);
+        } else if (comptime field.isRequired(T, name)) {
+            _ = value.table.orderedRemove(key);
+        }
+    }
+}
+
+fn encodeAt(comptime place: anytype, arena: Allocator, value: anytype) EncodeError!Value {
     const T = @TypeOf(value);
     if (T == Value) return value.clone(arena);
     if (comptime hasParse(T) and std.meta.hasMethod(T, "format")) {
         return .{ .string = try std.fmt.allocPrint(arena, "{f}", .{value}) };
     }
+    if (comptime settings_.isChoice(T)) return encodeChoice(place, arena, value);
     return switch (@typeInfo(T)) {
-        .optional => if (value) |v| encode(arena, v) else .null,
+        .optional => if (value) |v| encodeAt(place, arena, v) else .null,
         .bool => .{ .bool = value },
         .int, .comptime_int => if (std.math.cast(i64, value)) |i|
             .{ .int = i }
@@ -461,222 +720,74 @@ pub fn encode(arena: Allocator, value: anytype) EncodeError!Value {
             .slice => if (p.child == u8)
                 .{ .string = try arena.dupe(u8, value) }
             else
-                encodeSlice(arena, value),
+                encodeSlice(place, arena, value),
             .one => switch (@typeInfo(p.child)) {
                 .array => |a| if (a.child == u8)
                     .{ .string = try arena.dupe(u8, value) }
                 else
-                    encodeSlice(arena, @as([]const a.child, value)),
-                else => encode(arena, value.*),
+                    encodeSlice(place, arena, @as([]const a.child, value)),
+                else => encodeAt(place, arena, value.*),
             },
             else => @compileError("cfg cannot encode " ++ @typeName(T)),
         },
-        .@"struct" => encodeStruct(arena, value),
+        .@"struct" => encodeStruct(place, arena, value),
         else => @compileError("cfg cannot encode " ++ @typeName(T)),
     };
 }
 
-fn encodeSlice(arena: Allocator, items: anytype) EncodeError!Value {
+fn encodeSlice(comptime place: anytype, arena: Allocator, items: anytype) EncodeError!Value {
+    const item_place = comptime elementPlace(@typeInfo(@TypeOf(items)).pointer.child, place);
     var array: Array = try .initCapacity(arena, items.len);
-    for (items) |item| array.appendAssumeCapacity(try encode(arena, item));
+    for (items) |item| array.appendAssumeCapacity(try encodeAt(item_place, arena, item));
     return .{ .array = array };
 }
 
-fn encodeStruct(arena: Allocator, value: anytype) EncodeError!Value {
+fn encodeStruct(comptime place: anytype, arena: Allocator, value: anytype) EncodeError!Value {
     const T = @TypeOf(value);
-    comptime checkMeta(T);
+    const has_fields = @hasField(@TypeOf(place), "fields");
     var table: Table = .empty;
     inline for (
         @typeInfo(T).@"struct".field_names,
         @typeInfo(T).@"struct".field_types,
     ) |name, Field| {
-        const field = @field(value, name);
-        const skip = @typeInfo(Field) == .optional and field == null;
-        if (!skip) try table.put(arena, comptime fieldKey(T, name), try encode(arena, field));
+        const f = @field(value, name);
+        const skip = @typeInfo(Field) == .optional and f == null;
+        const field_place = comptime if (has_fields and @hasField(@TypeOf(place.fields), name))
+            @field(place.fields, name)
+        else
+            settings_.Place(Field){};
+        if (!skip) try table.put(
+            arena,
+            comptime settings_.keyOf(field_place, name),
+            try encodeAt(field_place, arena, f),
+        );
     }
     return .{ .table = table };
 }
 
-/// The dotted key of every field of `T`, recursively, that `meta` marks `.secret = true`.
-pub fn secretKeys(comptime T: type) []const []const u8 {
-    return comptime blk: {
-        var keys: []const []const u8 = &.{};
-        collectSecrets(T, "", &keys);
-        break :blk keys;
-    };
-}
-
-fn collectSecrets(
-    comptime T: type,
-    comptime prefix: []const u8,
-    comptime keys: *[]const []const u8,
-) void {
-    const Base = switch (@typeInfo(T)) {
-        .optional => |o| o.child,
-        else => T,
-    };
-    if (@typeInfo(Base) != .@"struct" or hasParse(Base) or Base == Value) return;
-    for (
-        @typeInfo(Base).@"struct".field_names,
-        @typeInfo(Base).@"struct".field_types,
-    ) |name, Field| {
-        const key = (if (prefix.len == 0) "" else prefix ++ ".") ++ fieldKey(Base, name);
-        if (metaOption(Base, name, "secret", false)) {
-            keys.* = keys.* ++ .{key};
-        } else {
-            collectSecrets(Field, key, keys);
-        }
+/// A void variant as its name; any other as a one-key table naming it.
+fn encodeChoice(comptime place: anytype, arena: Allocator, value: anytype) EncodeError!Value {
+    switch (value) {
+        inline else => |payload, tag| {
+            const name = @tagName(tag);
+            const variant_place = comptime if (@hasField(@TypeOf(place), "variants"))
+                @field(place.variants, name)
+            else
+                settings_.Place(@TypeOf(payload)){};
+            const variant_key = comptime settings_.keyOf(variant_place, name);
+            if (@TypeOf(payload) == void) return .{ .string = variant_key };
+            var table: Table = .empty;
+            try table.put(arena, variant_key, try encodeAt(variant_place, arena, payload));
+            return .{ .table = table };
+        },
     }
-}
-
-/// A key and the environment variable `meta` names for it with `.env`.
-pub const EnvBinding = struct { key: []const u8, env: []const u8 };
-
-/// The dotted key of every field of `T`, recursively, that `meta` gives an `.env` name,
-/// with that name. `cli` reads the same option for a flag, so one struct can name the
-/// variable for both.
-pub fn envBindings(comptime T: type) []const EnvBinding {
-    return comptime blk: {
-        var bindings: []const EnvBinding = &.{};
-        collectEnvBindings(T, "", &bindings);
-        break :blk bindings;
-    };
-}
-
-fn collectEnvBindings(
-    comptime T: type,
-    comptime prefix: []const u8,
-    comptime bindings: *[]const EnvBinding,
-) void {
-    const Base = switch (@typeInfo(T)) {
-        .optional => |o| o.child,
-        else => T,
-    };
-    if (@typeInfo(Base) != .@"struct" or hasParse(Base) or Base == Value) return;
-    for (
-        @typeInfo(Base).@"struct".field_names,
-        @typeInfo(Base).@"struct".field_types,
-    ) |name, Field| {
-        const key = (if (prefix.len == 0) "" else prefix ++ ".") ++ fieldKey(Base, name);
-        const env = metaOption(Base, name, "env", @as(?[]const u8, null));
-        if (env) |variable| {
-            bindings.* = bindings.* ++ .{EnvBinding{ .key = key, .env = variable }};
-        } else {
-            collectEnvBindings(Field, key, bindings);
-        }
-    }
-}
-
-/// The keys whose `meta` sets `.merge = .append`, recursively.
-pub fn appendKeys(comptime T: type) []const []const u8 {
-    return comptime blk: {
-        var keys: []const []const u8 = &.{};
-        collectAppends(T, "", &keys);
-        break :blk keys;
-    };
-}
-
-fn collectAppends(
-    comptime T: type,
-    comptime prefix: []const u8,
-    comptime keys: *[]const []const u8,
-) void {
-    const Base = switch (@typeInfo(T)) {
-        .optional => |o| o.child,
-        else => T,
-    };
-    if (@typeInfo(Base) != .@"struct" or hasParse(Base) or Base == Value) return;
-    for (
-        @typeInfo(Base).@"struct".field_names,
-        @typeInfo(Base).@"struct".field_types,
-    ) |name, Field| {
-        const key = (if (prefix.len == 0) "" else prefix ++ ".") ++ fieldKey(Base, name);
-        const merge = metaOption(Base, name, "merge", .replace);
-        if (merge == .append) {
-            keys.* = keys.* ++ .{key};
-        } else {
-            collectAppends(Field, key, keys);
-        }
-    }
-}
-
-/// Whether `T.meta.<field>` sets `option`.
-pub fn metaHas(comptime T: type, comptime field: []const u8, comptime option: []const u8) bool {
-    if (!@hasDecl(T, "meta")) return false;
-    if (!@hasField(@TypeOf(T.meta), field)) return false;
-    return @hasField(@TypeOf(@field(T.meta, field)), option);
 }
 
 /// Whether `text` matches `pattern`, where `*` matches any run of bytes and `?` one byte.
-pub fn glob(pattern: []const u8, text: []const u8) bool {
-    var p: usize = 0;
-    var t: usize = 0;
-    // Where to resume after a mismatch: the last `*` and the text position it covers to.
-    var star: ?usize = null;
-    var star_text: usize = 0;
-    while (t < text.len) {
-        if (p < pattern.len and (pattern[p] == '?' or pattern[p] == text[t])) {
-            p += 1;
-            t += 1;
-        } else if (p < pattern.len and pattern[p] == '*') {
-            star = p;
-            star_text = t;
-            p += 1;
-        } else if (star) |s| {
-            p = s + 1;
-            star_text += 1;
-            t = star_text;
-        } else return false;
-    }
-    while (p < pattern.len and pattern[p] == '*') p += 1;
-    return p == pattern.len;
-}
+pub const glob = field.matches;
 
-/// Whether `T` follows the `parse` convention: a declaration `pub fn parse(text: []const u8)`
-/// returning `T` or an error union of `T`. The signature is checked, not just the name, so
-/// an unrelated method called `parse` does not count.
-pub fn hasParse(comptime T: type) bool {
-    switch (@typeInfo(T)) {
-        .@"struct", .@"enum", .@"union" => {},
-        else => return false,
-    }
-    if (!@hasDecl(T, "parse")) return false;
-    const info = switch (@typeInfo(@TypeOf(T.parse))) {
-        .@"fn" => |f| f,
-        else => return false,
-    };
-    if (info.param_types.len != 1 or info.param_types[0] != []const u8) return false;
-    const Return = info.return_type orelse return false;
-    return Return == T or
-        (@typeInfo(Return) == .error_union and @typeInfo(Return).error_union.payload == T);
-}
-
-/// The value of `option` in `T.meta.<field>`, or `default` when absent.
-pub fn metaOption(
-    comptime T: type,
-    comptime field: []const u8,
-    comptime option: []const u8,
-    comptime default: anytype,
-) @TypeOf(default) {
-    if (!@hasDecl(T, "meta")) return default;
-    if (!@hasField(@TypeOf(T.meta), field)) return default;
-    const entry = @field(T.meta, field);
-    if (!@hasField(@TypeOf(entry), option)) return default;
-    return @field(entry, option);
-}
-
-fn checkMeta(comptime T: type) void {
-    if (!@hasDecl(T, "meta")) return;
-    for (@typeInfo(@TypeOf(T.meta)).@"struct".field_names) |name| {
-        if (!@hasField(T, name)) {
-            @compileError(@typeName(T) ++ ".meta names no field '" ++ name ++ "'");
-        }
-    }
-}
-
-fn fieldKey(comptime T: type, comptime name: []const u8) []const u8 {
-    return metaOption(T, name, "key", @as([]const u8, name));
-}
+/// Whether `T` follows the `parse` convention; see `field.hasParse`.
+pub const hasParse = field.hasParse;
 
 fn defaultOf(comptime Field: type, comptime attrs: std.builtin.Type.Struct.FieldAttributes) ?Field {
     const ptr = attrs.default_value_ptr orelse return null;
@@ -689,26 +800,20 @@ fn findKey(table: Table, name: []const u8) ?Value {
     if (table.get(name)) |v| return v;
     var it = table.iterator();
     while (it.next()) |entry| {
-        if (namesMatch(name, entry.key_ptr.*)) return entry.value_ptr.*;
+        if (field.sameName(name, entry.key_ptr.*)) return entry.value_ptr.*;
     }
     return null;
 }
 
-fn namesMatch(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |x, y| {
-        const nx = if (x == '-') '_' else std.ascii.toLower(x);
-        const ny = if (y == '-') '_' else std.ascii.toLower(y);
-        if (nx != ny) return false;
-    }
-    return true;
+fn nameList(comptime names: anytype) []const u8 {
+    var out: []const u8 = "";
+    for (names, 0..) |name, i| out = out ++ (if (i == 0) "" else ", ") ++ name;
+    return out;
 }
 
-fn enumNames(comptime T: type) []const u8 {
-    var out: []const u8 = "";
-    for (@typeInfo(T).@"enum".field_names, 0..) |name, i| {
-        out = out ++ (if (i == 0) "" else ", ") ++ name;
-    }
+fn nameSlices(comptime names: []const [:0]const u8) [names.len][]const u8 {
+    var out: [names.len][]const u8 = undefined;
+    for (names, &out) |name, *slot| slot.* = name;
     return out;
 }
 
@@ -726,14 +831,14 @@ const Server = struct {
     tls: ?struct { cert: []const u8, key: []const u8 } = null,
     password: ?[]const u8 = null,
     tls_verify: bool = true,
-
-    pub const meta = .{
-        .password = .{ .secret = true, .help = "unused by cfg" },
-        .tls_verify = .{ .short = 'k' },
-    };
 };
 
-fn decodeJson(comptime T: type, arena: Allocator, source: []const u8, diag: ?*Diagnostic) !T {
+fn decodeJson(
+    comptime T: type,
+    arena: Allocator,
+    source: []const u8,
+    diag: ?*Diagnostic,
+) !settings_.Of(T).Type {
     return decode(T, arena, try json.parse(arena, source, null), .{}, diag);
 }
 
@@ -857,14 +962,16 @@ test "a Value field passes through" {
     try testing.expectEqual(1, t.extra.lookup("x.0").?.int);
 }
 
-test "meta keys rename fields" {
+test "keys rename fields" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const T = struct {
-        cert: []const u8,
-        pub const meta = .{ .cert = .{ .key = "certificate" } };
-    };
-    const t = try decodeJson(T, arena.allocator(), "{\"certificate\": \"x\"}", null);
+    const T = struct { cert: []const u8 };
+    const keyed = settings_.settings(
+        T,
+        field.none,
+        .{ .fields = .{ .cert = .{ .key = "certificate" } } },
+    );
+    const t = try decodeJson(keyed, arena.allocator(), "{\"certificate\": \"x\"}", null);
     try testing.expectEqualStrings("x", t.cert);
 }
 
@@ -899,15 +1006,14 @@ test "encode literals" {
     try testing.expectEqual(2, list.array.items[1].int);
 }
 
-test secretKeys {
-    const Root = struct {
-        server: Server,
-        db: struct {
-            url: []const u8,
-            pub const meta = .{ .url = .{ .secret = true } };
-        },
-    };
-    const keys = comptime secretKeys(Root);
+test "secret keys follow specs by type" {
+    const Db = struct { url: []const u8 };
+    const Root = struct { server: Server, db: Db };
+    const specs = field.Set(.{
+        field.Spec(Server){ .fields = .{ .password = .{ .secret = true } } },
+        field.Spec(Db){ .fields = .{ .url = .{ .secret = true } } },
+    });
+    const keys = comptime settings_.secretKeys(settings_.settings(Root, specs, .{}));
     try testing.expectEqual(2, keys.len);
     try testing.expectEqualStrings("server.password", keys[0]);
     try testing.expectEqualStrings("db.url", keys[1]);
@@ -1136,13 +1242,17 @@ test "structs: required, optional, defaults, nesting, strictness" {
         maybe: ?Inner = null,
         list: []const Inner = &.{},
         renamed: bool = false,
-        pub const meta = .{ .renamed = .{ .key = "is-renamed" } };
     };
-    const empty = try decode(Outer, a, .empty_table, .{ .strict = true }, null);
+    const outer = settings_.settings(
+        Outer,
+        field.none,
+        .{ .fields = .{ .renamed = .{ .key = "is-renamed" } } },
+    );
+    const empty = try decode(outer, a, .empty_table, .{ .strict = true }, null);
     try testing.expectEqual(1, empty.inner.x);
     try testing.expectEqual(null, empty.maybe);
     try testing.expectEqual(0, empty.list.len);
-    const full = try decode(Outer, a, try json.parse(a,
+    const full = try decode(outer, a, try json.parse(a,
         \\{"inner": {"y": 3}, "maybe": {"x": 9}, "list": [{}, {"x": 2}], "IS_RENAMED": "on"}
     , null), .{ .strict = true }, null);
     try testing.expectEqual(3, full.inner.y.?);
@@ -1150,26 +1260,26 @@ test "structs: required, optional, defaults, nesting, strictness" {
     try testing.expectEqual(2, full.list[1].x);
     try testing.expect(full.renamed);
     const null_tree = try json.parse(a, "{\"maybe\": null}", null);
-    const explicit_null = try decode(Outer, a, null_tree, .{}, null);
+    const explicit_null = try decode(outer, a, null_tree, .{}, null);
     try testing.expectEqual(null, explicit_null.maybe);
 
     var diag: Diagnostic = .{};
     const unknown = try json.parse(a, "{\"inner\": {\"z\": 1}}", null);
     try testing.expectError(
         error.UnknownField,
-        decode(Outer, a, unknown, .{ .strict = true }, &diag),
+        decode(outer, a, unknown, .{ .strict = true }, &diag),
     );
     try testing.expectEqualStrings("inner.z", diag.key);
-    // The field's own name is unknown once `meta` renames it.
+    // The field's own name is unknown once its key renames it.
     const old_name = try json.parse(a, "{\"renamed\": true}", null);
     try testing.expectError(
         error.UnknownField,
-        decode(Outer, a, old_name, .{ .strict = true }, &diag),
+        decode(outer, a, old_name, .{ .strict = true }, &diag),
     );
-    try testing.expectError(error.InvalidValue, decode(Outer, a, .{ .string = "x" }, .{}, &diag));
+    try testing.expectError(error.InvalidValue, decode(outer, a, .{ .string = "x" }, .{}, &diag));
     try testing.expectEqualStrings("(root)", diag.key);
     const in_list = try json.parse(a, "{\"list\": [{\"x\": \"big\"}]}", null);
-    try testing.expectError(error.InvalidValue, decode(Outer, a, in_list, .{}, &diag));
+    try testing.expectError(error.InvalidValue, decode(outer, a, in_list, .{}, &diag));
     try testing.expectEqualStrings("list.0.x", diag.key);
 }
 
@@ -1177,10 +1287,9 @@ test "a key that needs quoting is quoted in diagnostics" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const T = struct {
-        port: u16,
-        pub const meta = .{ .port = .{ .key = "http.port" } };
-    };
+    const T = settings_.settings(struct { port: u16 }, field.none, .{ .fields = .{
+        .port = .{ .key = "http.port" },
+    } });
     var diag: Diagnostic = .{};
     const tree = try json.parse(a, "{\"http.port\": \"x\"}", null);
     try testing.expectError(error.InvalidValue, decode(T, a, tree, .{}, &diag));
@@ -1205,9 +1314,9 @@ test "encode optionals, pointers, enums, and renamed fields" {
         b: ?u8 = null,
         c: enum { x, y } = .y,
         d: f32 = 0.5,
-        pub const meta = .{ .c = .{ .key = "kind" } };
     };
-    const tree = try encode(a, T{});
+    const keyed = settings_.settings(T, field.none, .{ .fields = .{ .c = .{ .key = "kind" } } });
+    const tree = try encodeAs(keyed, a, .{});
     try testing.expectEqual(Value.null, tree.lookup("a").?);
     try testing.expectEqual(null, tree.lookup("b"));
     try testing.expectEqualStrings("y", tree.lookup("kind").?.string);
@@ -1253,17 +1362,16 @@ test hasParse {
     try testing.expect(hasParse(scalar.Duration));
 }
 
-test envBindings {
+test "environment variables follow keys through optionals" {
     const Root = struct {
-        db: ?struct {
-            url: []const u8 = "",
-            pass: []const u8 = "",
-            pub const meta = .{ .pass = .{ .env = "DB_PASSWORD", .key = "password" } };
-        } = null,
+        db: ?struct { url: []const u8 = "", pass: []const u8 = "" } = null,
         port: u16 = 0,
-        pub const meta = .{ .port = .{ .env = "PORT", .help = "for cli too" } };
     };
-    const bindings = comptime envBindings(Root);
+    const keyed = settings_.settings(Root, field.none, .{ .fields = .{
+        .db = .{ .fields = .{ .pass = .{ .env = "DB_PASSWORD", .key = "password" } } },
+        .port = .{ .env = "PORT" },
+    } });
+    const bindings = comptime settings_.envBindings(keyed);
     try std.testing.expectEqual(2, bindings.len);
     try std.testing.expectEqualStrings("db.password", bindings[0].key);
     try std.testing.expectEqualStrings("DB_PASSWORD", bindings[0].env);
@@ -1271,18 +1379,23 @@ test envBindings {
     try std.testing.expectEqualStrings("PORT", bindings[1].env);
 }
 
-test "secretKeys follows optionals and renames, and stops at leaves" {
+test "secret keys follow optionals and renames, and stop at leaves" {
+    const Db = struct { pass: []const u8 };
+    const Whole = struct { x: u8 };
     const T = struct {
-        db: ?struct {
-            pass: []const u8,
-            pub const meta = .{ .pass = .{ .secret = true, .key = "password" } };
-        } = null,
+        db: ?Db = null,
         timeout: scalar.Duration = .zero,
         raw: Value = .null,
-        whole: struct { x: u8 } = .{ .x = 0 },
-        pub const meta = .{ .whole = .{ .secret = true } };
+        whole: Whole = .{ .x = 0 },
     };
-    const keys = comptime secretKeys(T);
+    const specs = field.Set(.{
+        field.Spec(Db){ .fields = .{ .pass = .{ .secret = true } } },
+        field.Spec(T){ .fields = .{ .whole = .{ .secret = true } } },
+    });
+    const keyed = settings_.settings(T, specs, .{ .fields = .{
+        .db = .{ .fields = .{ .pass = .{ .key = "password" } } },
+    } });
+    const keys = comptime settings_.secretKeys(keyed);
     try testing.expectEqual(2, keys.len);
     try testing.expectEqualStrings("db.password", keys[0]);
     try testing.expectEqualStrings("whole", keys[1]);
@@ -1296,20 +1409,22 @@ const Constrained = struct {
     host: []const u8 = "a.example.com",
     low: u8 = 0,
     high: u8 = 10,
-
-    pub const meta = .{
-        .port = .{ .min = 1024, .max = 49151 },
-        .ports = .{ .min = 1 },
-        .ratio = .{ .max = 1 },
-        .level = .{ .one_of = &[_][]const u8{ "debug", "info" } },
-        .host = .{ .pattern = "*.example.com" },
-    };
-
-    pub fn validate(self: Constrained) ?[]const u8 {
-        if (self.low > self.high) return "low must not exceed high";
-        return null;
-    }
 };
+
+fn ordered(c: Constrained, w: *std.Io.Writer) !void {
+    if (c.low > c.high) return field.fail(w, "low must not exceed high", .{});
+}
+
+const constrained = settings_.settings(Constrained, field.Set(.{field.Spec(Constrained){
+    .fields = .{
+        .port = .{ .checks = &.{ .min(1024), .max(49151) } },
+        .ports = .{ .each = &.{.min(1)} },
+        .ratio = .{ .checks = &.{.max(1)} },
+        .level = .{ .checks = &.{.oneOf(&.{ "debug", "info" })} },
+        .host = .{ .checks = &.{.glob("*.example.com")} },
+    },
+    .checks = &.{.from(ordered)},
+}}), .{});
 
 fn decodeWith(
     comptime T: type,
@@ -1317,18 +1432,18 @@ fn decodeWith(
     source: []const u8,
     options: Options,
     diag: *Diagnostic,
-) Error!T {
+) Error!settings_.Of(T).Type {
     const tree = @import("json.zig").parse(arena, source, null) catch unreachable;
     return decode(T, arena, tree, options, diag);
 }
 
-test "meta constraints and validate" {
+test "checks on values and across fields" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var diag: Diagnostic = .{};
     const good = "{\"port\": 2000, \"ports\": [1, 2], \"ratio\": 0.5}";
-    const ok = try decodeWith(Constrained, a, good, .{}, &diag);
+    const ok = try decodeWith(constrained, a, good, .{}, &diag);
     try testing.expectEqual(2000, ok.port);
 
     const cases = [_]struct { []const u8, []const u8, []const u8 }{
@@ -1338,10 +1453,15 @@ test "meta constraints and validate" {
         .{ "{\"ratio\": 1.5}", "ratio", "must be at most 1" },
         .{ "{\"level\": \"loud\"}", "level", "must be one of debug, info" },
         .{ "{\"host\": \"example.org\"}", "host", "must match *.example.com" },
-        .{ "{\"low\": 5, \"high\": 1}", "(root)", "low must not exceed high" },
+        .{
+            "{\"low\": 5, \"high\": 1}",
+            "(root)",
+            "low must not exceed high (defaults: port = 8080, level = \"info\", " ++
+                "host = \"a.example.com\")",
+        },
     };
     for (cases) |case| {
-        const result = decodeWith(Constrained, a, case[0], .{}, &diag);
+        const result = decodeWith(constrained, a, case[0], .{}, &diag);
         try testing.expectError(error.InvalidValue, result);
         try testing.expectEqualStrings(case[1], diag.key);
         try testing.expectEqualStrings(case[2], diag.message);
@@ -1391,11 +1511,10 @@ test "deprecated keys are read, with a warning when set" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const Settings = struct {
-        legacy: u8 = 0,
-        current: u8 = 0,
-        pub const meta = .{ .legacy = .{ .deprecated = "set by the server now" } };
-    };
+    const Plain = struct { legacy: u8 = 0, current: u8 = 0 };
+    const Settings = settings_.settings(Plain, field.Set(.{field.Spec(Plain){ .fields = .{
+        .legacy = .{ .deprecated = "set by the server now" },
+    } }}), .{});
     var warnings: std.ArrayList(Diagnostic) = .empty;
     var diag: Diagnostic = .{};
     const settings = try decodeWith(
@@ -1419,14 +1538,14 @@ test "renamed_from reads the old key with a warning" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const Settings = struct {
+    const Plain = struct {
         timeout: u32 = 1,
-        server: struct {
-            host: []const u8 = "",
-            pub const meta = .{ .host = .{ .renamed_from = "hostname" } };
-        } = .{},
-        pub const meta = .{ .timeout = .{ .renamed_from = "request.timeout" } };
+        server: struct { host: []const u8 = "" } = .{},
     };
+    const Settings = settings_.settings(Plain, field.none, .{ .fields = .{
+        .timeout = .{ .renamed_from = "request.timeout" },
+        .server = .{ .fields = .{ .host = .{ .renamed_from = "hostname" } } },
+    } });
     var warnings: std.ArrayList(Diagnostic) = .empty;
     var diag: Diagnostic = .{};
     const old = "{\"request\": {\"timeout\": 5}, \"server\": {\"hostname\": \"h\"}}";
@@ -1469,4 +1588,103 @@ test "a TOML date-time decodes into DateTime and writes back bare" {
     defer out.deinit();
     try toml.write(&out.writer, tree, .{});
     try testing.expectEqualStrings("at = 1979-05-27T07:32:00Z\nday = 1979-05-27\n", out.written());
+}
+
+const Storage = union(enum) {
+    disk: struct { path: []const u8 = "/var/lib/app" },
+    s3: struct { bucket: []const u8, prefix: []const u8 = "" },
+    memory,
+};
+
+test "a choice from its name or from a table naming it" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = struct { storage: Storage = .memory };
+    const named = try decodeJson(T, a, "{\"storage\": \"disk\"}", null);
+    try testing.expectEqualStrings("/var/lib/app", named.storage.disk.path);
+    const table = try decodeJson(T, a, "{\"storage\": {\"s3\": {\"bucket\": \"b\"}}}", null);
+    try testing.expectEqualStrings("b", table.storage.s3.bucket);
+    try testing.expect((try decodeJson(T, a, "{}", null)).storage == .memory);
+    try testing.expect(
+        (try decodeJson(T, a, "{\"storage\": \"MEMORY\"}", null)).storage == .memory,
+    );
+
+    var diag: Diagnostic = .{};
+    const cases = [_]struct { []const u8, anyerror, []const u8, []const u8 }{
+        .{
+            "{\"storage\": \"s4\"}",
+            error.InvalidValue,
+            "storage",
+            "expected one of: disk, s3, memory; did you mean 's3'?",
+        },
+        .{
+            "{\"storage\": \"s3\"}",
+            error.MissingField,
+            "storage.s3.bucket",
+            "required key is missing",
+        },
+        .{
+            "{\"storage\": {\"disk\": {}, \"s3\": {}}}",
+            error.InvalidValue,
+            "storage",
+            "set only one of disk and s3",
+        },
+        .{ "{\"storage\": 1}", error.InvalidValue, "storage", "expected one of: disk, s3, memory" },
+    };
+    for (cases) |case| {
+        try testing.expectError(case[1], decodeJson(T, a, case[0], &diag));
+        try testing.expectEqualStrings(case[2], diag.key);
+        try testing.expectEqualStrings(case[3], diag.message);
+    }
+}
+
+test "a choice encodes as its name, or a table naming it" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = struct { storage: Storage };
+    try testing.expectEqualStrings(
+        "memory",
+        (try encode(a, T{ .storage = .memory })).lookup("storage").?.string,
+    );
+    const s3 = try encode(a, T{ .storage = .{ .s3 = .{ .bucket = "b" } } });
+    try testing.expectEqualStrings("b", s3.lookup("storage.s3.bucket").?.string);
+    const back = try decode(T, a, s3, .{ .strict = true }, null);
+    try testing.expectEqualStrings("b", back.storage.s3.bucket);
+}
+
+test "checks on a choice's variants, by type" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const T = struct { storage: Storage = .memory };
+    const S3 = @FieldType(Storage, "s3");
+    const specs = field.Set(
+        .{field.Spec(S3){ .fields = .{ .bucket = .{ .checks = &.{.minLen(3)} } } }},
+    );
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.InvalidValue, decodeJson(
+        settings_.settings(T, specs, .{}),
+        a,
+        "{\"storage\": {\"s3\": {\"bucket\": \"b\"}}}",
+        &diag,
+    ));
+    try testing.expectEqualStrings("storage.s3.bucket", diag.key);
+    try testing.expectEqualStrings("must be at least 3 long", diag.message);
+}
+
+test "an enum name close to a choice is suggested" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diag: Diagnostic = .{};
+    const Level = enum { debug, info, warn };
+    try testing.expectError(
+        error.InvalidValue,
+        decode(Level, arena.allocator(), .{ .string = "wran" }, .{}, &diag),
+    );
+    try testing.expectEqualStrings(
+        "expected one of: debug, info, warn; did you mean 'warn'?",
+        diag.message,
+    );
 }

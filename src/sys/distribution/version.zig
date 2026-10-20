@@ -8,6 +8,9 @@
 //! pre-release below its release, pre-release identifiers left to right (numeric ones
 //! numerically and below alphanumeric ones, alphanumeric ones in ASCII order, a shorter
 //! list below a longer one it prefixes). Build metadata never takes part in precedence.
+//!
+//! A parsed version. `pre` and `build` are empty when absent; they hold the text after `-`
+//! and `+` respectively, dot-separated identifiers included.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -15,46 +18,39 @@ const assert = std.debug.assert;
 /// The text is not a semantic version.
 pub const ParseError = error{InvalidVersion};
 
-/// A parsed version. `pre` and `build` are empty when absent; they hold the text after `-`
-/// and `+` respectively, dot-separated identifiers included.
-pub const Version = struct {
-    major: u64,
-    minor: u64,
-    patch: u64,
-    pre: []const u8 = "",
-    build: []const u8 = "",
+const Version = @This();
 
-    /// Parses `text`, which may start with a `v`.
-    pub fn parse(text: []const u8) ParseError!Version {
-        return parseVersion(text);
-    }
+major: u64,
+minor: u64,
+patch: u64,
+pre: []const u8 = "",
+build: []const u8 = "",
 
-    /// Precedence of `a` relative to `b`; build metadata is ignored.
-    pub fn order(a: Version, b: Version) std.math.Order {
-        return orderVersions(a, b);
-    }
-
-    /// Whether `a` has strictly higher precedence than `b`.
-    pub fn newerThan(a: Version, b: Version) bool {
-        return order(a, b) == .gt;
-    }
-
-    /// Whether this is a pre-release (`1.0.0-rc.1`).
-    pub fn isPrerelease(v: Version) bool {
-        return v.pre.len > 0;
-    }
-
-    /// Writes the canonical form, without a leading `v`: `1.2.3-rc.1+build.5`.
-    pub fn format(v: Version, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
-        if (v.pre.len > 0) try writer.print("-{s}", .{v.pre});
-        if (v.build.len > 0) try writer.print("+{s}", .{v.build});
-    }
-};
-
-/// Parses `text`, which may start with a `v`. Shorthand for `Version.parse`.
+/// Parses `text`, which may start with a `v`.
 pub fn parse(text: []const u8) ParseError!Version {
     return parseVersion(text);
+}
+
+/// Precedence of `a` relative to `b`; build metadata is ignored.
+pub fn order(a: Version, b: Version) std.math.Order {
+    return orderVersions(a, b);
+}
+
+/// Whether `a` has strictly higher precedence than `b`.
+pub fn newerThan(a: Version, b: Version) bool {
+    return order(a, b) == .gt;
+}
+
+/// Whether this is a pre-release (`1.0.0-rc.1`).
+pub fn isPrerelease(v: Version) bool {
+    return v.pre.len > 0;
+}
+
+/// Writes the canonical form, without a leading `v`: `1.2.3-rc.1+build.5`.
+pub fn format(v: Version, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    try writer.print("{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
+    if (v.pre.len > 0) try writer.print("-{s}", .{v.pre});
+    if (v.build.len > 0) try writer.print("+{s}", .{v.build});
 }
 
 fn parseVersion(text: []const u8) ParseError!Version {

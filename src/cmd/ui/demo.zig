@@ -4,43 +4,44 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field_ = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const group = @import("../tui/init.zig").group;
 
 const registry = struct {
-    const Confirm = @import("../tui/registry/confirm.zig").Confirm;
-    const Input = @import("../tui/registry/input.zig").Input;
-    const Textarea = @import("../tui/registry/textarea.zig").Textarea;
-    const List = @import("../tui/registry/list.zig").List;
-    const Select = @import("../tui/registry/select.zig").Select;
-    const MultiSelect = @import("../tui/registry/multiselect.zig").MultiSelect;
-    const Filter = @import("../tui/registry/filter.zig").Filter;
-    const Spinner = @import("../tui/registry/spinner.zig").Spinner;
-    const Progress = @import("../tui/registry/progress.zig").Progress;
-    const MultiProgress = @import("../tui/registry/multiprogress.zig").MultiProgress;
-    const Table = @import("../tui/registry/table.zig").Table;
-    const Pager = @import("../tui/registry/pager.zig").Pager;
-    const form = @import("../tui/registry/form.zig");
-    const Tabs = @import("../tui/registry/tabs.zig").Tabs;
-    const Viewport = @import("../tui/registry/viewport.zig").Viewport;
-    const Tree = @import("../tui/registry/tree.zig").Tree;
-    const FilePicker = @import("../tui/registry/filepicker.zig").FilePicker;
+    const Confirm = @import("../tui/registry/confirm.zig");
+    const Input = @import("../tui/registry/input.zig");
+    const Textarea = @import("../tui/registry/textarea.zig");
+    const List = @import("../tui/registry/list.zig");
+    const Select = @import("../tui/registry/select.zig");
+    const MultiSelect = @import("../tui/registry/multiselect.zig");
+    const Filter = @import("../tui/registry/filter.zig");
+    const Spinner = @import("../tui/registry/spinner.zig");
+    const Progress = @import("../tui/registry/progress.zig");
+    const MultiProgress = @import("../tui/registry/multiprogress.zig");
+    const Table = @import("../tui/registry/table.zig");
+    const Pager = @import("../tui/registry/pager.zig");
+    const Form = @import("../tui/registry/form.zig");
+    const Tabs = @import("../tui/registry/tabs.zig");
+    const Viewport = @import("../tui/registry/viewport.zig");
+    const Tree = @import("../tui/registry/tree.zig");
+    const FilePicker = @import("../tui/registry/filepicker.zig");
     const chart = @import("../tui/registry/chart.zig");
-    const markdown = @import("../tui/registry/markdown.zig");
-    const Prompts = @import("../tui/registry/prompts.zig").Prompts;
+    const Markdown = @import("../tui/registry/markdown.zig");
+    const Prompts = @import("../tui/registry/prompts.zig");
 };
 
 const Flags = struct {
     svg: bool = false,
     width: u16 = 64,
     height: u16 = 16,
-    pub const meta = .{
-        .svg = .{ .help = "Print the first frame as an SVG image instead of running it" },
-        .width = .{ .help = "Columns of the --svg image", .min = 20, .max = 300 },
-        .height = .{ .help = "Rows of the --svg image", .min = 4, .max = 200 },
-    };
 };
+const flags_flags = cli.flags(Flags, field_.Set(.{field_.Spec(Flags){ .fields = .{
+    .svg = .{ .help = "Print the first frame as an SVG image instead of running it" },
+    .width = .{ .help = "Columns of the --svg image", .checks = &.{ .min(20), .max(300) } },
+    .height = .{ .help = "Rows of the --svg image", .checks = &.{ .min(4), .max(200) } },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "demo",
@@ -51,7 +52,7 @@ pub const command = cli.command(.{
     \\demo of a component that does not end by itself.
     ,
     .group = group,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .max = 1, .usage = "[component]", .complete = completeDemos },
     .examples =
     \\termancy ui demo
@@ -269,7 +270,7 @@ const new_project: cli.Flow(NewProject, NewStep) = .{ .start = .project, .steps 
 fn flowDemo(r: *Runner) !void {
     if (r.flags.svg) {
         // The flow's first page, as `prompts` draws it.
-        var fields = [_]registry.form.Field{
+        var fields = [_]registry.Form.Field{
             .{
                 .label = "Project name?",
                 .kind = .{ .input = .{ .gpa = r.ctx.gpa, .prompt = "" } },
@@ -280,8 +281,8 @@ fn flowDemo(r: *Runner) !void {
             },
         };
         defer for (&fields) |*field| field.deinit();
-        var model: registry.form.Form = .{ .fields = &fields, .title = "New project" };
-        return r.show(registry.form.Form, &model, term.inline_options);
+        var model: registry.Form = .{ .fields = &fields, .title = "New project" };
+        return r.show(registry.Form, &model, term.inline_options);
     }
     var prompts: registry.Prompts = .{ .gpa = r.ctx.gpa, .io = r.ctx.io, .environ = r.ctx.environ };
     defer prompts.deinit();
@@ -293,7 +294,7 @@ fn flowDemo(r: *Runner) !void {
 
 fn formDemo(r: *Runner) !void {
     const gpa = r.ctx.gpa;
-    var fields = [_]registry.form.Field{
+    var fields = [_]registry.Form.Field{
         .{
             .label = "Name",
             .kind = .{ .input = .{ .gpa = gpa, .placeholder = "Ada" } },
@@ -308,8 +309,8 @@ fn formDemo(r: *Runner) !void {
         .{ .label = "Password", .kind = .{ .input = .{ .gpa = gpa, .password = true } } },
     };
     defer for (&fields) |*field| field.deinit();
-    var model: registry.form.Form = .{ .fields = &fields };
-    try r.show(registry.form.Form, &model, term.inline_options);
+    var model: registry.Form = .{ .fields = &fields };
+    try r.show(registry.Form, &model, term.inline_options);
 }
 
 fn input(r: *Runner) !void {
@@ -328,7 +329,7 @@ fn list(r: *Runner) !void {
 }
 
 fn markdownDemo(r: *Runner) !void {
-    var model: registry.markdown.Markdown = .{ .gpa = r.ctx.gpa, .source =
+    var model: registry.Markdown = .{ .gpa = r.ctx.gpa, .source =
         \\# Release notes
         \\
         \\Everything **passed**, and `zig build` is *fast*.

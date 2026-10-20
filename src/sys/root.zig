@@ -45,7 +45,7 @@ pub const telemetry = observability.telemetry;
 
 /// Semantic versions, self-update, package manifests.
 pub const distribution = @import("distribution/root.zig");
-pub const version = distribution.version;
+pub const Version = distribution.Version;
 pub const update = distribution.update;
 pub const manifests = distribution.manifests;
 pub const remote = distribution.remote;

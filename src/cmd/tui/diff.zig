@@ -3,19 +3,21 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const catalog = @import("project/catalog.zig");
 const term = @import("tui").term;
 const manifest = @import("project/manifest.zig");
-const workspace = @import("project/workspace.zig");
-const Workspace = workspace.Workspace;
+const Workspace = @import("project/workspace.zig");
 const group = @import("init.zig").group;
 
 const DiffFlags = struct {
     project: []const u8 = ".",
-    pub const meta = .{
-        .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-    };
 };
+const diff_flags = cli.flags(DiffFlags, field.Set(.{field.Spec(DiffFlags){ .fields = .{
+    .project = .{ .help = "The project directory" },
+} }}), .{ .fields = .{
+    .project = .{ .short = 'C', .value_name = "path" },
+} });
 
 pub const command = cli.command(.{
     .name = "diff",
@@ -27,7 +29,7 @@ pub const command = cli.command(.{
     \\unknown or not installed.
     ,
     .group = group,
-    .flags = DiffFlags,
+    .flags = diff_flags,
     .args = .{ .min = 1, .max = 1, .usage = "<component>" },
     .examples =
     \\termancy tui diff select
@@ -42,7 +44,7 @@ fn run(ctx: *cli.Context, flags: DiffFlags) !void {
     defer ws.close(ctx.io);
     const m = try ws.loadManifest(ctx) orelse return ctx.usageError("{s}{s}: not found (run " ++
         "termancy tui init first)", .{ ws.prefix, manifest.file_name });
-    const component = catalog.find(try workspace.components(ctx), name) orelse
+    const component = catalog.find(try Workspace.components(ctx), name) orelse
         return ctx.usageError("unknown component \"{s}\" (termancy tui list lists them)", .{name});
     if (m.components.get(name) == null) {
         return ctx.usageError("{s}: not installed (termancy tui add {s} installs it)", .{
@@ -53,7 +55,7 @@ fn run(ctx: *cli.Context, flags: DiffFlags) !void {
     for (component.files) |file| {
         const path = try manifest.filePath(ctx.arena, m, file);
         const ours = try ws.read(ctx, path) orelse "";
-        const theirs = try workspace.source(ctx, file);
+        const theirs = try Workspace.source(ctx, file);
         const a_name = try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ ws.prefix, path });
         const b_name = try std.fmt.allocPrint(ctx.arena, "registry/{s}", .{file});
         const options: term.diff.Options = .{ .color = ctx.color != .none };

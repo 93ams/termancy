@@ -5,13 +5,13 @@ termancy follows [Semantic Versioning](https://semver.org). The version is the o
 
 ## What is covered
 
-**`cli` and `cfg` are stable from 1.0.** Within a major version, a minor release only adds,
-and a patch release only fixes. These are the stable declarations:
+**`cli`, `cfg`, and `field` are stable from 1.0.** Within a major version, a minor release only
+adds, and a patch release only fixes. These are the stable declarations:
 
 | `cli` | |
 |---|---|
-| Building a tree | `command`, `Command`, `Flag`, `Candidate`, `flagsOf`, `Defaults`, and the spec fields and `meta` options [cli.md](cli.md) and `spec.zig` document (`.key` and `.internal` among them) |
-| Running it | `App` (its fields and `run`, `execute`, `executeLine`, `exit_*` statuses), `Context` (its fields and methods, `FlagRecord`) |
+| Building a tree | `command`, `Command`, `Flag`, `Candidate`, `flags`, `args`, `FlagOptions`, `ArgOptions`, `Complete`, `flagsOf`, `Defaults`, and the spec fields and options [cli.md](cli.md), `spec.zig`, and `sets.zig` document (`.settings` and `.internal` among them) |
+| Running it | `App` (its fields and `run`, `execute`, `executeLine`, `exit_*` statuses), `Context` (its fields and methods, `FlagRecord`, `SettingsAsker`) |
 | Output | `Context.render` and `text_columns`, `help`, `docs` (formats, `write`, `writeManTree`, `Options`), `complete` (scripts and the `__complete2` protocol), `json`, `Messages`, `Theme`, `version` |
 | Interaction | `flow` and `Flow` (steps, `Ask`, `Asker`, `Question`, `Script`), `prompt`, `repl`, `plugins`, `interrupt`, `terminal`, `pager`, `i18n`, `defaults` |
 | Tests | `testing.run`, `Run`, and `Options` |
@@ -21,8 +21,15 @@ and a patch release only fixes. These are the stable declarations:
 | The tree | `Value`, `Table`, `Array`, `value`, `path` |
 | Formats | `Format`, `json`, `toml`, `yaml`, `dotenv`, `zon`, `ini`: `parse`, `write`, and their options |
 | Layers | `Config` (its public methods and the option, result, and error types beside them, `loadAppFile` and `AppFileOptions` among them), `Diagnostic` |
-| Typed access | `decode`, `encode`, `DecodeOptions`, `DecodeError`, `Duration`, `ByteSize`, `DateTime`, `infer`, `glob` |
+| Typed access | `decode`, `encode`, `encodeAs`, `settings`, `Keys`, `Merge`, `sourcesOf`, `DecodeOptions`, `DecodeError`, `Duration`, `ByteSize`, `DateTime`, `infer`, `glob` |
 | Tools | `diff`, `Change`, `edit` (`apply`, `applyAll`, `reformat`, `sort`), `schema`, `encrypted`, `migrate`, `locate` |
+
+| `field` | |
+|---|---|
+| Specs | `Spec`, `Field`, `Fields`, `Set`, `none`, `specAt` |
+| Checks | `Check` (its built-ins and `from`), `About`, `Bound`, `Error`, `fail`, `matches`, `validate`, `validateExcept`, `Scope`, `checkOne`, `Segment` |
+| Types and paths | `Unwrap`, `isList`, `isGroup`, `isChoice`, `hasParse`, `fieldNames`, `fieldTypes`, `initDefaults`, `initVariant`, `isRequired`, `PathType`, `ptrAt`, `getAt` |
+| Names | `kebab`, `sameName`, `editDistance`, `suggest`, `join`, `ordinal` |
 
 **Machine output is stable too:** what `termancy` prints with `-o json` and the other formats
 in [machine-output.md](machine-output.md), its exit statuses, and the completion protocol
@@ -50,4 +57,5 @@ in [machine-output.md](machine-output.md), its exit statuses, and the completion
 A stable declaration is not removed in a minor release. It is first marked in its doc
 comment ("Deprecated: use X") and listed in the CHANGELOG under **Deprecated**, and it is
 removed at the next major version. Renamed flags and keys follow the same rule, and keep
-working in the meantime through `meta.aliases` (flags) and `meta.renamed_from` (keys).
+working in the meantime through a flag's `.aliases` (`cli.flags`) and a key's `.renamed_from`
+(`cfg.settings`).

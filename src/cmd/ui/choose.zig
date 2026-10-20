@@ -2,12 +2,13 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const plain = @import("plain.zig");
-const List = @import("../tui/registry/list.zig").List;
-const Select = @import("../tui/registry/select.zig").Select;
-const MultiSelect = @import("../tui/registry/multiselect.zig").MultiSelect;
+const List = @import("../tui/registry/list.zig");
+const Select = @import("../tui/registry/select.zig");
+const MultiSelect = @import("../tui/registry/multiselect.zig");
 
 pub const Flags = struct {
     limit: usize = 1,
@@ -16,20 +17,19 @@ pub const Flags = struct {
     selected: []const []const u8 = &.{},
     height: usize = 10,
     cursor: []const u8 = "> ",
-
-    pub const meta = .{
-        .limit = .{ .help = "The most items to choose; above 1, space chooses each" },
-        .no_limit = .{ .help = "Choose any number of items" },
-        .header = .{ .help = "Text above the items" },
-        .selected = .{
-            .help = "An item highlighted (or, with a limit, chosen) at the start; repeatable",
-            .value_name = "item",
-            .split = ',',
-        },
-        .height = .{ .help = "Items shown at once" },
-        .cursor = .{ .help = "Written before the highlighted item" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .limit = .{ .help = "The most items to choose; above 1, space chooses each" },
+    .no_limit = .{ .help = "Choose any number of items" },
+    .header = .{ .help = "Text above the items" },
+    .selected = .{
+        .help = "An item highlighted (or, with a limit, chosen) at the start; repeatable",
+    },
+    .height = .{ .help = "Items shown at once" },
+    .cursor = .{ .help = "Written before the highlighted item" },
+} }}), .{ .fields = .{
+    .selected = .{ .value_name = "item", .split = ',' },
+} });
 
 pub const command = cli.command(.{
     .name = "choose",
@@ -43,7 +43,7 @@ pub const command = cli.command(.{
     \\cancels (status 1), Ctrl-C interrupts (status 130). The list is drawn on the
     \\terminal even when standard output is not one.
     ,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .max = null, .usage = "[item...]" },
     .examples =
     \\termancy ui choose red green blue

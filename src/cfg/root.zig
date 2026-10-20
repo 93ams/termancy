@@ -6,12 +6,15 @@
 //! const Settings = struct {
 //!     server: struct { host: []const u8 = "localhost", port: u16 = 8080 } = .{},
 //!     token: ?[]const u8 = null,
-//!     pub const meta = .{ .token = .{ .secret = true } };
 //! };
+//!
+//! // What the fields mean, from `field` specs; how they are spelled, per place.
+//! const app = cfg.settings(Settings, field.Set(.{field.Spec(Settings){ .fields = .{
+//!     .token = .{ .help = "API token", .secret = true },
+//! } }}), .{ .fields = .{ .token = .{ .env = "APP_TOKEN" } } });
 //!
 //! var config: cfg.Config = .init(gpa);
 //! defer config.deinit();
-//! try config.setDefaults(Settings{});
 //! if (try config.findFile(io, .{
 //!     .name = "app",
 //!     .dirs = &.{ ".", "$HOME/.config/app" },
@@ -20,7 +23,7 @@
 //! }
 //! config.useEnv(environ);
 //! try config.automaticEnv("APP");               // APP_SERVER_PORT=9000
-//! const settings = try config.decode(Settings, .{}, &diag);
+//! const settings = try config.decode(app, .{}, &diag);
 //! ```
 //!
 //! Formats: JSON (and JSON with comments), TOML, YAML, dotenv, ZON, and INI (see `Format`).
@@ -30,10 +33,11 @@
 //!
 //! ```zig
 //! const defaults: Settings = @import("defaults.zon"); // .{ .server = .{ .port = 9000 } }
-//! try config.setDefaults(defaults);
+//! try config.setDefaults(app, defaults);
 //! ```
 //!
-//! The module imports only `std`. It shares one convention with `cli`: any type with
+//! The module imports `std` and `field`, whose specs it shares with `cli`. It shares one
+//! convention with `cli` besides: any type with
 //! `pub fn parse(text: []const u8) !T` decodes from text, so `Duration` and `ByteSize`
 //! work as configuration fields and as flag types.
 
@@ -58,10 +62,21 @@ pub const ByteSize = internal.scalar.ByteSize;
 /// A date and time, as TOML and RFC 3339 write it.
 pub const DateTime = internal.scalar.DateTime;
 
-/// Decodes a tree into a Zig type. See `decode.zig`.
+/// Decodes a tree into a settings type or a plain Zig type. See `decode.zig`.
 pub const decode = decoding.decode;
-/// Encodes a Zig value into a tree.
+/// Encodes a Zig value into a tree, each field under its own name.
 pub const encode = decoding.encode;
+/// Encodes a value under the keys a settings type gives its fields.
+pub const encodeAs = decoding.encodeAs;
+/// A settings type: a struct, what its fields mean (a `field.Set` of specs), and the keys
+/// they are spelled with. See `settings.zig`.
+pub const settings = settings_.settings;
+/// The spellings `settings` takes: each field's key, old key, variable, and merging.
+pub const Keys = settings_.Keys;
+/// How a list combines across layers.
+pub const Merge = settings_.Merge;
+/// Where else each value of a settings type can be set, for a command's help.
+pub const sourcesOf = settings_.sourcesOf;
 /// How `decode` treats unknown keys, bounds, and warnings.
 pub const DecodeOptions = decoding.Options;
 /// What `decode` can fail with.
@@ -69,7 +84,7 @@ pub const DecodeError = decoding.Error;
 /// Infers the type of untyped text: `true`, `42`, `1.5`, or a string.
 pub const infer = internal.scalar.infer;
 /// Whether text matches a pattern where `*` matches any run of bytes and `?` one byte, as
-/// `meta` patterns and ignore lists use: `glob(".*", ".cache")`.
+/// `.glob` checks and ignore lists use: `glob(".*", ".cache")`.
 pub const glob = decoding.glob;
 /// The leaves that differ between two trees. See `diff.zig`.
 pub const diff = differ.diff;
@@ -104,6 +119,7 @@ pub const encrypted = @import("encrypted.zig");
 pub const migrate = @import("migrate.zig");
 const decoding = @import("decode.zig");
 const differ = @import("diff.zig");
+const settings_ = @import("settings.zig");
 
 /// The library's own parts, public for its files and for the curious, but not stable:
 /// they change in any release (see docs/stability.md).
@@ -117,6 +133,7 @@ test {
     // would have its tests silently skipped.
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(Config);
+    std.testing.refAllDecls(settings_);
     std.testing.refAllDecls(differ);
     std.testing.refAllDecls(edit);
     std.testing.refAllDecls(locate);

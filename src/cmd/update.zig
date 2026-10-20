@@ -4,6 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 const live = @import("term").live;
 const version = @import("../main.zig").version;
@@ -12,8 +13,10 @@ const update = sys.update;
 
 const UpdateFlags = struct {
     check: bool = false,
-    pub const meta = .{ .check = .{ .help = "Only report whether a newer release exists" } };
 };
+const update_flags = cli.flags(UpdateFlags, field.Set(.{field.Spec(UpdateFlags){ .fields = .{
+    .check = .{ .help = "Only report whether a newer release exists" },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "update",
@@ -29,7 +32,7 @@ pub const command = cli.command(.{
     \\refuses instead, before any network access, so a script never waits on a prompt.
     \\-v logs the URLs, the archive chosen, and the checks made.
     ,
-    .flags = UpdateFlags,
+    .flags = update_flags,
     .confirm = true,
     .logging = true,
     .exit_statuses = &.{
@@ -76,7 +79,7 @@ fn run(ctx: *cli.Context, flags: UpdateFlags) !void {
 fn defaultOptions() update.Options {
     return .{
         .source = source,
-        .current = comptime sys.version.parse(version) catch unreachable,
+        .current = comptime sys.Version.parse(version) catch unreachable,
         // Releases publish archives: termancy-<os>-<cpu>.tar.gz, and .zip for Windows.
         .naming = .{ .suffix = if (builtin.os.tag == .windows) ".zip" else ".tar.gz" },
         .executable_name = "termancy",
@@ -242,7 +245,7 @@ fn runningExecutable(ctx: *cli.Context) !Destination {
 }
 
 /// What `runsVersion` needs: the release's version, which the new termancy must report.
-const Accept = struct { gpa: std.mem.Allocator, expected: sys.version.Version };
+const Accept = struct { gpa: std.mem.Allocator, expected: sys.Version };
 
 /// The install check: the new executable must run `--version` successfully and report the
 /// release's version, so an older signed archive published under a newer tag (the signature
@@ -267,7 +270,7 @@ fn runsVersion(
 
 /// Whether `stdout` of `termancy --version` names `expected`: `termancy <version>`, then a space,
 /// a line end, or nothing.
-fn reports(stdout: []const u8, expected: sys.version.Version) bool {
+fn reports(stdout: []const u8, expected: sys.Version) bool {
     var buffer: [128]u8 = undefined;
     const want = std.fmt.bufPrint(&buffer, "termancy {f}", .{expected}) catch return false;
     if (!std.mem.startsWith(u8, stdout, want)) return false;
@@ -276,7 +279,7 @@ fn reports(stdout: []const u8, expected: sys.version.Version) bool {
 }
 
 test reports {
-    const v = try sys.version.parse("1.2.0");
+    const v = try sys.Version.parse("1.2.0");
     try testing.expect(reports("termancy 1.2.0\n", v));
     try testing.expect(reports("termancy 1.2.0 (abc1234, 2026-10-17)\n", v));
     try testing.expect(!reports("termancy 1.1.0\n", v)); // An older release, re-tagged.
@@ -513,7 +516,10 @@ test "--yes downloads, verifies, and installs" {
     try testing.expectEqualStrings("✓ look up the latest release\n✓ download " ++ asset_name ++
         "\n✓ verify the checksum\n✓ install\n", t.err.written());
     var buffer: [64]u8 = undefined;
-    try testing.expectEqualStrings(new_binary, try tmp.dir.readFile(testing.io, "termancy", &buffer));
+    try testing.expectEqualStrings(
+        new_binary,
+        try tmp.dir.readFile(testing.io, "termancy", &buffer),
+    );
 }
 
 test "a corrupted download is not installed" {

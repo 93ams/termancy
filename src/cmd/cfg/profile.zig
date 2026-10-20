@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 const load = @import("load.zig");
 const Document = @import("edit.zig").Document;
@@ -44,13 +45,15 @@ fn runList(ctx: *cli.Context) !void {
 
 const UseFlags = struct {
     clear: bool = false,
-    pub const meta = .{ .clear = .{ .help = "Use no profile by default" } };
 };
+const use_flags = cli.flags(UseFlags, field.Set(.{field.Spec(UseFlags){ .fields = .{
+    .clear = .{ .help = "Use no profile by default" },
+} }}), .{});
 
 const use = cli.command(.{
     .name = "use",
     .summary = "Use a profile by default",
-    .flags = UseFlags,
+    .flags = use_flags,
     .args = .{ .max = 1, .usage = "<name>", .complete = load.completeProfiles },
     .examples =
     \\termancy cfg profile use staging

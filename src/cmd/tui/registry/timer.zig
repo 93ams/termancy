@@ -15,73 +15,73 @@ const stopwatch = @import("stopwatch.zig");
 const Writer = std.Io.Writer;
 const Duration = std.Io.Duration;
 
-pub const Timer = struct {
-    /// How long to count down from.
-    timeout: Duration,
-    /// The time left.
-    remaining: ?Duration = null,
-    running: bool = false,
-    interval: Duration = .fromSeconds(1),
-    tick_id: u32 = 0x5449_4d52, // "TIMR"
-    /// Run alone: space starts and stops, q quits, and it quits at the timeout.
-    keys: bool = true,
-    style: tui.Style = .{},
+const Timer = @This();
 
-    /// What is left: `remaining`, or all of `timeout` before the first tick.
-    pub fn left(t: *const Timer) Duration {
-        return t.remaining orelse t.timeout;
-    }
+/// How long to count down from.
+timeout: Duration,
+/// The time left.
+remaining: ?Duration = null,
+running: bool = false,
+interval: Duration = .fromSeconds(1),
+tick_id: u32 = 0x5449_4d52, // "TIMR"
+/// Run alone: space starts and stops, q quits, and it quits at the timeout.
+keys: bool = true,
+style: tui.Style = .{},
 
-    pub fn timedOut(t: *const Timer) bool {
-        return t.left().nanoseconds <= 0;
-    }
+/// What is left: `remaining`, or all of `timeout` before the first tick.
+pub fn left(t: *const Timer) Duration {
+    return t.remaining orelse t.timeout;
+}
 
-    /// Starts counting down; returns the first tick.
-    pub fn start(t: *Timer) tui.Cmd {
-        if (t.running or t.timedOut()) return .none;
-        t.running = true;
-        return .tick(t.interval, t.tick_id);
-    }
+pub fn timedOut(t: *const Timer) bool {
+    return t.left().nanoseconds <= 0;
+}
 
-    pub fn stop(t: *Timer) void {
-        t.running = false;
-    }
+/// Starts counting down; returns the first tick.
+pub fn start(t: *Timer) tui.Cmd {
+    if (t.running or t.timedOut()) return .none;
+    t.running = true;
+    return .tick(t.interval, t.tick_id);
+}
 
-    pub fn toggle(t: *Timer) tui.Cmd {
-        if (t.running) {
-            t.stop();
-            return .none;
-        }
-        return t.start();
-    }
+pub fn stop(t: *Timer) void {
+    t.running = false;
+}
 
-    pub fn update(t: *Timer, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .tick => |id| if (id == t.tick_id and t.running) {
-                const after = t.left().nanoseconds - t.interval.nanoseconds;
-                t.remaining = .fromNanoseconds(@max(after, 0));
-                if (t.timedOut()) {
-                    t.running = false;
-                    return if (t.keys) .quit else .none;
-                }
-                return .tick(t.interval, t.tick_id);
-            },
-            .key => |key| if (t.keys) {
-                if (key.matches("space")) return t.toggle();
-                if (key.matches("q") or key.matches("esc")) return .quit;
-            },
-            else => {},
-        }
+pub fn toggle(t: *Timer) tui.Cmd {
+    if (t.running) {
+        t.stop();
         return .none;
     }
+    return t.start();
+}
 
-    pub fn view(t: *const Timer, w: *Writer) Writer.Error!void {
-        var buffer: [32]u8 = undefined;
-        var text: Writer = .fixed(&buffer);
-        stopwatch.writeDuration(&text, t.left()) catch {};
-        try t.style.paint(w, text.buffered());
+pub fn update(t: *Timer, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .tick => |id| if (id == t.tick_id and t.running) {
+            const after = t.left().nanoseconds - t.interval.nanoseconds;
+            t.remaining = .fromNanoseconds(@max(after, 0));
+            if (t.timedOut()) {
+                t.running = false;
+                return if (t.keys) .quit else .none;
+            }
+            return .tick(t.interval, t.tick_id);
+        },
+        .key => |key| if (t.keys) {
+            if (key.matches("space")) return t.toggle();
+            if (key.matches("q") or key.matches("esc")) return .quit;
+        },
+        else => {},
     }
-};
+    return .none;
+}
+
+pub fn view(t: *const Timer, w: *Writer) Writer.Error!void {
+    var buffer: [32]u8 = undefined;
+    var text: Writer = .fixed(&buffer);
+    stopwatch.writeDuration(&text, t.left()) catch {};
+    try t.style.paint(w, text.buffered());
+}
 
 const testing = std.testing;
 

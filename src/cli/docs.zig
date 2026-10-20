@@ -5,6 +5,8 @@
 //! is mounted in.
 
 const std = @import("std");
+const sets = @import("sets.zig");
+const field = @import("field");
 const assert = std.debug.assert;
 const Writer = std.Io.Writer;
 const Command = @import("Command.zig");
@@ -125,20 +127,16 @@ const CommandFlags = struct {
     format: Format = .markdown,
     dir: ?[]const u8 = null,
     stylesheet: ?[]const u8 = null,
-    pub const meta = .{
-        .format = .{ .short = 'f', .help = "Documentation format" },
-        .stylesheet = .{
-            .help = "With --format html, link this style sheet instead of inline styles",
-            .value_name = "url",
-        },
-        .dir = .{
-            .short = 'd',
-            .help = "With --format man, write one page per command into this directory",
-            .value_name = "path",
-            .complete = completeDirectories,
-        },
-    };
 };
+const command_flags = sets.flags(CommandFlags, field.Set(.{field.Spec(CommandFlags){ .fields = .{
+    .format = .{ .help = "Documentation format" },
+    .stylesheet = .{ .help = "With --format html, link this style sheet instead of inline styles" },
+    .dir = .{ .help = "With --format man, write one page per command into this directory" },
+} }}), .{ .fields = .{
+    .format = .{ .short = 'f' },
+    .stylesheet = .{ .value_name = "url" },
+    .dir = .{ .short = 'd', .value_name = "path", .complete = .from(completeDirectories) },
+} });
 
 /// A `docs` command for the tree it is mounted in, as the run sees it: without the commands
 /// of features that are off, with what `App` adds (`completion`, `--color`), and with an
@@ -153,7 +151,7 @@ pub const command = spec.command(.{
     \\command instead (<app>.1, <app>-<command>.1, ...), linked to each other under SEE
     \\ALSO.
     ,
-    .flags = CommandFlags,
+    .flags = command_flags,
     .run = runCommand,
 });
 
@@ -837,18 +835,32 @@ fn noop(_: *Context) !void {}
 const test_root = spec.command(.{
     .name = "app",
     .summary = "An app",
-    .persistent_flags = struct {
-        verbose: bool = false,
-        pub const meta = .{ .verbose = .{ .short = 'v', .help = "More output" } };
+    .persistent_flags = flags: {
+        const T = struct {
+            verbose: bool = false,
+        };
+        break :flags sets.flags(
+            T,
+            field.Set(.{field.Spec(T){ .fields = .{ .verbose = .{ .help = "More output" } } }}),
+            .{ .fields = .{ .verbose = .{ .short = 'v' } } },
+        );
     },
     .subcommands = .{
         spec.command(.{
             .name = "get",
             .summary = "Print a value",
             .args = .{ .min = 1, .max = 1, .usage = "<key>" },
-            .flags = struct {
-                raw: bool = false,
-                pub const meta = .{ .raw = .{ .help = "No decoration" } };
+            .flags = flags: {
+                const T = struct {
+                    raw: bool = false,
+                };
+                break :flags sets.flags(
+                    T,
+                    field.Set(
+                        .{field.Spec(T){ .fields = .{ .raw = .{ .help = "No decoration" } } }},
+                    ),
+                    .{},
+                );
             },
             .run = noop,
         }),
@@ -934,17 +946,32 @@ const deep_root = spec.command(.{
                 .aliases = &.{ "put", "s" },
                 .examples = "app config set a 1\napp config put b 2\n",
                 .args = .{ .min = 2, .max = 2, .usage = "<key> <value>" },
-                .flags = struct {
-                    file: []const u8,
-                    mode: enum { merge, replace } = .merge,
-                    token: ?[]const u8 = null,
-                    trace: bool = false,
-                    pub const meta = .{
-                        .file = .{ .short = 'f', .help = "File to edit" },
-                        .mode = .{ .help = "Merge or replace (a|b)" },
-                        .token = .{ .help = "Access token", .env = "APP_TOKEN" },
-                        .trace = .{ .deprecated = "no longer used" },
+                .flags = flags: {
+                    const T = struct {
+                        file: []const u8,
+                        mode: enum { merge, replace } = .merge,
+                        token: ?[]const u8 = null,
+                        trace: bool = false,
                     };
+                    break :flags sets.flags(
+                        T,
+                        field.Set(
+                            .{
+                                field.Spec(T){ .fields = .{
+                                    .file = .{ .help = "File to edit" },
+                                    .mode = .{ .help = "Merge or replace (a|b)" },
+                                    .token = .{ .help = "Access token" },
+                                    .trace = .{ .deprecated = "no longer used" },
+                                } },
+                            },
+                        ),
+                        .{
+                            .fields = .{
+                                .file = .{ .short = 'f' },
+                                .token = .{ .env = "APP_TOKEN" },
+                            },
+                        },
+                    );
                 },
                 .run = noop,
             }),
@@ -1023,9 +1050,19 @@ test "man: nested commands and escaping" {
             .subcommands = .{spec.command(.{
                 .name = "leaf",
                 .summary = "Leaf",
-                .flags = struct {
-                    dry_run: bool = false,
-                    pub const meta = .{ .dry_run = .{ .help = ".starts with a dot" } };
+                .flags = flags: {
+                    const T = struct {
+                        dry_run: bool = false,
+                    };
+                    break :flags sets.flags(
+                        T,
+                        field.Set(
+                            .{field.Spec(T){
+                                .fields = .{ .dry_run = .{ .help = ".starts with a dot" } },
+                            }},
+                        ),
+                        .{},
+                    );
                 },
                 .run = noop,
             })},
@@ -1062,9 +1099,17 @@ test "markdown prose escapes angle brackets but code spans do not" {
     const root = comptime spec.command(.{
         .name = "app",
         .summary = "Reads <PREFIX>_KEY",
-        .flags = struct {
-            prefix: []const u8 = "",
-            pub const meta = .{ .prefix = .{ .help = "Read <PREFIX>_A", .value_name = "PREFIX" } };
+        .flags = flags: {
+            const T = struct {
+                prefix: []const u8 = "",
+            };
+            break :flags sets.flags(
+                T,
+                field.Set(
+                    .{field.Spec(T){ .fields = .{ .prefix = .{ .help = "Read <PREFIX>_A" } } }},
+                ),
+                .{ .fields = .{ .prefix = .{ .value_name = "PREFIX" } } },
+            );
         },
         .run = noop,
     });
@@ -1083,9 +1128,19 @@ const topic_root = spec.command(.{
         spec.command(.{
             .name = "get",
             .summary = "Print <a> value",
-            .flags = struct {
-                raw: bool = false,
-                pub const meta = .{ .raw = .{ .help = "No \"decoration\" & more" } };
+            .flags = flags: {
+                const T = struct {
+                    raw: bool = false,
+                };
+                break :flags sets.flags(
+                    T,
+                    field.Set(
+                        .{field.Spec(T){
+                            .fields = .{ .raw = .{ .help = "No \"decoration\" & more" } },
+                        }},
+                    ),
+                    .{},
+                );
             },
             .examples = "app get a",
             .run = noop,
@@ -1190,14 +1245,32 @@ test "markdown: a topic is its text" {
 
 const arguments_root = spec.command(.{
     .name = "app",
-    .flags = struct {
-        token: []const u8 = "hunter2",
-        pub const meta = .{ .token = .{ .secret = true, .help = "API token" } };
+    .flags = flags: {
+        const T = struct {
+            token: []const u8 = "hunter2",
+        };
+        break :flags sets.flags(
+            T,
+            field.Set(
+                .{
+                    field.Spec(T){ .fields = .{
+                        .token = .{ .secret = true, .help = "API token" },
+                    } },
+                },
+            ),
+            .{},
+        );
     },
-    .args = struct {
-        source: []const u8,
-        target: ?[]const u8 = null,
-        pub const meta = .{ .source = .{ .help = "File to copy" } };
+    .args = args: {
+        const T = struct {
+            source: []const u8,
+            target: ?[]const u8 = null,
+        };
+        break :args sets.args(
+            T,
+            field.Set(.{field.Spec(T){ .fields = .{ .source = .{ .help = "File to copy" } } }}),
+            .{},
+        );
     },
     .run = noop,
 });

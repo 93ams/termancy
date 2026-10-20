@@ -17,13 +17,14 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const components = @import("components");
 
-const Tabs = components.tabs.Tabs;
-const Table = components.table.Table;
-const Spinner = components.spinner.Spinner;
-const Progress = components.progress.Progress;
+const Tabs = components.Tabs;
+const Table = components.Table;
+const Spinner = components.Spinner;
+const Progress = components.Progress;
 const chart = components.chart;
 
 const services = [_][]const []const u8{
@@ -170,8 +171,10 @@ const Monitor = struct {
 
 const Flags = struct {
     snapshot: bool = false,
-    pub const meta = .{ .snapshot = .{ .help = "Print the first frame as text, and quit" } };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .snapshot = .{ .help = "Print the first frame as text, and quit" },
+} }}), .{});
 
 fn run(ctx: *cli.Context, flags: Flags) !void {
     var monitor: Monitor = .{};
@@ -189,7 +192,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
 pub const root = cli.command(.{
     .name = "monitor",
     .summary = "Watch services in the terminal",
-    .flags = Flags,
+    .flags = flags_flags,
     .run = run,
 });
 

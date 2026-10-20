@@ -2,11 +2,12 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const plain = @import("plain.zig");
-const Input = @import("../tui/registry/input.zig").Input;
-const Textarea = @import("../tui/registry/textarea.zig").Textarea;
+const Input = @import("../tui/registry/input.zig");
+const Textarea = @import("../tui/registry/textarea.zig");
 
 pub const InputFlags = struct {
     placeholder: []const u8 = "Type something...",
@@ -15,16 +16,15 @@ pub const InputFlags = struct {
     header: []const u8 = "",
     prompt: []const u8 = "> ",
     char_limit: usize = 400,
-
-    pub const meta = .{
-        .placeholder = .{ .help = "Shown while the input is empty" },
-        .value = .{ .help = "The text to start with" },
-        .password = .{ .help = "Mask the characters typed" },
-        .header = .{ .help = "Text above the input" },
-        .prompt = .{ .help = "Written before the input" },
-        .char_limit = .{ .help = "The most characters; 0 for no limit" },
-    };
 };
+const input_flags = cli.flags(InputFlags, field.Set(.{field.Spec(InputFlags){ .fields = .{
+    .placeholder = .{ .help = "Shown while the input is empty" },
+    .value = .{ .help = "The text to start with" },
+    .password = .{ .help = "Mask the characters typed" },
+    .header = .{ .help = "Text above the input" },
+    .prompt = .{ .help = "Written before the input" },
+    .char_limit = .{ .help = "The most characters; 0 for no limit" },
+} }}), .{});
 
 pub const input = cli.command(.{
     .name = "input",
@@ -34,7 +34,7 @@ pub const input = cli.command(.{
     \\backspace, ctrl+w, ctrl+u, ctrl+k), enter submits, esc cancels (status 1), Ctrl-C
     \\interrupts (status 130).
     ,
-    .flags = InputFlags,
+    .flags = input_flags,
     .examples =
     \\name=$(termancy ui input --placeholder "Your name")
     \\token=$(termancy ui input --password --header "API token")
@@ -96,16 +96,15 @@ pub const WriteFlags = struct {
     prompt: []const u8 = "┃ ",
     char_limit: usize = 0,
     height: usize = 5,
-
-    pub const meta = .{
-        .placeholder = .{ .help = "Shown while the text is empty" },
-        .value = .{ .help = "The text to start with" },
-        .header = .{ .help = "Text above the editor" },
-        .prompt = .{ .help = "Written before each line" },
-        .char_limit = .{ .help = "The most characters; 0 for no limit" },
-        .height = .{ .help = "Lines shown at once; 0 for all" },
-    };
 };
+const write_flags = cli.flags(WriteFlags, field.Set(.{field.Spec(WriteFlags){ .fields = .{
+    .placeholder = .{ .help = "Shown while the text is empty" },
+    .value = .{ .help = "The text to start with" },
+    .header = .{ .help = "Text above the editor" },
+    .prompt = .{ .help = "Written before each line" },
+    .char_limit = .{ .help = "The most characters; 0 for no limit" },
+    .height = .{ .help = "Lines shown at once; 0 for all" },
+} }}), .{});
 
 pub const write = cli.command(.{
     .name = "write",
@@ -114,7 +113,7 @@ pub const write = cli.command(.{
     \\Read text of any number of lines and print it. Enter starts a new line; Ctrl-D
     \\submits; esc cancels (status 1); Ctrl-C interrupts (status 130).
     ,
-    .flags = WriteFlags,
+    .flags = write_flags,
     .examples =
     \\git commit -m "$(termancy ui write --header "Commit message")"
     ,

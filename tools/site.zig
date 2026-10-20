@@ -15,7 +15,7 @@ const Io = std.Io;
 const Writer = Io.Writer;
 const Allocator = std.mem.Allocator;
 
-const libraries = [_][]const u8{ "term", "cli", "cfg", "tui", "sys" };
+const libraries = [_][]const u8{ "term", "field", "cli", "cfg", "tui", "sys" };
 const repository = "https://github.com/93ams/termancy";
 
 const Component = struct {

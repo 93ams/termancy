@@ -2,19 +2,21 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const catalog = @import("project/catalog.zig");
 const manifest = @import("project/manifest.zig");
 const status = @import("project/status.zig");
-const workspace = @import("project/workspace.zig");
-const Workspace = workspace.Workspace;
+const Workspace = @import("project/workspace.zig");
 const group = @import("init.zig").group;
 
 const ListFlags = struct {
     project: []const u8 = ".",
-    pub const meta = .{
-        .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-    };
 };
+const list_flags = cli.flags(ListFlags, field.Set(.{field.Spec(ListFlags){ .fields = .{
+    .project = .{ .help = "The project directory" },
+} }}), .{ .fields = .{
+    .project = .{ .short = 'C', .value_name = "path" },
+} });
 
 pub const command = cli.command(.{
     .name = "list",
@@ -32,7 +34,7 @@ pub const command = cli.command(.{
     \\installed. "version" changes only when the shape does.
     ,
     .group = group,
-    .flags = ListFlags,
+    .flags = list_flags,
     .output = true,
     .examples =
     \\termancy tui list
@@ -62,7 +64,7 @@ fn run(ctx: *cli.Context, flags: ListFlags) !void {
     var ws: Workspace = try .open(ctx, flags.project, false);
     defer ws.close(ctx.io);
     const m = try ws.loadManifest(ctx);
-    const components = try workspace.components(ctx);
+    const components = try Workspace.components(ctx);
     const rows = try ctx.arena.alloc(Row, components.len);
     for (components, rows) |*component, *row| {
         var state: status.Status = .{};
@@ -93,7 +95,7 @@ pub fn componentStatus(
     var state: status.Status = .{ .installed = true };
     for (component.files) |name| {
         const disk = try ws.read(ctx, try manifest.filePath(ctx.arena, m, name));
-        const registry = try workspace.source(ctx, name);
+        const registry = try Workspace.source(ctx, name);
         status.addFile(&state, disk, m.recorded(component.name, name), registry);
     }
     return state;

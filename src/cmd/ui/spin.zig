@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const sys = @import("sys");
 const term = @import("term.zig");
@@ -20,13 +21,12 @@ pub const Flags = struct {
     title: []const u8 = "Loading...",
     spinner: Frames = .dots,
     show_output: bool = false,
-
-    pub const meta = .{
-        .title = .{ .help = "Text next to the spinner" },
-        .spinner = .{ .help = "The spinner's frames" },
-        .show_output = .{ .help = "Let the command write to the terminal as it runs" },
-    };
 };
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .title = .{ .help = "Text next to the spinner" },
+    .spinner = .{ .help = "The spinner's frames" },
+    .show_output = .{ .help = "Let the command write to the terminal as it runs" },
+} }}), .{});
 
 pub const command = cli.command(.{
     .name = "spin",
@@ -41,7 +41,7 @@ pub const command = cli.command(.{
     \\the command and exits with status 130, printing nothing. A command that cannot be
     \\found exits with status 127.
     ,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .min = 1, .max = null, .usage = "-- <command> [arg...]" },
     .examples =
     \\termancy ui spin --title "Building..." -- zig build

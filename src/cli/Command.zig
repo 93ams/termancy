@@ -92,11 +92,11 @@ pub const Positional = struct {
     required: bool,
     /// Takes every remaining word.
     repeatable: bool = false,
-    /// What it is, from `.help` in the struct's `meta`; help and documentation list the
+    /// What it is, from `.help` in the field's spec; help and documentation list the
     /// positionals under "Arguments" when any has some.
     help: []const u8 = "",
     /// When the positional is required and missing in an interactive run, ask for it with
-    /// this label instead of failing (`.prompt` in the struct's `meta`; see `App.prompter`).
+    /// this label instead of failing (`.prompt` in `cli.args`' options; see `App.prompter`).
     prompt: ?[]const u8 = null,
     /// The placeholder for one value in messages: `int`, `fast|safe`.
     value_name: []const u8 = "",
@@ -161,6 +161,10 @@ post_run: ?Handler = null,
 persistent_pre_run: ?Handler = null,
 /// Runs after `post_run` of this command and of every descendant, leaf first.
 persistent_post_run: ?Handler = null,
+/// Runs the checks of the command's flags and positionals (`field` specs) that need the
+/// whole decoded value, before any hook of the run: checks across fields, and a list's
+/// own. Reports every problem, then fails with `error.UsageFailed`. Built by `cli.command`.
+check: ?Handler = null,
 /// Runs after this command or any descendant ends, leaf first, however it ended: after
 /// success, a failure, `ctx.exit`, or an interrupt (`App.cancel_on_interrupt`). For
 /// releasing what a `persistent_pre_run` acquired. Its error is reported only when the

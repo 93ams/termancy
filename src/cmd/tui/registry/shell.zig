@@ -26,7 +26,7 @@ const std = @import("std");
 const tui = @import("tui");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
-const Input = @import("input.zig").Input;
+const Input = @import("input.zig");
 
 pub const Status = enum { active, submitted, ended, canceled };
 
@@ -41,132 +41,132 @@ pub const Completer = struct {
     ) anyerror![]const []const u8,
 };
 
-pub const Shell = struct {
-    input: Input,
-    /// Earlier lines, oldest first.
-    history: []const []const u8 = &.{},
-    completer: ?Completer = null,
-    status: Status = .active,
-    /// The history entry shown, while walking the history.
-    browsing: ?usize = null,
-    /// The line being typed when the walk began, shown again after the newest entry.
-    draft: std.ArrayList(u8) = .empty,
-    /// The matches of the last tab that found several, listed under the line.
-    choices: []const []const u8 = &.{},
-    /// Holds `choices` and completion results until the next tab.
-    scratch: ?std.heap.ArenaAllocator = null,
-    styles: Styles = .{},
+const Shell = @This();
 
-    pub const Styles = struct {
-        choices: tui.Style = .{ .fg = .{ .indexed = 244 } },
-    };
+input: Input,
+/// Earlier lines, oldest first.
+history: []const []const u8 = &.{},
+completer: ?Completer = null,
+status: Status = .active,
+/// The history entry shown, while walking the history.
+browsing: ?usize = null,
+/// The line being typed when the walk began, shown again after the newest entry.
+draft: std.ArrayList(u8) = .empty,
+/// The matches of the last tab that found several, listed under the line.
+choices: []const []const u8 = &.{},
+/// Holds `choices` and completion results until the next tab.
+scratch: ?std.heap.ArenaAllocator = null,
+styles: Styles = .{},
 
-    pub fn deinit(shell: *Shell) void {
-        const allocator = shell.gpa();
-        shell.input.deinit();
-        shell.draft.deinit(allocator);
-        if (shell.scratch) |*arena| arena.deinit();
-        shell.* = undefined;
-    }
-
-    /// The line as typed.
-    pub fn value(shell: *const Shell) []const u8 {
-        return shell.input.value();
-    }
-
-    fn gpa(shell: *const Shell) Allocator {
-        return shell.input.gpa;
-    }
-
-    pub fn update(shell: *Shell, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .key => |key| {
-                if (key.matches("enter")) return shell.finish(.submitted);
-                if (key.matches("esc")) return shell.finish(.canceled);
-                if (key.matches("ctrl+d") and shell.value().len == 0) return shell.finish(.ended);
-                if (key.matches("up") or key.matches("ctrl+p")) {
-                    shell.older();
-                } else if (key.matches("down") or key.matches("ctrl+n")) {
-                    shell.newer();
-                } else if (key.matches("tab")) {
-                    shell.complete();
-                } else if (shell.input.handleKey(key)) {
-                    shell.choices = &.{};
-                }
-            },
-            .paste => |text| shell.input.insert(text) catch {},
-            else => {},
-        }
-        return .none;
-    }
-
-    fn finish(shell: *Shell, status: Status) tui.Cmd {
-        shell.status = status;
-        shell.choices = &.{};
-        return .quit;
-    }
-
-    /// Shows the entry before the one shown, saving the typed line on the first step.
-    fn older(shell: *Shell) void {
-        if (shell.history.len == 0) return;
-        const index = if (shell.browsing) |i| i -| 1 else blk: {
-            shell.draft.clearRetainingCapacity();
-            shell.draft.appendSlice(shell.gpa(), shell.value()) catch return;
-            break :blk shell.history.len - 1;
-        };
-        shell.browsing = index;
-        shell.input.setValue(shell.history[index]) catch {};
-    }
-
-    /// Shows the entry after the one shown, or the saved line after the newest.
-    fn newer(shell: *Shell) void {
-        const index = shell.browsing orelse return;
-        if (index + 1 < shell.history.len) {
-            shell.browsing = index + 1;
-            shell.input.setValue(shell.history[index + 1]) catch {};
-        } else {
-            shell.browsing = null;
-            shell.input.setValue(shell.draft.items) catch {};
-        }
-    }
-
-    /// Completes the last word of the line.
-    fn complete(shell: *Shell) void {
-        const completer = shell.completer orelse return;
-        if (shell.scratch) |*arena| {
-            _ = arena.reset(.retain_capacity);
-        } else {
-            shell.scratch = .init(shell.gpa());
-        }
-        const arena = shell.scratch.?.allocator();
-        shell.choices = &.{};
-        const line = arena.dupe(u8, shell.value()) catch return;
-        const found = completer.function(completer.context, arena, line) catch return;
-        if (found.len == 0) return;
-        const word_start = if (std.mem.lastIndexOfScalar(u8, line, ' ')) |space| space + 1 else 0;
-        const shared = commonPrefix(found);
-        const replacement = if (found.len == 1)
-            std.mem.concat(arena, u8, &.{ found[0], " " }) catch return
-        else
-            shared;
-        if (replacement.len >= line.len - word_start) {
-            const text = std.mem.concat(arena, u8, &.{ line[0..word_start], replacement }) catch
-                return;
-            shell.input.setValue(text) catch return;
-        }
-        if (found.len > 1) shell.choices = found;
-    }
-
-    pub fn view(shell: *const Shell, w: *Writer) Writer.Error!void {
-        try shell.input.view(w);
-        if (shell.choices.len == 0) return;
-        try w.writeByte('\n');
-        for (shell.choices, 0..) |choice, i| {
-            if (i > 0) try w.writeAll("  ");
-            try shell.styles.choices.paint(w, choice);
-        }
-    }
+pub const Styles = struct {
+    choices: tui.Style = .{ .fg = .{ .indexed = 244 } },
 };
+
+pub fn deinit(shell: *Shell) void {
+    const allocator = shell.gpa();
+    shell.input.deinit();
+    shell.draft.deinit(allocator);
+    if (shell.scratch) |*arena| arena.deinit();
+    shell.* = undefined;
+}
+
+/// The line as typed.
+pub fn value(shell: *const Shell) []const u8 {
+    return shell.input.value();
+}
+
+fn gpa(shell: *const Shell) Allocator {
+    return shell.input.gpa;
+}
+
+pub fn update(shell: *Shell, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .key => |key| {
+            if (key.matches("enter")) return shell.finish(.submitted);
+            if (key.matches("esc")) return shell.finish(.canceled);
+            if (key.matches("ctrl+d") and shell.value().len == 0) return shell.finish(.ended);
+            if (key.matches("up") or key.matches("ctrl+p")) {
+                shell.older();
+            } else if (key.matches("down") or key.matches("ctrl+n")) {
+                shell.newer();
+            } else if (key.matches("tab")) {
+                shell.complete();
+            } else if (shell.input.handleKey(key)) {
+                shell.choices = &.{};
+            }
+        },
+        .paste => |text| shell.input.insert(text) catch {},
+        else => {},
+    }
+    return .none;
+}
+
+fn finish(shell: *Shell, status: Status) tui.Cmd {
+    shell.status = status;
+    shell.choices = &.{};
+    return .quit;
+}
+
+/// Shows the entry before the one shown, saving the typed line on the first step.
+fn older(shell: *Shell) void {
+    if (shell.history.len == 0) return;
+    const index = if (shell.browsing) |i| i -| 1 else blk: {
+        shell.draft.clearRetainingCapacity();
+        shell.draft.appendSlice(shell.gpa(), shell.value()) catch return;
+        break :blk shell.history.len - 1;
+    };
+    shell.browsing = index;
+    shell.input.setValue(shell.history[index]) catch {};
+}
+
+/// Shows the entry after the one shown, or the saved line after the newest.
+fn newer(shell: *Shell) void {
+    const index = shell.browsing orelse return;
+    if (index + 1 < shell.history.len) {
+        shell.browsing = index + 1;
+        shell.input.setValue(shell.history[index + 1]) catch {};
+    } else {
+        shell.browsing = null;
+        shell.input.setValue(shell.draft.items) catch {};
+    }
+}
+
+/// Completes the last word of the line.
+fn complete(shell: *Shell) void {
+    const completer = shell.completer orelse return;
+    if (shell.scratch) |*arena| {
+        _ = arena.reset(.retain_capacity);
+    } else {
+        shell.scratch = .init(shell.gpa());
+    }
+    const arena = shell.scratch.?.allocator();
+    shell.choices = &.{};
+    const line = arena.dupe(u8, shell.value()) catch return;
+    const found = completer.function(completer.context, arena, line) catch return;
+    if (found.len == 0) return;
+    const word_start = if (std.mem.lastIndexOfScalar(u8, line, ' ')) |space| space + 1 else 0;
+    const shared = commonPrefix(found);
+    const replacement = if (found.len == 1)
+        std.mem.concat(arena, u8, &.{ found[0], " " }) catch return
+    else
+        shared;
+    if (replacement.len >= line.len - word_start) {
+        const text = std.mem.concat(arena, u8, &.{ line[0..word_start], replacement }) catch
+            return;
+        shell.input.setValue(text) catch return;
+    }
+    if (found.len > 1) shell.choices = found;
+}
+
+pub fn view(shell: *const Shell, w: *Writer) Writer.Error!void {
+    try shell.input.view(w);
+    if (shell.choices.len == 0) return;
+    try w.writeByte('\n');
+    for (shell.choices, 0..) |choice, i| {
+        if (i > 0) try w.writeAll("  ");
+        try shell.styles.choices.paint(w, choice);
+    }
+}
 
 /// The longest prefix all of `words` share.
 fn commonPrefix(words: []const []const u8) []const u8 {
@@ -203,14 +203,14 @@ fn start(d: *Driver, history: []const []const u8) !void {
     }, .{});
 }
 
-fn finish(d: *Driver) void {
+fn stop(d: *Driver) void {
     d.deinit();
 }
 
 test "tab fills in one match, the shared part of several, and lists them" {
     var d: Driver = undefined;
     try start(&d, &.{});
-    defer finish(&d);
+    defer stop(&d);
     try d.typeText("k");
     try d.press("tab");
     try testing.expectEqualStrings("keys ", d.model().value());
@@ -228,7 +228,7 @@ test "tab fills in one match, the shared part of several, and lists them" {
 test "up and down walk the history and come back to the typed line" {
     var d: Driver = undefined;
     try start(&d, &.{ "get a", "keys" });
-    defer finish(&d);
+    defer stop(&d);
     try d.typeText("dra");
     try d.press("up");
     try testing.expectEqualStrings("keys", d.model().value());
@@ -246,7 +246,7 @@ test "up and down walk the history and come back to the typed line" {
 test "ctrl+d on an empty line ends the input; esc cancels" {
     var d: Driver = undefined;
     try start(&d, &.{});
-    defer finish(&d);
+    defer stop(&d);
     try d.typeText("x");
     try d.press("ctrl+d"); // Deletes forward, as in `Input`, when the line has text.
     try testing.expect(!d.done());
@@ -257,7 +257,7 @@ test "ctrl+d on an empty line ends the input; esc cancels" {
 
     var e: Driver = undefined;
     try start(&e, &.{});
-    defer finish(&e);
+    defer stop(&e);
     try e.press("esc");
     try testing.expectEqual(Status.canceled, e.model().status);
 }

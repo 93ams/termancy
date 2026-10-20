@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 
@@ -61,29 +62,30 @@ pub const Flags = struct {
     @"align": Align = .left,
     width: ?usize = null,
     height: ?usize = null,
-
-    const color_help = " (0-255, #rrggbb, or a name such as red or bright-blue)";
-
-    pub const meta = .{
-        .foreground = .{ .help = "Text color" ++ color_help, .value_name = "color" },
-        .background = .{ .help = "Background color" ++ color_help, .value_name = "color" },
-        .border = .{
-            .help = "Border style: none, normal, rounded, thick, double, hidden, or ascii",
-            .value_name = "style",
-        },
-        .border_foreground = .{ .help = "Border color", .value_name = "color" },
-        .padding = .{ .help = "Space inside the border: \"1\", \"1 2\", or \"1 2 1 2\"" },
-        .margin = .{ .help = "Space outside the border, as --padding" },
-        .bold = .{ .help = "Bold text" },
-        .faint = .{ .help = "Dim text" },
-        .italic = .{ .help = "Italic text" },
-        .underline = .{ .help = "Underlined text" },
-        .strikethrough = .{ .help = "Struck-through text" },
-        .@"align" = .{ .help = "Alignment of lines narrower than the block" },
-        .width = .{ .help = "Columns, padding included; longer lines are wrapped" },
-        .height = .{ .help = "The fewest rows, padding included" },
-    };
 };
+
+const color_help = " (0-255, #rrggbb, or a name such as red or bright-blue)";
+const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+    .foreground = .{ .help = "Text color" ++ color_help },
+    .background = .{ .help = "Background color" ++ color_help },
+    .border = .{ .help = "Border style: none, normal, rounded, thick, double, hidden, or ascii" },
+    .border_foreground = .{ .help = "Border color" },
+    .padding = .{ .help = "Space inside the border: \"1\", \"1 2\", or \"1 2 1 2\"" },
+    .margin = .{ .help = "Space outside the border, as --padding" },
+    .bold = .{ .help = "Bold text" },
+    .faint = .{ .help = "Dim text" },
+    .italic = .{ .help = "Italic text" },
+    .underline = .{ .help = "Underlined text" },
+    .strikethrough = .{ .help = "Struck-through text" },
+    .@"align" = .{ .help = "Alignment of lines narrower than the block" },
+    .width = .{ .help = "Columns, padding included; longer lines are wrapped" },
+    .height = .{ .help = "The fewest rows, padding included" },
+} }}), .{ .fields = .{
+    .foreground = .{ .value_name = "color" },
+    .background = .{ .value_name = "color" },
+    .border = .{ .value_name = "style" },
+    .border_foreground = .{ .value_name = "color" },
+} });
 
 pub const command = cli.command(.{
     .name = "style",
@@ -94,7 +96,7 @@ pub const command = cli.command(.{
     \\them: not into a pipe or a file, and not under NO_COLOR (FORCE_COLOR overrides).
     \\Borders, padding, and alignment are always applied.
     ,
-    .flags = Flags,
+    .flags = flags_flags,
     .args = .{ .max = null, .usage = "[text...]" },
     .examples =
     \\termancy ui style --border rounded --padding "0 2" --foreground 212 "Hello"

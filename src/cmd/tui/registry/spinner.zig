@@ -13,50 +13,50 @@
 const std = @import("std");
 const tui = @import("tui");
 
-/// Frame sets: `dots`, `line`, `arc`, `bouncing_bar`, and more (`term.live.frames`).
-pub const frames = tui.term.live.frames;
+/// Frame sets for `frames`: `dots`, `line`, `arc`, `bouncing_bar`, and more (`term.live.frames`).
+pub const frame_sets = tui.term.live.frames;
 
-pub const Spinner = struct {
-    frames: []const []const u8 = &frames.dots,
-    /// Time between frames.
-    interval: std.Io.Duration = .fromMilliseconds(80),
-    /// Written after the spinner; none when empty.
-    title: []const u8 = "",
-    /// The index of the frame shown.
-    frame: usize = 0,
-    /// The id of this spinner's timer.
-    tick_id: u32 = 0x5350_494e, // "SPIN"
-    styles: Styles = .{},
+const Spinner = @This();
 
-    pub const Styles = struct {
-        spinner: tui.Style = .{ .fg = .{ .indexed = 212 } },
-        title: tui.Style = .{},
-    };
+frames: []const []const u8 = &frame_sets.dots,
+/// Time between frames.
+interval: std.Io.Duration = .fromMilliseconds(80),
+/// Written after the spinner; none when empty.
+title: []const u8 = "",
+/// The index of the frame shown.
+frame: usize = 0,
+/// The id of this spinner's timer.
+tick_id: u32 = 0x5350_494e, // "SPIN"
+styles: Styles = .{},
 
-    /// Sets the first timer.
-    pub fn start(spinner: *Spinner) tui.Cmd {
-        return .tick(spinner.interval, spinner.tick_id);
-    }
-
-    /// Advances on this spinner's ticks; ignores everything else.
-    pub fn update(spinner: *Spinner, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .tick => |id| if (id == spinner.tick_id) {
-                spinner.frame = (spinner.frame + 1) % spinner.frames.len;
-                return .tick(spinner.interval, spinner.tick_id);
-            },
-            else => {},
-        }
-        return .none;
-    }
-
-    pub fn view(spinner: *const Spinner, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try spinner.styles.spinner.paint(w, spinner.frames[spinner.frame]);
-        if (spinner.title.len == 0) return;
-        try w.writeByte(' ');
-        try spinner.styles.title.paint(w, spinner.title);
-    }
+pub const Styles = struct {
+    spinner: tui.Style = .{ .fg = .{ .indexed = 212 } },
+    title: tui.Style = .{},
 };
+
+/// Sets the first timer.
+pub fn start(spinner: *Spinner) tui.Cmd {
+    return .tick(spinner.interval, spinner.tick_id);
+}
+
+/// Advances on this spinner's ticks; ignores everything else.
+pub fn update(spinner: *Spinner, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .tick => |id| if (id == spinner.tick_id) {
+            spinner.frame = (spinner.frame + 1) % spinner.frames.len;
+            return .tick(spinner.interval, spinner.tick_id);
+        },
+        else => {},
+    }
+    return .none;
+}
+
+pub fn view(spinner: *const Spinner, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    try spinner.styles.spinner.paint(w, spinner.frames[spinner.frame]);
+    if (spinner.title.len == 0) return;
+    try w.writeByte(' ');
+    try spinner.styles.title.paint(w, spinner.title);
+}
 
 const testing = std.testing;
 const Driver = tui.testing.Driver(Spinner);
@@ -64,7 +64,7 @@ const Driver = tui.testing.Driver(Spinner);
 test "one frame per interval" {
     var d: Driver = try .init(
         testing.allocator,
-        .{ .frames = &frames.line, .title = "Working" },
+        .{ .frames = &frame_sets.line, .title = "Working" },
         .{},
     );
     defer d.deinit();
@@ -92,7 +92,7 @@ test "without a title, only the spinner" {
     var buffer: [32]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buffer);
     const spinner: Spinner = .{
-        .frames = &frames.points,
+        .frames = &frame_sets.points,
         .frame = 2,
         .styles = .{ .spinner = .{} },
     };

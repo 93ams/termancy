@@ -15,103 +15,103 @@ const tui = @import("tui");
 
 pub const Status = enum { active, submitted, canceled };
 
-pub const Confirm = struct {
-    prompt: []const u8 = "Are you sure?",
-    affirmative: []const u8 = "Yes",
-    negative: []const u8 = "No",
-    /// The highlighted button: true for `affirmative`. Its starting value is the default.
-    value: bool = true,
-    /// The screen row this is drawn from, for mouse clicks.
-    top: usize = 0,
-    status: Status = .active,
-    styles: Styles = .{},
+const Confirm = @This();
 
-    pub const Styles = struct {
-        prompt: tui.Style = .{ .bold = true },
-        /// Bold and underlined as well as colored, so it stands out under `NO_COLOR`.
-        selected: tui.Style = .{
-            .fg = .{ .indexed = 230 },
-            .bg = .{ .indexed = 212 },
-            .bold = true,
-            .underline = true,
-            .padding = .symmetric(0, 3),
-        },
-        unselected: tui.Style = .{
-            .fg = .{ .indexed = 254 },
-            .bg = .{ .indexed = 235 },
-            .padding = .symmetric(0, 3),
-        },
+prompt: []const u8 = "Are you sure?",
+affirmative: []const u8 = "Yes",
+negative: []const u8 = "No",
+/// The highlighted button: true for `affirmative`. Its starting value is the default.
+value: bool = true,
+/// The screen row this is drawn from, for mouse clicks.
+top: usize = 0,
+status: Status = .active,
+styles: Styles = .{},
+
+pub const Styles = struct {
+    prompt: tui.Style = .{ .bold = true },
+    /// Bold and underlined as well as colored, so it stands out under `NO_COLOR`.
+    selected: tui.Style = .{
+        .fg = .{ .indexed = 230 },
+        .bg = .{ .indexed = 212 },
+        .bold = true,
+        .underline = true,
+        .padding = .symmetric(0, 3),
+    },
+    unselected: tui.Style = .{
+        .fg = .{ .indexed = 254 },
+        .bg = .{ .indexed = 235 },
+        .padding = .symmetric(0, 3),
+    },
+};
+
+pub fn update(model: *Confirm, msg: tui.Msg) tui.Cmd {
+    const key = switch (msg) {
+        .key => |key| key,
+        .mouse => |mouse| return model.click(mouse),
+        else => return .none,
     };
-
-    pub fn update(model: *Confirm, msg: tui.Msg) tui.Cmd {
-        const key = switch (msg) {
-            .key => |key| key,
-            .mouse => |mouse| return model.click(mouse),
-            else => return .none,
-        };
-        if (key.matches("left") or key.matches("right") or key.matches("tab") or
-            key.matches("shift+tab") or key.matches("h") or key.matches("l"))
-        {
-            model.value = !model.value;
-        } else if (key.matches("y") or key.matches("Y")) {
-            return model.answer(true);
-        } else if (key.matches("n") or key.matches("N")) {
-            return model.answer(false);
-        } else if (key.matches("enter")) {
-            return model.answer(model.value);
-        } else if (key.matches("esc")) {
-            model.status = .canceled;
-            return .quit;
-        }
-        return .none;
-    }
-
-    /// A left click on a button answers with it. The buttons are two rows below the prompt,
-    /// which starts on screen row `top`.
-    fn click(model: *Confirm, mouse: tui.input.Mouse) tui.Cmd {
-        if (mouse.button != .left or mouse.action != .press) return .none;
-        if (mouse.y != model.top + 2) return .none;
-        const first = buttonWidth(model, model.affirmative, model.value);
-        if (mouse.x < first) return model.answer(true);
-        const second = buttonWidth(model, model.negative, !model.value);
-        if (mouse.x >= first + 2 and mouse.x < first + 2 + second) return model.answer(false);
-        return .none;
-    }
-
-    fn buttonWidth(model: *const Confirm, label: []const u8, selected: bool) usize {
-        var buffer: [256]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buffer);
-        model.button(&w, label, selected) catch return label.len;
-        var plain: [256]u8 = undefined;
-        var stripped: std.Io.Writer = .fixed(&plain);
-        tui.ansi.strip(&stripped, w.buffered()) catch return label.len;
-        return tui.width.of(stripped.buffered());
-    }
-
-    fn answer(model: *Confirm, value: bool) tui.Cmd {
-        model.value = value;
-        model.status = .submitted;
+    if (key.matches("left") or key.matches("right") or key.matches("tab") or
+        key.matches("shift+tab") or key.matches("h") or key.matches("l"))
+    {
+        model.value = !model.value;
+    } else if (key.matches("y") or key.matches("Y")) {
+        return model.answer(true);
+    } else if (key.matches("n") or key.matches("N")) {
+        return model.answer(false);
+    } else if (key.matches("enter")) {
+        return model.answer(model.value);
+    } else if (key.matches("esc")) {
+        model.status = .canceled;
         return .quit;
     }
+    return .none;
+}
 
-    pub fn view(model: *const Confirm, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try model.styles.prompt.paint(w, model.prompt);
-        try w.writeAll("\n\n");
-        try model.button(w, model.affirmative, model.value);
-        try w.writeAll("  ");
-        try model.button(w, model.negative, !model.value);
-    }
+/// A left click on a button answers with it. The buttons are two rows below the prompt,
+/// which starts on screen row `top`.
+fn click(model: *Confirm, mouse: tui.input.Mouse) tui.Cmd {
+    if (mouse.button != .left or mouse.action != .press) return .none;
+    if (mouse.y != model.top + 2) return .none;
+    const first = buttonWidth(model, model.affirmative, model.value);
+    if (mouse.x < first) return model.answer(true);
+    const second = buttonWidth(model, model.negative, !model.value);
+    if (mouse.x >= first + 2 and mouse.x < first + 2 + second) return model.answer(false);
+    return .none;
+}
 
-    fn button(
-        model: *const Confirm,
-        w: *std.Io.Writer,
-        label: []const u8,
-        selected: bool,
-    ) std.Io.Writer.Error!void {
-        const style = if (selected) model.styles.selected else model.styles.unselected;
-        try style.render(w, label);
-    }
-};
+fn buttonWidth(model: *const Confirm, label: []const u8, selected: bool) usize {
+    var buffer: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    model.button(&w, label, selected) catch return label.len;
+    var plain: [256]u8 = undefined;
+    var stripped: std.Io.Writer = .fixed(&plain);
+    tui.ansi.strip(&stripped, w.buffered()) catch return label.len;
+    return tui.width.of(stripped.buffered());
+}
+
+fn answer(model: *Confirm, value: bool) tui.Cmd {
+    model.value = value;
+    model.status = .submitted;
+    return .quit;
+}
+
+pub fn view(model: *const Confirm, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    try model.styles.prompt.paint(w, model.prompt);
+    try w.writeAll("\n\n");
+    try model.button(w, model.affirmative, model.value);
+    try w.writeAll("  ");
+    try model.button(w, model.negative, !model.value);
+}
+
+fn button(
+    model: *const Confirm,
+    w: *std.Io.Writer,
+    label: []const u8,
+    selected: bool,
+) std.Io.Writer.Error!void {
+    const style = if (selected) model.styles.selected else model.styles.unselected;
+    try style.render(w, label);
+}
 
 const testing = std.testing;
 const Driver = tui.testing.Driver(Confirm);

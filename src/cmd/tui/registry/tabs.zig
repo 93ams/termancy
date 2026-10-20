@@ -18,78 +18,78 @@ const std = @import("std");
 const tui = @import("tui");
 const Writer = std.Io.Writer;
 
-pub const Tabs = struct {
-    titles: []const []const u8,
-    /// One text per tab, drawn below the titles; may be empty.
-    contents: []const []const u8 = &.{},
-    /// The index of the active tab.
-    active: usize = 0,
-    /// Written between titles.
-    separator: []const u8 = " │ ",
-    /// The screen row this is drawn from, for mouse clicks.
-    top: usize = 0,
-    styles: Styles = .{},
+const Tabs = @This();
 
-    pub const Styles = struct {
-        /// The active title: underlined as well as colored, so it shows under `NO_COLOR`.
-        active: tui.Style = .{ .fg = .{ .indexed = 212 }, .bold = true, .underline = true },
-        inactive: tui.Style = .{ .fg = .{ .indexed = 245 } },
-        separator: tui.Style = .{ .fg = .{ .indexed = 238 } },
-        content: tui.Style = .{
-            .border = .rounded,
-            .border_fg = .{ .indexed = 238 },
-            .padding = .symmetric(0, 1),
-        },
-    };
+titles: []const []const u8,
+/// One text per tab, drawn below the titles; may be empty.
+contents: []const []const u8 = &.{},
+/// The index of the active tab.
+active: usize = 0,
+/// Written between titles.
+separator: []const u8 = " │ ",
+/// The screen row this is drawn from, for mouse clicks.
+top: usize = 0,
+styles: Styles = .{},
 
-    pub fn update(tabs: *Tabs, msg: tui.Msg) tui.Cmd {
-        const key = switch (msg) {
-            .key => |key| key,
-            .mouse => |mouse| {
-                tabs.click(mouse);
-                return .none;
-            },
-            else => return .none,
-        };
-        const count = tabs.titles.len;
-        if (count == 0) return .none;
-        if (key.matches("right") or key.matches("l") or key.matches("tab")) {
-            tabs.active = (tabs.active + 1) % count;
-        } else if (key.matches("left") or key.matches("h") or key.matches("shift+tab")) {
-            tabs.active = (tabs.active + count - 1) % count;
-        } else if (key.printable()) |c| {
-            if (c >= '1' and c <= '9' and c - '1' < count) tabs.active = c - '1';
-        }
-        return .none;
-    }
-
-    /// A left click on a title, on screen row `top`, makes its tab active.
-    fn click(tabs: *Tabs, mouse: tui.input.Mouse) void {
-        if (mouse.button != .left or mouse.action != .press or mouse.y != tabs.top) return;
-        var x: usize = 0;
-        for (tabs.titles, 0..) |title, i| {
-            if (i > 0) x += tui.width.of(tabs.separator);
-            const width = tui.width.of(title);
-            if (mouse.x >= x and mouse.x < x + width) {
-                tabs.active = i;
-                return;
-            }
-            x += width;
-        }
-    }
-
-    pub fn view(tabs: *const Tabs, w: *Writer) Writer.Error!void {
-        for (tabs.titles, 0..) |title, i| {
-            if (i > 0) try tabs.styles.separator.paint(w, tabs.separator);
-            const style = if (i == tabs.active) tabs.styles.active else tabs.styles.inactive;
-            try style.paint(w, title);
-        }
-        if (tabs.active < tabs.contents.len) {
-            try w.writeByte('\n');
-            try tabs.styles.content.render(w, tabs.contents[tabs.active]);
-        }
-    }
+pub const Styles = struct {
+    /// The active title: underlined as well as colored, so it shows under `NO_COLOR`.
+    active: tui.Style = .{ .fg = .{ .indexed = 212 }, .bold = true, .underline = true },
+    inactive: tui.Style = .{ .fg = .{ .indexed = 245 } },
+    separator: tui.Style = .{ .fg = .{ .indexed = 238 } },
+    content: tui.Style = .{
+        .border = .rounded,
+        .border_fg = .{ .indexed = 238 },
+        .padding = .symmetric(0, 1),
+    },
 };
+
+pub fn update(tabs: *Tabs, msg: tui.Msg) tui.Cmd {
+    const key = switch (msg) {
+        .key => |key| key,
+        .mouse => |mouse| {
+            tabs.click(mouse);
+            return .none;
+        },
+        else => return .none,
+    };
+    const count = tabs.titles.len;
+    if (count == 0) return .none;
+    if (key.matches("right") or key.matches("l") or key.matches("tab")) {
+        tabs.active = (tabs.active + 1) % count;
+    } else if (key.matches("left") or key.matches("h") or key.matches("shift+tab")) {
+        tabs.active = (tabs.active + count - 1) % count;
+    } else if (key.printable()) |c| {
+        if (c >= '1' and c <= '9' and c - '1' < count) tabs.active = c - '1';
+    }
+    return .none;
+}
+
+/// A left click on a title, on screen row `top`, makes its tab active.
+fn click(tabs: *Tabs, mouse: tui.input.Mouse) void {
+    if (mouse.button != .left or mouse.action != .press or mouse.y != tabs.top) return;
+    var x: usize = 0;
+    for (tabs.titles, 0..) |title, i| {
+        if (i > 0) x += tui.width.of(tabs.separator);
+        const width = tui.width.of(title);
+        if (mouse.x >= x and mouse.x < x + width) {
+            tabs.active = i;
+            return;
+        }
+        x += width;
+    }
+}
+
+pub fn view(tabs: *const Tabs, w: *Writer) Writer.Error!void {
+    for (tabs.titles, 0..) |title, i| {
+        if (i > 0) try tabs.styles.separator.paint(w, tabs.separator);
+        const style = if (i == tabs.active) tabs.styles.active else tabs.styles.inactive;
+        try style.paint(w, title);
+    }
+    if (tabs.active < tabs.contents.len) {
+        try w.writeByte('\n');
+        try tabs.styles.content.render(w, tabs.contents[tabs.active]);
+    }
+}
 
 const testing = std.testing;
 const Driver = tui.testing.Driver(Tabs);

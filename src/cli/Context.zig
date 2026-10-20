@@ -9,7 +9,9 @@ const Command = @import("Command.zig");
 const Flag = @import("Flag.zig");
 const parse = @import("parse.zig");
 const spec = @import("spec.zig");
+const sets = @import("sets.zig");
 const values = @import("values.zig");
+const field = @import("field");
 const Messages = @import("Messages.zig");
 const i18n = @import("i18n.zig");
 const output_zig = @import("output.zig");
@@ -190,25 +192,59 @@ pub fn writeJsonError(ctx: *Context, message: []const u8, hint: ?[]const u8) voi
 /// `error.UsageFailed`, which the runner maps to exit status 2. Under `-o json`, prints
 /// `{"error": "<message>", "hint": "<pointer to help>"}` instead.
 pub fn usageError(ctx: *Context, comptime fmt: []const u8, args: anytype) UsageFailure {
+    if (ctx.output == .json or ctx.output == .jsonl) {
+        const hint = ctx.helpPointer();
+        const message = std.fmt.allocPrint(ctx.arena, fmt, args) catch fmt;
+        ctx.writeJsonError(message, hint);
+        return error.UsageFailed;
+    }
+    ctx.invalid(fmt, args);
+    return ctx.usageFailed();
+}
+
+/// Prints one of several usage problems found together, `<app>: <message>`, or under
+/// `-o json` a `{"error": "<message>"}` line. End them with `usageFailed`.
+pub fn invalid(ctx: *Context, comptime fmt: []const u8, args: anytype) void {
+    if (ctx.output == .json or ctx.output == .jsonl) {
+        ctx.writeJsonError(std.fmt.allocPrint(ctx.arena, fmt, args) catch fmt, null);
+        return;
+    }
+    ctx.theme.writePrefix(ctx.err, ctx.err_color, ctx.app_name, .@"error") catch {};
+    ctx.err.print(fmt ++ "\n", args) catch {};
+}
+
+/// After the problems `invalid` printed: the pointer to the command's help (not under
+/// `-o json`), and `error.UsageFailed`, exit status 2.
+pub fn usageFailed(ctx: *Context) UsageFailure {
+    if (ctx.output == .json or ctx.output == .jsonl) return error.UsageFailed;
+    Theme.paint(ctx.err, ctx.err_color, ctx.theme.hint, ctx.helpPointer()) catch {};
+    ctx.err.writeByte('\n') catch {};
+    return error.UsageFailed;
+}
+
+/// "Run '<app> <command> --help' for usage.", in the user's language.
+fn helpPointer(ctx: *Context) []const u8 {
     var buffer: [512]u8 = undefined;
     var path: Io.Writer = .fixed(&buffer);
     for (ctx.path, 0..) |cmd, i| {
         path.print("{s}{s}", .{ if (i > 0) " " else "", cmd.name }) catch {};
     }
-    if (ctx.output == .json or ctx.output == .jsonl) {
-        var hint: Io.Writer.Allocating = .init(ctx.arena);
-        Messages.render(&hint.writer, ctx.messages.run_help, &.{path.buffered()}) catch {};
-        const message = std.fmt.allocPrint(ctx.arena, fmt, args) catch fmt;
-        ctx.writeJsonError(message, hint.written());
-        return error.UsageFailed;
-    }
-    ctx.theme.writePrefix(ctx.err, ctx.err_color, ctx.app_name, .@"error") catch {};
-    ctx.err.print(fmt ++ "\n", args) catch {};
     var hint: Io.Writer.Allocating = .init(ctx.arena);
     Messages.render(&hint.writer, ctx.messages.run_help, &.{path.buffered()}) catch {};
-    Theme.paint(ctx.err, ctx.err_color, ctx.theme.hint, hint.written()) catch {};
-    ctx.err.writeByte('\n') catch {};
-    return error.UsageFailed;
+    return hint.written();
+}
+
+/// Returned by `configError`: the configuration was wrong. The runner maps it to
+/// `App.exit_config`.
+pub const ConfigFailure = error{ConfigFailed};
+
+/// Reports a configuration that cannot be used (a bad value in a file, a variable that
+/// does not parse): prints `<app>: <message>` and returns `error.ConfigFailed`, which the
+/// runner maps to exit status 78 (`App.exit_config`), so scripts can tell it from a
+/// mistyped command line. Under `-o json`, prints `{"error": "<message>"}`.
+pub fn configError(ctx: *Context, comptime fmt: []const u8, args: anytype) ConfigFailure {
+    ctx.invalid(fmt, args);
+    return error.ConfigFailed;
 }
 
 /// `english` in the user's language, or as is (see `i18n.zig`).
@@ -333,59 +369,87 @@ pub fn warn(ctx: *Context, comptime fmt: []const u8, args: anytype) void {
 }
 
 /// Decodes a flags struct from the parsed command line: each field from its flag's
-/// occurrences, else from its default. Any struct whose flags are visible from the running
-/// command may be decoded, so a subcommand can read its parent's persistent flags. When `T`
-/// declares `pub fn validate(flags: T, ctx: *Context) !void`, it runs on the result.
-pub fn flags(ctx: *Context, comptime T: type) FlagsError(T)!T {
-    var result: T = undefined;
-    const info = @typeInfo(T).@"struct";
-    inline for (info.field_names, info.field_types, info.field_attrs) |field, Field, attrs| {
-        const name = comptime spec.longName(T, field);
-        const is_count = comptime spec.option(T, field, "count", false);
-        const split = comptime spec.option(T, field, "split", @as(?u8, null));
-        if (ctx.lastValue(name) == null) {
-            if (attrs.default_value_ptr) |ptr| {
-                @field(result, field) = @as(*const Field, @ptrCast(@alignCast(ptr))).*;
+/// occurrences, else from its default. `X` is the struct, or the set `cli.flags` made of
+/// it. Any struct whose flags are visible from the running command may be decoded, so a
+/// subcommand can read its parent's persistent flags. Checks run before the handlers
+/// (`Command.check`), not here.
+pub fn flags(ctx: *Context, comptime X: type) FlagsError!sets.FlagSet(X).Value {
+    const T = sets.FlagSet(X).Value;
+    var result: T = comptime field.initDefaults(T);
+    const owner = @typeName(T);
+    inline for (comptime flagPaths(T, "")) |path| {
+        if (ctx.lastOccurrence(owner, path)) |last| {
+            const slot = field.ptrAt(T, path, &result);
+            const Field = @TypeOf(slot.*);
+            if (last.flag.kind == .count) {
+                if (@typeInfo(Field) == .int) {
+                    slot.* = std.math.cast(
+                        Field,
+                        ctx.countOf(last.flag),
+                    ) orelse std.math.maxInt(Field);
+                }
             } else {
-                @field(result, field) = comptime zero(Field);
+                slot.* = try ctx.decodeField(Field, last.flag);
             }
-        } else if (is_count) {
-            @field(result, field) = std.math.cast(Field, ctx.count(name)) orelse
-                std.math.maxInt(Field);
-        } else {
-            @field(result, field) = try ctx.decodeField(Field, name, split);
         }
     }
-    if (comptime @hasDecl(T, "validate")) try result.validate(ctx);
     return result;
 }
 
-/// What `flags(T)` can fail with: decoding errors, and whatever `T.validate` returns.
-pub fn FlagsError(comptime T: type) type {
-    const Decoding = values.Error || Allocator.Error;
-    if (!@hasDecl(T, "validate")) return Decoding;
-    const Validate = @TypeOf(T.validate);
-    const info = @typeInfo(Validate).@"fn";
-    const ok = info.param_types.len == 2 and info.param_types[1] == *Context and
-        (info.param_types[0] == T or info.param_types[0] == *const T);
-    if (!ok) @compileError(@typeName(T) ++ ".validate must be fn (" ++ @typeName(T) ++
-        ", *cli.Context) !void");
-    const Return = info.return_type orelse
-        @compileError(@typeName(T) ++ ".validate must not be generic");
-    return switch (@typeInfo(Return)) {
-        .error_union => |u| Decoding || u.error_set,
-        else => @compileError(@typeName(T) ++ ".validate must return !void"),
-    };
+/// What `flags` can fail with.
+pub const FlagsError = values.Error || Allocator.Error;
+
+/// The dotted path of every field of `T` that can be a flag: each value, each choice
+/// (before its variants' fields), and the fields of groups and of a choice's variants.
+fn flagPaths(comptime T: type, comptime prefix: []const u8) []const []const u8 {
+    comptime {
+        var out: []const []const u8 = &.{};
+        for (field.fieldNames(T), field.fieldTypes(T)) |name, F| {
+            const C = field.Unwrap(F);
+            const path = if (prefix.len == 0) name else prefix ++ "." ++ name;
+            if (field.isList(C) and field.isGroup(@typeInfo(C).pointer.child)) continue;
+            if (field.isGroup(C)) {
+                out = out ++ flagPaths(C, path);
+            } else if (field.isChoice(C)) {
+                out = out ++ .{path};
+                for (field.fieldNames(C), field.fieldTypes(C)) |variant, P| {
+                    if (P != void) out = out ++ flagPaths(P, path ++ "." ++ variant);
+                }
+            } else {
+                out = out ++ .{path};
+            }
+        }
+        return out;
+    }
 }
 
-/// Decodes typed positionals (see `.args` in `spec.zig`): field `i` from `ctx.args[i]`, a
-/// trailing list from the rest, a missing optional field from its default. A word that is
-/// not a valid value is a usage error (exit 2).
-pub fn positionals(ctx: *Context, comptime T: type) (UsageFailure || Allocator.Error)!T {
+/// The last value given for the field at `path` of the flags struct named `owner`.
+fn lastOccurrence(ctx: *const Context, owner: []const u8, path: []const u8) ?parse.Occurrence {
+    var i = ctx.occurrences.len;
+    while (i > 0) {
+        i -= 1;
+        const occurrence = ctx.occurrences[i];
+        const flag = occurrence.flag;
+        if (std.mem.eql(u8, flag.field, path) and std.mem.eql(u8, flag.owner, owner)) {
+            return occurrence;
+        }
+    }
+    return null;
+}
+
+/// Decodes typed positionals (see `cli.args`): field `i` from `ctx.args[i]`, a trailing
+/// list from the rest, a missing optional field from its default. `X` is the struct, or
+/// the set `cli.args` made of it. A word that is not a valid value is a usage error
+/// (exit 2).
+pub fn positionals(
+    ctx: *Context,
+    comptime X: type,
+) (UsageFailure || Allocator.Error)!sets.ArgSet(X).Value {
+    const T = sets.ArgSet(X).Value;
     var result: T = undefined;
     const info = @typeInfo(T).@"struct";
     const fields = .{ info.field_names, info.field_types, info.field_attrs };
-    inline for (fields[0], fields[1], fields[2], 0..) |field, Field, attrs, i| {
+    inline for (fields[0], fields[1], fields[2], 0..) |name, Field, attrs, i| {
         const Base = switch (@typeInfo(Field)) {
             .optional => |o| o.child,
             else => Field,
@@ -395,18 +459,18 @@ pub fn positionals(ctx: *Context, comptime T: type) (UsageFailure || Allocator.E
             const words = if (i < ctx.args.len) ctx.args[i..] else &.{};
             const list = try ctx.arena.alloc(Elem, words.len);
             for (list, words) |*item, word| {
-                item.* = try ctx.positional(T, field, Elem, word);
+                item.* = try ctx.positional(name, i, Elem, word);
             }
-            @field(result, field) = if (words.len == 0 and attrs.default_value_ptr != null)
+            @field(result, name) = if (words.len == 0 and attrs.default_value_ptr != null)
                 @as(*const Field, @ptrCast(@alignCast(attrs.default_value_ptr.?))).*
             else
                 list;
         } else if (i < ctx.args.len) {
-            @field(result, field) = try ctx.positional(T, field, Base, ctx.args[i]);
+            @field(result, name) = try ctx.positional(name, i, Base, ctx.args[i]);
         } else if (attrs.default_value_ptr) |ptr| {
-            @field(result, field) = @as(*const Field, @ptrCast(@alignCast(ptr))).*;
+            @field(result, name) = @as(*const Field, @ptrCast(@alignCast(ptr))).*;
         } else {
-            @field(result, field) = comptime zero(Field);
+            @field(result, name) = comptime zero(Field);
         }
     }
     return result;
@@ -414,13 +478,18 @@ pub fn positionals(ctx: *Context, comptime T: type) (UsageFailure || Allocator.E
 
 fn positional(
     ctx: *Context,
-    comptime T: type,
-    comptime field: []const u8,
+    comptime field_name: []const u8,
+    comptime index: usize,
     comptime Elem: type,
     word: []const u8,
 ) UsageFailure!Elem {
     return values.parse(Elem, word) catch {
-        const name = comptime spec.positionalName(T, field);
+        // The name the command gives it, renamed or not.
+        const declared = ctx.command().args.positionals;
+        const name = if (index < declared.len)
+            declared[index].name
+        else
+            comptime field.kebab(field_name);
         var buffer: [512]u8 = undefined;
         var message: Io.Writer = .fixed(&buffer);
         const label = comptime values.label(Elem);
@@ -445,8 +514,7 @@ fn zero(comptime Field: type) Field {
 fn decodeField(
     ctx: *Context,
     comptime Field: type,
-    name: []const u8,
-    split: ?u8,
+    flag: *const Flag,
 ) (values.Error || Allocator.Error)!Field {
     const Base = switch (@typeInfo(Field)) {
         .optional => |o| o.child,
@@ -456,8 +524,8 @@ fn decodeField(
         const Elem = values.Element(Base);
         var list: std.ArrayList(Elem) = .empty;
         for (ctx.occurrences) |occurrence| {
-            if (!std.mem.eql(u8, occurrence.flag.name, name)) continue;
-            if (split) |separator| {
+            if (!sameFlag(occurrence.flag, flag)) continue;
+            if (flag.split) |separator| {
                 var parts = std.mem.splitScalar(u8, occurrence.value, separator);
                 while (parts.next()) |part| {
                     try list.append(ctx.arena, try values.parse(Elem, part));
@@ -468,7 +536,16 @@ fn decodeField(
         }
         return list.items;
     }
-    return try values.parse(Base, ctx.lastValue(name).?);
+    var last: []const u8 = "";
+    for (ctx.occurrences) |occurrence| {
+        if (sameFlag(occurrence.flag, flag)) last = occurrence.value;
+    }
+    return try values.parse(Base, last);
+}
+
+/// Whether two descriptors are the same flag: the same field of the same struct.
+fn sameFlag(a: *const Flag, b: *const Flag) bool {
+    return a == b or (std.mem.eql(u8, a.field, b.field) and std.mem.eql(u8, a.owner, b.owner));
 }
 
 fn lastValue(ctx: *const Context, name: []const u8) ?[]const u8 {
@@ -481,11 +558,20 @@ fn lastValue(ctx: *const Context, name: []const u8) ?[]const u8 {
     return null;
 }
 
+fn countOf(ctx: *const Context, flag: *const Flag) usize {
+    var n: usize = 0;
+    for (ctx.occurrences) |occurrence| {
+        if (!sameFlag(occurrence.flag, flag)) continue;
+        // The parser only accepts an environment count that `envCount` reads.
+        n +|= if (occurrence.source == .env) parse.envCount(occurrence.value).? else 1;
+    }
+    return n;
+}
+
 fn count(ctx: *const Context, name: []const u8) usize {
     var n: usize = 0;
     for (ctx.occurrences) |occurrence| {
         if (!std.mem.eql(u8, occurrence.flag.name, name)) continue;
-        // The parser only accepts an environment count that `envCount` reads.
         n +|= if (occurrence.source == .env) parse.envCount(occurrence.value).? else 1;
     }
     return n;
@@ -528,9 +614,63 @@ pub const FlagRecord = struct {
     /// The flag's long name, without `--`.
     name: []const u8,
     value: []const u8,
-    /// The configuration key the flag's meta names with `.key`, if any.
+    /// The configuration key the flag sets, when it is not its name: its field's path
+    /// below a command's `.settings`, or the dotted path of a flag in a group
+    /// (`fetch.concurrency` for `fetch: struct { concurrency: u8 }`).
     key: ?[]const u8 = null,
 };
+
+fn recordKey(flag: *const Flag) ?[]const u8 {
+    if (flag.key) |key| return key;
+    return if (std.mem.indexOfScalar(u8, flag.field, '.') != null) flag.field else null;
+}
+
+/// One record per flag visible from the running command that sets a configuration key,
+/// given or not: its name and key. For `cfg.Config.nameFlags`, so a missing key's message
+/// can name the flag that sets it.
+pub fn flagKeys(ctx: *Context) Allocator.Error![]const FlagRecord {
+    var records: std.ArrayList(FlagRecord) = .empty;
+    var it = parse.visible(ctx.path);
+    while (it.next()) |flag| {
+        const key = recordKey(flag) orelse continue;
+        try records.append(ctx.arena, .{ .name = flag.name, .value = "", .key = key });
+    }
+    return records.items;
+}
+
+/// What `cfg.Config.askWith` takes: asks, at a terminal, for a setting no source set,
+/// with the `.prompt` of the flag whose key it is (its field's path below a command's
+/// `.settings`). Gives up (null) when the run is not interactive, or the flag has no
+/// prompt.
+pub fn settingsAsker(ctx: *Context) SettingsAsker {
+    return .{ .context = ctx, .ask = askSetting };
+}
+
+/// A context and a function, in the shape `cfg.Config.askWith` reads.
+pub const SettingsAsker = struct {
+    context: *anyopaque,
+    ask: *const fn (context: *anyopaque, path: []const u8) ?[]const u8,
+};
+
+fn askSetting(context: *anyopaque, path: []const u8) ?[]const u8 {
+    const ctx: *Context = @ptrCast(@alignCast(context));
+    if (!ctx.interactive or (ctx.asker == null and ctx.in == null)) return null;
+    var it = parse.visible(ctx.path);
+    const flag = while (it.next()) |candidate| {
+        const key = recordKey(candidate) orelse continue;
+        if (std.mem.eql(u8, key, path) and candidate.prompt != null) break candidate;
+    } else return null;
+    const asker = ctx.asker orelse flow.lineAsker(ctx);
+    var question: flow.Question = .{
+        .label = ctx.translate(flag.prompt.?),
+        .secret = flag.secret,
+        .accepts = flag.check,
+        .expected = flag.value_name,
+        .answer = .{ .text = "" },
+    };
+    const answered = flow.askOne(asker, ctx.arena, &question) catch return null;
+    return if (answered) question.answer.text else null;
+}
 
 /// Every flag the user set, one record per value, in command-line order. A counter is one
 /// record holding the count; a list flag with `.split` yields one record per element.
@@ -548,13 +688,13 @@ pub fn changedFlags(ctx: *Context) Allocator.Error![]const FlagRecord {
                 try records.append(ctx.arena, .{
                     .name = flag.name,
                     .value = text,
-                    .key = flag.key,
+                    .key = recordKey(flag),
                 });
             },
             .bool => try records.append(ctx.arena, .{
                 .name = flag.name,
                 .value = occurrence.value,
-                .key = flag.key,
+                .key = recordKey(flag),
             }),
             .value => if (flag.split) |separator| {
                 var parts = std.mem.splitScalar(u8, occurrence.value, separator);
@@ -562,14 +702,14 @@ pub fn changedFlags(ctx: *Context) Allocator.Error![]const FlagRecord {
                     try records.append(ctx.arena, .{
                         .name = flag.name,
                         .value = part,
-                        .key = flag.key,
+                        .key = recordKey(flag),
                     });
                 }
             } else {
                 try records.append(ctx.arena, .{
                     .name = flag.name,
                     .value = occurrence.value,
-                    .key = flag.key,
+                    .key = recordKey(flag),
                 });
             },
         }
@@ -586,13 +726,13 @@ const TestFlags = struct {
     mode: enum { dev, prod } = .dev,
     limit: ?u32 = null,
     force: bool = false,
-    pub const meta = .{
-        .tag = .{ .split = ',' },
-        .verbose = .{ .short = 'v', .count = true },
-    };
 };
+const test_flags = sets.flags(TestFlags, field.none, .{ .fields = .{
+    .tag = .{ .split = ',' },
+    .verbose = .{ .short = 'v', .count = true },
+} });
 
-const test_command = spec.command(.{ .name = "t", .flags = TestFlags, .run = noop });
+const test_command = spec.command(.{ .name = "t", .flags = test_flags, .run = noop });
 
 fn noop(_: *Context) !void {}
 
@@ -673,20 +813,30 @@ test secretValues {
     defer arena.deinit();
     const root = comptime spec.command(.{
         .name = "t",
-        .flags = struct {
-            token: []const u8 = "",
-            keys: []const []const u8 = &.{},
-            password: []const u8 = "",
-            empty: []const u8 = "",
-            debug: bool = false,
-            user: []const u8 = "",
-            pub const meta = .{
-                .token = .{ .secret = true },
-                .keys = .{ .secret = true, .split = ',' },
-                .password = .{ .secret = true, .env = "PASSWORD" },
-                .empty = .{ .secret = true },
-                .debug = .{ .secret = true },
+        .flags = flags: {
+            const T = struct {
+                token: []const u8 = "",
+                keys: []const []const u8 = &.{},
+                password: []const u8 = "",
+                empty: []const u8 = "",
+                debug: bool = false,
+                user: []const u8 = "",
             };
+            break :flags sets.flags(
+                T,
+                field.Set(
+                    .{
+                        field.Spec(T){ .fields = .{
+                            .token = .{ .secret = true },
+                            .keys = .{ .secret = true },
+                            .password = .{ .secret = true },
+                            .empty = .{ .secret = true },
+                            .debug = .{ .secret = true },
+                        } },
+                    },
+                ),
+                .{ .fields = .{ .keys = .{ .split = ',' }, .password = .{ .env = "PASSWORD" } } },
+            );
         },
         .run = noop,
     });
@@ -741,11 +891,11 @@ test fail {
 const Global = struct {
     verbose: u8 = 0,
     profile: []const u8 = "default",
-    pub const meta = .{
-        .verbose = .{ .short = 'v', .count = true, .env = "VERBOSE" },
-        .profile = .{ .env = "PROFILE" },
-    };
 };
+const global_flags = sets.flags(Global, field.none, .{ .fields = .{
+    .verbose = .{ .short = 'v', .count = true, .env = "VERBOSE" },
+    .profile = .{ .env = "PROFILE" },
+} });
 
 /// A type following the `parse` convention.
 const Size = struct {
@@ -763,13 +913,15 @@ const ChildFlags = struct {
     ratio: f64 = 1.0,
     ids: ?[]const u32 = null,
     level: u2 = 0,
-    pub const meta = .{ .level = .{ .short = 'l', .count = true } };
 };
+const child_flags = sets.flags(ChildFlags, field.none, .{ .fields = .{
+    .level = .{ .short = 'l', .count = true },
+} });
 
 const nested_root = spec.command(.{
     .name = "app",
-    .persistent_flags = Global,
-    .subcommands = .{spec.command(.{ .name = "child", .flags = ChildFlags, .run = noop })},
+    .persistent_flags = global_flags,
+    .subcommands = .{spec.command(.{ .name = "child", .flags = child_flags, .run = noop })},
 });
 
 fn nestedContext(
@@ -902,30 +1054,88 @@ test warn {
     try testing.expectEqualStrings("app: warning: 3 left\n", err.buffered());
 }
 
+const Fetch = struct { concurrency: u8 = 4, retries: u8 = 0 };
+const Settings = struct { fetch: Fetch = .{} };
 const Keyed = struct {
-    jobs: u8 = 4,
+    config: Settings = .{},
     found: usize = 7,
-    pub const meta = .{
-        .jobs = .{ .key = "fetch.concurrency" },
-        .found = .{ .internal = true },
-    };
 };
+const keyed_flags = sets.flags(Keyed, field.Set(.{field.Spec(Fetch){ .fields = .{
+    .retries = .{ .checks = &.{.max(3)} },
+} }}), .{ .fields = .{
+    .config = .{ .name = "", .fields = .{ .fetch = .{ .name = "" } } },
+    .found = .{ .internal = true },
+} });
+
+/// Stands in for a configuration file setting `fetch.retries = 9`, with the flags on top.
+fn loadSettings(ctx: *Context) !Settings {
+    var settings: Settings = .{ .fetch = .{ .retries = 9 } };
+    for (try ctx.changedFlags()) |record| {
+        if (std.mem.eql(u8, record.key.?, "fetch.concurrency")) {
+            settings.fetch.concurrency = try std.fmt.parseInt(u8, record.value, 10);
+        }
+    }
+    return settings;
+}
 
 fn runKeyed(ctx: *Context, given: Keyed) !void {
     const records = try ctx.changedFlags();
-    try ctx.out.print("{d} {d} {s}={s}\n", .{
-        given.jobs, given.found, records[0].key.?, records[0].value,
+    try ctx.out.print("{d} {d} {d} {s}={s}\n", .{
+        given.config.fetch.concurrency, given.config.fetch.retries, given.found,
+        records[0].key.?,               records[0].value,
     });
 }
 
-test "an .internal field keeps its default, and changedFlags carries a flag's .key" {
+test "settingsAsker asks with the prompt of the flag whose key is missing" {
+    const Prompted = struct { config: struct { token: []const u8 = "" } = .{} };
+    const prompted = sets.flags(Prompted, field.none, .{ .fields = .{
+        .config = .{ .name = "", .fields = .{ .token = .{ .prompt = "Token" } } },
+    } });
+    const root = comptime spec.command(.{ .name = "t", .flags = prompted, .run = noop });
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var script: flow.Script = .{ .answers = &.{"s3cret"} };
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    const path = [_]*const Command{&root};
+    var ctx: Context = .{
+        .io = testing.io,
+        .gpa = testing.allocator,
+        .arena = arena.allocator(),
+        .environ = &environ,
+        .out = undefined,
+        .err = undefined,
+        .args = &.{},
+        .path = &path,
+        .occurrences = &.{},
+        .app_name = "t",
+        .interactive = true,
+        .asker = script.asker(),
+    };
+    const asker = ctx.settingsAsker();
+    try testing.expectEqualStrings("s3cret", asker.ask(asker.context, "config.token").?);
+    try testing.expectEqual(null, asker.ask(asker.context, "config.other"));
+    ctx.interactive = false;
+    try testing.expectEqual(null, asker.ask(asker.context, "config.token"));
+    const keys = try ctx.flagKeys();
+    try testing.expectEqualStrings("config.token", keys[0].key.?);
+}
+
+test "an .internal field keeps its default; .settings flags carry their key to the loader" {
     const App = @import("App.zig");
-    const root = comptime spec.command(.{ .name = "t", .flags = Keyed, .run = runKeyed });
+    const root = comptime spec.command(.{
+        .name = "t",
+        .flags = keyed_flags,
+        .settings = .{ .field = .config, .load = loadSettings },
+        .run = runKeyed,
+    });
     const app: App = .{ .root = &root };
     const run = @import("testing.zig").run;
-    const ok = try run(app, &.{ "--jobs", "2" }, .{});
+    // The loader's value wins in the handler, even past the flags' own check (`retries`
+    // is at most 3): checks on settings are the loader's to run.
+    const ok = try run(app, &.{ "--concurrency", "2" }, .{});
     defer ok.deinit();
-    try ok.expect(0, "2 7 fetch.concurrency=2\n", "");
+    try ok.expect(0, "2 9 7 fetch.concurrency=2\n", "");
     const hidden = try run(app, &.{ "--found", "1" }, .{});
     defer hidden.deinit();
     try testing.expectEqual(2, hidden.status);

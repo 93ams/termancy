@@ -4,15 +4,16 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 const keys = sys.ssh.keys;
 const mnemonic = sys.mnemonic;
 const Io = std.Io;
 
-const passphrase_meta = .{
+/// What every `--passphrase` means; each command spells it the same.
+const passphrase_spec: field.Field([]const u8) = .{
     .help = "Encrypt (or decrypt) the key with this passphrase; better given through " ++
         "$TERMANCY_PASSPHRASE",
-    .env = "TERMANCY_PASSPHRASE",
     .secret = true,
 };
 
@@ -22,61 +23,75 @@ const KeygenFlags = struct {
     passphrase: []const u8 = "",
     rounds: u32 = 16,
     force: bool = false,
-    pub const meta = .{
-        .file = .{
-            .short = 'f',
-            .help = "Where to write the private key (the public one gets .pub)",
-        },
-        .comment = .{ .short = 'C', .help = "The key's comment (default: user@host)" },
-        .passphrase = passphrase_meta,
-        .rounds = .{ .short = 'a', .help = "bcrypt rounds for the passphrase", .min = 1 },
-        .force = .{ .help = "Replace a key already there" },
-    };
 };
+const keygen_flags = cli.flags(KeygenFlags, field.Set(.{field.Spec(KeygenFlags){ .fields = .{
+    .file = .{ .help = "Where to write the private key (the public one gets .pub)" },
+    .comment = .{ .help = "The key's comment (default: user@host)" },
+    .passphrase = passphrase_spec,
+    .rounds = .{ .help = "bcrypt rounds for the passphrase", .checks = &.{.min(1)} },
+    .force = .{ .help = "Replace a key already there" },
+} }}), .{ .fields = .{
+    .file = .{ .short = 'f' },
+    .comment = .{ .short = 'C' },
+    .passphrase = .{ .env = "TERMANCY_PASSPHRASE" },
+    .rounds = .{ .short = 'a' },
+} });
 
 const FileFlags = struct {
     passphrase: []const u8 = "",
-    pub const meta = .{ .passphrase = passphrase_meta };
 };
+const file_flags = cli.flags(FileFlags, field.Set(.{field.Spec(FileFlags){ .fields = .{
+    .passphrase = passphrase_spec,
+} }}), .{ .fields = .{
+    .passphrase = .{ .env = "TERMANCY_PASSPHRASE" },
+} });
 
 const RestoreFlags = struct {
     file: []const u8 = "id_ed25519",
     comment: []const u8 = "",
     passphrase: []const u8 = "",
     force: bool = false,
-    pub const meta = .{
-        .file = .{
-            .short = 'f',
-            .help = "Where to write the private key (the public one gets .pub)",
-        },
-        .comment = .{ .short = 'C', .help = "The key's comment" },
-        .passphrase = passphrase_meta,
-        .force = .{ .help = "Replace a key already there" },
-    };
 };
+const restore_flags = cli.flags(RestoreFlags, field.Set(.{field.Spec(RestoreFlags){ .fields = .{
+    .file = .{ .help = "Where to write the private key (the public one gets .pub)" },
+    .comment = .{ .help = "The key's comment" },
+    .passphrase = passphrase_spec,
+    .force = .{ .help = "Replace a key already there" },
+} }}), .{ .fields = .{
+    .file = .{ .short = 'f' },
+    .comment = .{ .short = 'C' },
+    .passphrase = .{ .env = "TERMANCY_PASSPHRASE" },
+} });
 
 const SignFlags = struct {
     key: []const u8,
     namespace: []const u8 = "file",
     passphrase: []const u8 = "",
-    pub const meta = .{
-        .key = .{ .short = 'k', .help = "The private key to sign with" },
-        .namespace = .{ .short = 'n', .help = "What the signature is for (file, git, email...)" },
-        .passphrase = passphrase_meta,
-    };
 };
+const sign_flags = cli.flags(SignFlags, field.Set(.{field.Spec(SignFlags){ .fields = .{
+    .key = .{ .help = "The private key to sign with" },
+    .namespace = .{ .help = "What the signature is for (file, git, email...)" },
+    .passphrase = passphrase_spec,
+} }}), .{ .fields = .{
+    .key = .{ .short = 'k' },
+    .namespace = .{ .short = 'n' },
+    .passphrase = .{ .env = "TERMANCY_PASSPHRASE" },
+} });
 
 const VerifyFlags = struct {
     signature: ?[]const u8 = null,
     signers: ?[]const u8 = null,
     namespace: []const u8 = "file",
-    pub const meta = .{
-        .signature = .{ .short = 's', .help = "The signature (default: <file>.sig)" },
-        .signers = .{ .help = "Trust only the keys in this file (authorized_keys or " ++
-            "allowed_signers form)" },
-        .namespace = .{ .short = 'n', .help = "What the signature must be for" },
-    };
 };
+const verify_flags = cli.flags(VerifyFlags, field.Set(.{field.Spec(VerifyFlags){ .fields = .{
+    .signature = .{ .help = "The signature (default: <file>.sig)" },
+    .signers = .{ .help = "Trust only the keys in this file (authorized_keys or " ++
+        "allowed_signers form)" },
+    .namespace = .{ .help = "What the signature must be for" },
+} }}), .{ .fields = .{
+    .signature = .{ .short = 's' },
+    .namespace = .{ .short = 'n' },
+} });
 
 const RunFlags = struct {
     identity: ?[]const u8 = null,
@@ -84,16 +99,20 @@ const RunFlags = struct {
     known_hosts: ?[]const u8 = null,
     accept_new: bool = false,
     passphrase: []const u8 = "",
-    pub const meta = .{
-        .identity = .{ .short = 'i', .help = "The Ed25519 private key to log in with, " ++
-            "tried before the agent's (default: ~/.ssh/id_ed25519, after them)" },
-        .port = .{ .short = 'p', .help = "The server's port" },
-        .known_hosts = .{ .help = "The host keys to trust (default: ~/.ssh/known_hosts)" },
-        .accept_new = .{ .help = "Trust and record the key of a host not yet known; a " ++
-            "changed key is still refused" },
-        .passphrase = passphrase_meta,
-    };
 };
+const run_flags = cli.flags(RunFlags, field.Set(.{field.Spec(RunFlags){ .fields = .{
+    .identity = .{ .help = "The Ed25519 private key to log in with, " ++
+        "tried before the agent's (default: ~/.ssh/id_ed25519, after them)" },
+    .port = .{ .help = "The server's port" },
+    .known_hosts = .{ .help = "The host keys to trust (default: ~/.ssh/known_hosts)" },
+    .accept_new = .{ .help = "Trust and record the key of a host not yet known; a " ++
+        "changed key is still refused" },
+    .passphrase = passphrase_spec,
+} }}), .{ .fields = .{
+    .identity = .{ .short = 'i' },
+    .port = .{ .short = 'p' },
+    .passphrase = .{ .env = "TERMANCY_PASSPHRASE" },
+} });
 
 pub const command = cli.command(.{
     .name = "ssh",
@@ -117,7 +136,7 @@ pub const command = cli.command(.{
                 .usage = "[user@]host -- command...",
                 .passthrough = true,
             },
-            .flags = RunFlags,
+            .flags = run_flags,
             .examples =
             \\termancy ssh run alice@example.com -- uname -a
             \\termancy ssh run -p 2222 -i deploy_key --accept-new localhost -- uptime
@@ -127,7 +146,7 @@ pub const command = cli.command(.{
         cli.command(.{
             .name = "keygen",
             .summary = "Make an Ed25519 key pair, as ssh-keygen -t ed25519",
-            .flags = KeygenFlags,
+            .flags = keygen_flags,
             .examples =
             \\termancy ssh keygen -f ~/.ssh/id_ed25519
             \\TERMANCY_PASSPHRASE=... termancy ssh keygen -f deploy_key -C deploy
@@ -138,7 +157,7 @@ pub const command = cli.command(.{
             .name = "fingerprint",
             .summary = "Show the fingerprints of public or private keys",
             .args = .{ .min = 1, .max = null, .usage = "<key>..." },
-            .flags = FileFlags,
+            .flags = file_flags,
             .run = fingerprint,
         }),
         cli.command(.{
@@ -150,13 +169,13 @@ pub const command = cli.command(.{
             \\the key with `termancy ssh restore`.
             ,
             .args = .{ .min = 1, .max = 1, .usage = "<private key>" },
-            .flags = FileFlags,
+            .flags = file_flags,
             .run = melt,
         }),
         cli.command(.{
             .name = "restore",
             .summary = "Remake a private key from its 24 words (read from standard input)",
-            .flags = RestoreFlags,
+            .flags = restore_flags,
             .examples =
             \\termancy ssh restore -f id_ed25519 < words.txt
             ,
@@ -166,7 +185,7 @@ pub const command = cli.command(.{
             .name = "sign",
             .summary = "Sign files, as ssh-keygen -Y sign (writes <file>.sig)",
             .args = .{ .min = 1, .max = null, .usage = "<file>..." },
-            .flags = SignFlags,
+            .flags = sign_flags,
             .run = sign,
         }),
         cli.command(.{
@@ -179,7 +198,7 @@ pub const command = cli.command(.{
             \\fingerprint printed.
             ,
             .args = .{ .min = 1, .max = 1, .usage = "<file>" },
-            .flags = VerifyFlags,
+            .flags = verify_flags,
             .run = verify,
         }),
     },

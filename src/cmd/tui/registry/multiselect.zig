@@ -16,134 +16,134 @@
 const std = @import("std");
 const tui = @import("tui");
 const Allocator = std.mem.Allocator;
-const List = @import("list.zig").List;
+const List = @import("list.zig");
 
 pub const Status = enum { active, submitted, canceled };
 
-pub const MultiSelect = struct {
-    gpa: Allocator,
-    list: List,
-    /// One flag per item.
-    chosen: []bool,
-    /// The most items that may be chosen; null for no limit.
-    limit: ?usize = null,
-    /// A line above the items; none when empty.
-    header: []const u8 = "",
-    chosen_mark: []const u8 = "✓ ",
-    unchosen_mark: []const u8 = "• ",
-    status: Status = .active,
-    styles: Styles = .{},
+const MultiSelect = @This();
 
-    pub const Styles = struct {
-        header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
-        chosen: tui.Style = .{ .fg = .{ .indexed = 212 } },
-        count: tui.Style = .{ .fg = .{ .indexed = 240 } },
-    };
+gpa: Allocator,
+list: List,
+/// One flag per item.
+chosen: []bool,
+/// The most items that may be chosen; null for no limit.
+limit: ?usize = null,
+/// A line above the items; none when empty.
+header: []const u8 = "",
+chosen_mark: []const u8 = "✓ ",
+unchosen_mark: []const u8 = "• ",
+status: Status = .active,
+styles: Styles = .{},
 
-    /// A multi-select over `list`'s items, none chosen.
-    pub fn init(gpa: Allocator, list: List) Allocator.Error!MultiSelect {
-        const chosen = try gpa.alloc(bool, list.items.len);
-        @memset(chosen, false);
-        return .{ .gpa = gpa, .list = list, .chosen = chosen };
+pub const Styles = struct {
+    header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
+    chosen: tui.Style = .{ .fg = .{ .indexed = 212 } },
+    count: tui.Style = .{ .fg = .{ .indexed = 240 } },
+};
+
+/// A multi-select over `list`'s items, none chosen.
+pub fn init(gpa: Allocator, list: List) Allocator.Error!MultiSelect {
+    const chosen = try gpa.alloc(bool, list.items.len);
+    @memset(chosen, false);
+    return .{ .gpa = gpa, .list = list, .chosen = chosen };
+}
+
+/// Frees the flags.
+pub fn deinit(model: *MultiSelect) void {
+    model.gpa.free(model.chosen);
+    model.* = undefined;
+}
+
+/// Whether item `index` is chosen.
+pub fn isChosen(model: *const MultiSelect, index: usize) bool {
+    return model.chosen[index];
+}
+
+/// How many items are chosen.
+pub fn count(model: *const MultiSelect) usize {
+    return std.mem.count(bool, model.chosen, &.{true});
+}
+
+/// Chooses or clears item `index`; choosing past the limit does nothing.
+pub fn toggle(model: *MultiSelect, index: usize) void {
+    if (!model.chosen[index] and model.full()) return;
+    model.chosen[index] = !model.chosen[index];
+}
+
+fn full(model: *const MultiSelect) bool {
+    const limit = model.limit orelse return false;
+    return model.count() >= limit;
+}
+
+/// Chooses every item in order until the limit, or clears all if no more fit.
+pub fn toggleAll(model: *MultiSelect) void {
+    const before = model.count();
+    for (model.chosen) |*flag| {
+        if (!flag.* and !model.full()) flag.* = true;
     }
+    if (model.count() == before) @memset(model.chosen, false);
+}
 
-    /// Frees the flags.
-    pub fn deinit(model: *MultiSelect) void {
-        model.gpa.free(model.chosen);
-        model.* = undefined;
-    }
-
-    /// Whether item `index` is chosen.
-    pub fn isChosen(model: *const MultiSelect, index: usize) bool {
-        return model.chosen[index];
-    }
-
-    /// How many items are chosen.
-    pub fn count(model: *const MultiSelect) usize {
-        return std.mem.count(bool, model.chosen, &.{true});
-    }
-
-    /// Chooses or clears item `index`; choosing past the limit does nothing.
-    pub fn toggle(model: *MultiSelect, index: usize) void {
-        if (!model.chosen[index] and model.full()) return;
-        model.chosen[index] = !model.chosen[index];
-    }
-
-    fn full(model: *const MultiSelect) bool {
-        const limit = model.limit orelse return false;
-        return model.count() >= limit;
-    }
-
-    /// Chooses every item in order until the limit, or clears all if no more fit.
-    pub fn toggleAll(model: *MultiSelect) void {
-        const before = model.count();
-        for (model.chosen) |*flag| {
-            if (!flag.* and !model.full()) flag.* = true;
-        }
-        if (model.count() == before) @memset(model.chosen, false);
-    }
-
-    pub fn update(model: *MultiSelect, msg: tui.Msg) tui.Cmd {
-        if (msg == .mouse) {
-            // A click toggles the item clicked; the wheel moves.
-            const items_top = model.list.top + @intFromBool(model.header.len > 0);
-            if (model.list.handleMouse(msg.mouse, items_top)) |index| model.toggle(index);
-            return .none;
-        }
-        if (msg != .key) return model.list.update(msg);
-        const key = msg.key;
-        const items = model.list.items.len;
-        if ((key.matches("space") or key.matches("x")) and items > 0) {
-            model.toggle(model.list.cursor);
-        } else if (key.matches("a") or key.matches("ctrl+a")) {
-            model.toggleAll();
-        } else if (key.matches("enter") and items > 0) {
-            if (model.count() == 0) model.chosen[model.list.cursor] = true;
-            model.status = .submitted;
-            return .quit;
-        } else if (key.matches("esc")) {
-            model.status = .canceled;
-            return .quit;
-        } else return model.list.update(msg);
+pub fn update(model: *MultiSelect, msg: tui.Msg) tui.Cmd {
+    if (msg == .mouse) {
+        // A click toggles the item clicked; the wheel moves.
+        const items_top = model.list.top + @intFromBool(model.header.len > 0);
+        if (model.list.handleMouse(msg.mouse, items_top)) |index| model.toggle(index);
         return .none;
     }
+    if (msg != .key) return model.list.update(msg);
+    const key = msg.key;
+    const items = model.list.items.len;
+    if ((key.matches("space") or key.matches("x")) and items > 0) {
+        model.toggle(model.list.cursor);
+    } else if (key.matches("a") or key.matches("ctrl+a")) {
+        model.toggleAll();
+    } else if (key.matches("enter") and items > 0) {
+        if (model.count() == 0) model.chosen[model.list.cursor] = true;
+        model.status = .submitted;
+        return .quit;
+    } else if (key.matches("esc")) {
+        model.status = .canceled;
+        return .quit;
+    } else return model.list.update(msg);
+    return .none;
+}
 
-    /// Writes item `index` behind its mark, for `List.writeRow` to lay out.
-    fn writeItem(
-        model: *const MultiSelect,
-        w: *std.Io.Writer,
-        index: usize,
-    ) std.Io.Writer.Error!void {
-        const chosen = model.chosen[index];
-        const style: tui.Style = if (chosen) model.styles.chosen else .{};
-        try style.paint(w, if (chosen) model.chosen_mark else model.unchosen_mark);
-        // The mark's reset ended the list's own style for this row; start it again.
-        if (chosen and index == model.list.cursor) try model.list.styles.cursor.writeSgr(w);
-        try w.writeAll(model.list.items[index]);
-    }
+/// Writes item `index` behind its mark, for `List.writeRow` to lay out.
+fn writeItem(
+    model: *const MultiSelect,
+    w: *std.Io.Writer,
+    index: usize,
+) std.Io.Writer.Error!void {
+    const chosen = model.chosen[index];
+    const style: tui.Style = if (chosen) model.styles.chosen else .{};
+    try style.paint(w, if (chosen) model.chosen_mark else model.unchosen_mark);
+    // The mark's reset ended the list's own style for this row; start it again.
+    if (chosen and index == model.list.cursor) try model.list.styles.cursor.writeSgr(w);
+    try w.writeAll(model.list.items[index]);
+}
 
-    pub fn view(model: *const MultiSelect, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        if (model.header.len > 0) {
-            try model.styles.header.paint(w, model.header);
-            try w.writeByte('\n');
-        }
-        const shown = model.list.window();
-        var row: std.Io.Writer.Allocating = .init(model.gpa);
-        defer row.deinit();
-        for (shown.start..shown.end) |i| {
-            if (i > shown.start) try w.writeByte('\n');
-            row.clearRetainingCapacity();
-            try model.writeItem(&row.writer, i);
-            try model.list.writeRow(w, i, row.written());
-        }
-        if (model.limit) |limit| {
-            try w.writeByte('\n');
-            try model.styles.count.writeSgr(w);
-            try w.print("{d}/{d} chosen", .{ model.count(), limit });
-            if (model.styles.count.hasSgr()) try w.writeAll(tui.ansi.reset);
-        }
+pub fn view(model: *const MultiSelect, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    if (model.header.len > 0) {
+        try model.styles.header.paint(w, model.header);
+        try w.writeByte('\n');
     }
-};
+    const shown = model.list.window();
+    var row: std.Io.Writer.Allocating = .init(model.gpa);
+    defer row.deinit();
+    for (shown.start..shown.end) |i| {
+        if (i > shown.start) try w.writeByte('\n');
+        row.clearRetainingCapacity();
+        try model.writeItem(&row.writer, i);
+        try model.list.writeRow(w, i, row.written());
+    }
+    if (model.limit) |limit| {
+        try w.writeByte('\n');
+        try model.styles.count.writeSgr(w);
+        try w.print("{d}/{d} chosen", .{ model.count(), limit });
+        if (model.styles.count.hasSgr()) try w.writeAll(tui.ansi.reset);
+    }
+}
 
 const testing = std.testing;
 const Driver = tui.testing.Driver(MultiSelect);

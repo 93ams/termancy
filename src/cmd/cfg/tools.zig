@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 const sys = @import("sys");
 const load = @import("load.zig");
@@ -35,15 +36,13 @@ fn runMerge(ctx: *cli.Context) !void {
 const InitFlags = struct {
     force: bool = false,
     schema: ?[]const u8 = null,
-    pub const meta = .{
-        .force = .{ .help = "Replace a file that exists" },
-        .schema = .{
-            .help = "Fill the file from this JSON Schema's defaults",
-            .value_name = "file",
-            .complete = load.completeConfigFiles,
-        },
-    };
 };
+const init_flags = cli.flags(InitFlags, field.Set(.{field.Spec(InitFlags){ .fields = .{
+    .force = .{ .help = "Replace a file that exists" },
+    .schema = .{ .help = "Fill the file from this JSON Schema's defaults" },
+} }}), .{ .fields = .{
+    .schema = .{ .value_name = "file", .complete = .from(load.completeConfigFiles) },
+} });
 
 pub const init = cli.command(.{
     .name = "init",
@@ -54,7 +53,7 @@ pub const init = cli.command(.{
     \\empty value of its type). Refuses to replace a file unless --force.
     ,
     .group = group,
-    .flags = InitFlags,
+    .flags = init_flags,
     .args = .{ .max = 1, .usage = "[file]" },
     .examples =
     \\termancy cfg init

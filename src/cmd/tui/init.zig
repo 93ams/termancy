@@ -3,29 +3,30 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const project = @import("../cli/project.zig");
 const cli_init = @import("../cli/init.zig");
 const manifest = @import("project/manifest.zig");
-const Workspace = @import("project/workspace.zig").Workspace;
+const Workspace = @import("project/workspace.zig");
 
 const InitFlags = struct {
     dir: []const u8 = manifest.default_dir,
     project: []const u8 = ".",
     wire: bool = false,
     dependency: ?[]const u8 = null,
-    pub const meta = .{
-        .dir = .{
-            .help = "Where components go, relative to the project",
-            .value_name = "path",
-        },
-        .project = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-        .wire = .{ .help = "Add the tui module to a build.zig made by termancy cli init" },
-        .dependency = .{
-            .help = "Add termancy as a dependency (zig fetch --save=termancy) and wire build.zig",
-            .value_name = "url",
-        },
-    };
 };
+const init_flags = cli.flags(InitFlags, field.Set(.{field.Spec(InitFlags){ .fields = .{
+    .dir = .{ .help = "Where components go, relative to the project" },
+    .project = .{ .help = "The project directory" },
+    .wire = .{ .help = "Add the tui module to a build.zig made by termancy cli init" },
+    .dependency = .{
+        .help = "Add termancy as a dependency (zig fetch --save=termancy) and wire build.zig",
+    },
+} }}), .{ .fields = .{
+    .dir = .{ .value_name = "path" },
+    .project = .{ .short = 'C', .value_name = "path" },
+    .dependency = .{ .value_name = "url" },
+} });
 
 pub const command = cli.command(.{
     .name = "init",
@@ -45,7 +46,7 @@ pub const command = cli.command(.{
     \\project directory or a parent of it, so a subdirectory of a monorepo works too.
     ,
     .group = group,
-    .flags = InitFlags,
+    .flags = init_flags,
     .examples =
     \\termancy tui init
     \\termancy tui init --dir src/components -C demo --wire
@@ -179,7 +180,10 @@ fn makeDir(ctx: *cli.Context, ws: *Workspace, dir: []const u8) !void {
     };
     ws.dir.access(ctx.io, dir, .{}) catch {
         ws.dir.createDirPath(ctx.io, dir) catch |err| {
-            return ctx.fail("{s}: cannot create: {s}", .{ try ws.show(ctx.arena, dir), @errorName(err) });
+            return ctx.fail(
+                "{s}: cannot create: {s}",
+                .{ try ws.show(ctx.arena, dir), @errorName(err) },
+            );
         };
         const shown = try ws.show(ctx.arena, try std.fmt.allocPrint(ctx.arena, "{s}/", .{dir}));
         try ctx.out.print("created {s}\n", .{shown});

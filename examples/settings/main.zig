@@ -20,41 +20,62 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
+const field = @import("field");
 const sys = @import("sys");
 
 const LogLevel = enum { debug, info, warn, @"error" };
 
+const Server = struct {
+    host: []const u8 = "127.0.0.1",
+    port: u16 = 8080,
+    timeout: cfg.Duration = .{ .ns = 30 * std.time.ns_per_s },
+};
+
+const Database = struct {
+    url: []const u8 = "postgres://localhost/shop",
+    password: ?[]const u8 = null,
+    pool: u8 = 5,
+};
+
+const Log = struct {
+    level: LogLevel = .info,
+    format: []const u8 = "text",
+};
+
 const Settings = struct {
     schema_version: u32 = 3,
-    server: struct {
-        host: []const u8 = "127.0.0.1",
-        port: u16 = 8080,
-        timeout: cfg.Duration = .{ .ns = 30 * std.time.ns_per_s },
-        pub const meta = .{
-            .port = .{ .min = 1, .help = "Where the shop listens" },
-            .timeout = .{ .renamed_from = "request_timeout" },
-        };
-    } = .{},
-    database: struct {
-        url: []const u8 = "postgres://localhost/shop",
-        password: ?[]const u8 = null,
-        pool: u8 = 5,
-        pub const meta = .{
-            .password = .{ .secret = true },
-            .pool = .{ .min = 1, .max = 100 },
-        };
-    } = .{},
-    log: struct {
-        level: LogLevel = .info,
-        format: []const u8 = "text",
-        pub const meta = .{ .format = .{ .one_of = &.{ "text", "json" } } };
-    } = .{},
+    server: Server = .{},
+    database: Database = .{},
+    log: Log = .{},
 };
+
+/// What each setting means and must be, by type.
+const Specs = field.Set(.{
+    field.Spec(Server){ .fields = .{
+        .port = .{ .help = "Where the shop listens", .checks = &.{.min(1)} },
+    } },
+    field.Spec(Database){ .fields = .{
+        .password = .{ .secret = true },
+        .pool = .{ .checks = &.{ .min(1), .max(100) } },
+    } },
+    field.Spec(Log){ .fields = .{
+        .format = .{ .checks = &.{.oneOf(&.{ "text", "json" })} },
+    } },
+});
+
+/// The settings as files spell them: `server.timeout` was `server.request_timeout`.
+const shop = cfg.settings(Settings, Specs, .{ .fields = .{
+    .server = .{ .fields = .{ .timeout = .{ .renamed_from = "request_timeout" } } },
+} });
 
 const Global = struct {
     file: []const u8 = "app.toml",
-    pub const meta = .{ .file = .{ .short = 'f', .help = "The settings file" } };
 };
+const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .file = .{ .help = "The settings file" },
+} }}), .{ .fields = .{
+    .file = .{ .short = 'f' },
+} });
 
 fn readFile(ctx: *cli.Context, file: []const u8) ![]const u8 {
     return std.Io.Dir.cwd().readFileAlloc(ctx.io, file, ctx.arena, .limited(1 << 20)) catch |err|
@@ -91,24 +112,22 @@ const ShowFlags = struct {
     profile: ?[]const u8 = null,
     passphrase: ?[]const u8 = null,
     reveal: bool = false,
-    pub const meta = .{
-        .env = .{ .short = 'e', .help = "Also load <file>.<env>.toml over the file" },
-        .profile = .{ .short = 'p', .help = "Merge the file's profiles.<name> table" },
-        .passphrase = .{
-            .env = "SETTINGS_PASSPHRASE",
-            .secret = true,
-            .help = "Opens secrets.toml.enc next to the file",
-        },
-        .reveal = .{ .help = "Print secrets instead of redacting them" },
-    };
 };
+const show_flags = cli.flags(ShowFlags, field.Set(.{field.Spec(ShowFlags){ .fields = .{
+    .env = .{ .help = "Also load <file>.<env>.toml over the file" },
+    .profile = .{ .help = "Merge the file's profiles.<name> table" },
+    .passphrase = .{ .secret = true, .help = "Opens secrets.toml.enc next to the file" },
+    .reveal = .{ .help = "Print secrets instead of redacting them" },
+} }}), .{ .fields = .{
+    .env = .{ .short = 'e' },
+    .profile = .{ .short = 'p' },
+    .passphrase = .{ .env = "SETTINGS_PASSPHRASE" },
+} });
 
 fn show(ctx: *cli.Context, flags: ShowFlags) !void {
     const global = try ctx.flags(Global);
     var config: cfg.Config = .init(ctx.gpa);
     defer config.deinit();
-    try config.setDefaults(Settings{});
-
     var diag: cfg.Diagnostic = .{};
     const variants: []const []const u8 = &.{ flags.env orelse "", "local" };
     _ = config.loadVariants(ctx.io, .cwd(), global.file, variants, null, &diag) catch |err|
@@ -133,7 +152,7 @@ fn show(ctx: *cli.Context, flags: ShowFlags) !void {
 
     // Decoding checks every value; the settings themselves are what an app would use.
     var problems: std.ArrayList(cfg.Diagnostic) = .empty;
-    _ = config.decode(Settings, .{ .errors = &problems }, &diag) catch |err| switch (err) {
+    _ = config.decode(shop, .{ .errors = &problems }, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
             for (problems.items) |*problem| {
@@ -179,9 +198,9 @@ fn check(ctx: *cli.Context) !void {
     var problems: std.ArrayList(cfg.Diagnostic) = .empty;
     var warnings: std.ArrayList(cfg.Diagnostic) = .empty;
     const options: cfg.DecodeOptions = .{ .errors = &problems, .warnings = &warnings };
-    _ = cfg.decode(Settings, ctx.arena, tree, options, null) catch {};
+    _ = cfg.decode(shop, ctx.arena, tree, options, null) catch {};
     // ...and the JSON Schema it generates, which editors and other tools can check too.
-    const generated = try cfg.schema.build(Settings, ctx.arena);
+    const generated = try cfg.schema.build(shop, ctx.arena);
     var schema_problems: std.ArrayList(cfg.Diagnostic) = .empty;
     _ = try cfg.schema.validate(ctx.arena, generated, tree, .{}, &schema_problems);
     for (schema_problems.items) |problem| {
@@ -218,7 +237,7 @@ fn set(ctx: *cli.Context, args: SetArgs) !void {
     // Refuse what the application would refuse to start with.
     var diag: cfg.Diagnostic = .{};
     const tree = try format.parse(ctx.arena, edited, null);
-    _ = cfg.decode(Settings, ctx.arena, tree, .{}, &diag) catch |err| switch (err) {
+    _ = cfg.decode(shop, ctx.arena, tree, .{}, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return ctx.fail("{f}", .{diag}),
     };
@@ -293,23 +312,23 @@ fn migrate(ctx: *cli.Context) !void {
 // -- schema, seal ------------------------------------------------------------------------
 
 fn schema(ctx: *cli.Context) !void {
-    try cfg.schema.write(Settings, ctx.arena, ctx.out);
+    try cfg.schema.write(shop, ctx.arena, ctx.out);
     try ctx.out.writeByte('\n');
 }
 
 const SealFlags = struct {
     passphrase: []const u8,
     memory: u32 = 64 * 1024,
-    pub const meta = .{
-        .passphrase = .{
-            .env = "SETTINGS_PASSPHRASE",
-            .secret = true,
-            .prompt = "Passphrase",
-            .help = "The passphrase to encrypt with",
-        },
-        .memory = .{ .min = 8, .help = "KiB of memory the key derivation needs (its cost)" },
-    };
 };
+const seal_flags = cli.flags(SealFlags, field.Set(.{field.Spec(SealFlags){ .fields = .{
+    .passphrase = .{ .secret = true, .help = "The passphrase to encrypt with" },
+    .memory = .{
+        .help = "KiB of memory the key derivation needs (its cost)",
+        .checks = &.{.min(8)},
+    },
+} }}), .{ .fields = .{
+    .passphrase = .{ .env = "SETTINGS_PASSPHRASE", .prompt = "Passphrase" },
+} });
 
 const SealArgs = struct { plain: []const u8 };
 
@@ -325,12 +344,12 @@ fn seal(ctx: *cli.Context, flags: SealFlags, args: SealArgs) !void {
 pub const root = cli.command(.{
     .name = "settings",
     .summary = "Show, check, and change the shop's settings",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = .{
         cli.command(.{
             .name = "show",
             .summary = "Print the effective settings and where each came from",
-            .flags = ShowFlags,
+            .flags = show_flags,
             .run = show,
         }),
         cli.command(.{
@@ -361,7 +380,7 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "seal",
             .summary = "Encrypt a file, for secrets kept in a repository",
-            .flags = SealFlags,
+            .flags = seal_flags,
             .args = SealArgs,
             .run = seal,
         }),

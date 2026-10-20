@@ -288,13 +288,13 @@ const docs_index =
 ;
 
 /// The library modules, in the order `unit` runs them, each after the ones it imports.
-const libraries = [_][]const u8{ "term", "cli", "cfg", "tui", "sys" };
+const libraries = [_][]const u8{ "term", "field", "cli", "cfg", "tui", "sys" };
 
 /// The libraries `name` imports besides `std`.
 fn libraryImports(comptime name: []const u8) []const []const u8 {
-    if (comptime std.mem.eql(u8, name, "cli") or std.mem.eql(u8, name, "tui")) {
-        return &.{"term"};
-    }
+    if (comptime std.mem.eql(u8, name, "cli")) return &.{ "term", "field" };
+    if (comptime std.mem.eql(u8, name, "cfg")) return &.{"field"};
+    if (comptime std.mem.eql(u8, name, "tui")) return &.{"term"};
     return &.{};
 }
 
@@ -430,6 +430,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "cli", .module = windows_libs[library("cli")] },
                 .{ .name = "tui", .module = windows_libs[library("tui")] },
+                .{ .name = "field", .module = windows_libs[library("field")] },
             },
         }),
     });
@@ -477,6 +478,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "term", .module = host.libs[library("term")] },
+                .{ .name = "field", .module = host.libs[library("field")] },
                 .{ .name = "cli", .module = host.libs[library("cli")] },
                 .{ .name = "cfg", .module = host.libs[library("cfg")] },
                 .{ .name = "tui", .module = host.libs[library("tui")] },
@@ -593,7 +595,10 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = .ReleaseSmall,
             .strip = true,
-            .imports = &.{.{ .name = name, .module = small.libs[library(name)] }},
+            .imports = &.{
+                .{ .name = name, .module = small.libs[library(name)] },
+                .{ .name = "field", .module = small.libs[library("field")] },
+            },
         }) });
         budget_run.addPrefixedArtifactArg(name ++ "=", app);
     }
@@ -607,7 +612,9 @@ pub fn build(b: *std.Build) void {
     const check = b.step("check", "Compile everything for every supported target");
     for (check_targets) |query| {
         const cross = modules(b, b.resolveTargetQuery(query), optimize, false, build_options);
-        check.dependOn(&b.addExecutable(.{ .name = "termancy", .root_module = cross.termancy }).step);
+        check.dependOn(
+            &b.addExecutable(.{ .name = "termancy", .root_module = cross.termancy }).step,
+        );
         for (cross.all()) |module| {
             check.dependOn(&b.addTest(.{ .root_module = module }).step);
         }
@@ -707,8 +714,8 @@ const wasi_target: std.Target.Query = .{ .cpu_arch = .wasm32, .os_tag = .wasi };
 const arm_target: std.Target.Query = .{ .cpu_arch = .aarch64, .os_tag = .linux };
 
 fn isWasiLibrary(name: []const u8) bool {
-    return std.mem.eql(u8, name, "term") or std.mem.eql(u8, name, "cli") or
-        std.mem.eql(u8, name, "cfg");
+    return std.mem.eql(u8, name, "term") or std.mem.eql(u8, name, "field") or
+        std.mem.eql(u8, name, "cli") or std.mem.eql(u8, name, "cfg");
 }
 
 fn lazyPaths(b: *std.Build, paths: []const []const u8) []const std.Build.LazyPath {

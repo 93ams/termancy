@@ -4,6 +4,7 @@
 //! key that itself contains a dot is addressed. Inside quotes, `\"` and `\\` escape.
 
 const std = @import("std");
+const field = @import("field");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
@@ -123,30 +124,11 @@ pub fn join(arena: Allocator, parent: []const u8, key: []const u8) Allocator.Err
 /// an edit distance of a third of its length (at least 1, at most 3), where swapping two
 /// adjacent bytes is one edit. Ties go to the earliest. For "did you mean" hints.
 pub fn suggest(key: []const u8, candidates: []const []const u8) ?[]const u8 {
-    const max_len = 64;
-    if (key.len == 0 or key.len > max_len) return null;
+    if (key.len == 0) return null;
     var best: ?[]const u8 = null;
     var best_distance = std.math.clamp(key.len / 3, 1, 3) + 1;
     for (candidates) |candidate| {
-        if (candidate.len > max_len) continue;
-        // Optimal string alignment, over three rolling rows.
-        var rows: [3][max_len + 1]usize = undefined;
-        for (0..candidate.len + 1) |j| rows[1][j] = j;
-        for (key, 0..) |ca, i| {
-            const before = &rows[i % 3];
-            const previous = &rows[(i + 1) % 3];
-            const current = &rows[(i + 2) % 3];
-            current[0] = i + 1;
-            for (candidate, 0..) |cb, j| {
-                var d = @min(previous[j] + @intFromBool(ca != cb), previous[j + 1] + 1);
-                d = @min(d, current[j] + 1);
-                if (i > 0 and j > 0 and ca == candidate[j - 1] and key[i - 1] == cb) {
-                    d = @min(d, before[j - 1] + 1);
-                }
-                current[j + 1] = d;
-            }
-        }
-        const distance = rows[(key.len + 1) % 3][candidate.len];
+        const distance = field.editDistance(key, candidate) orelse continue;
         if (distance < best_distance) {
             best = candidate;
             best_distance = distance;

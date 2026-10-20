@@ -26,12 +26,13 @@
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
+const field = @import("field");
 const term = @import("term");
 const tui = @import("tui");
 const sys = @import("sys");
-const Table = @import("ui/table.zig").Table;
-const Input = @import("ui/input.zig").Input;
-const Viewport = @import("ui/viewport.zig").Viewport;
+const Table = @import("ui/table.zig");
+const Input = @import("ui/input.zig");
+const Viewport = @import("ui/viewport.zig");
 const fuzzy = @import("ui/filter.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -53,33 +54,39 @@ pub const Settings = struct {
         concurrency: u8 = 4,
         /// How long one `git fetch` may take.
         timeout: cfg.Duration = .{ .ns = 120 * std.time.ns_per_s },
-        pub const meta = .{ .concurrency = .{ .min = 1, .max = 64 } };
     };
-
-    pub const meta = .{ .depth = .{ .min = 1, .max = 16 } };
 };
+
+/// What the settings must be, checked when they are decoded.
+pub const repo_settings = cfg.settings(Settings, field.Set(.{
+    field.Spec(Settings){ .fields = .{ .depth = .{ .checks = &.{ .min(1), .max(16) } } } },
+    field.Spec(Settings.Fetch){
+        .fields = .{ .concurrency = .{ .checks = &.{ .min(1), .max(64) } } },
+    },
+}), .{});
 
 /// On every command.
 const Global = struct {
     config: ?[]const u8 = null,
-    pub const meta = .{ .config = .{
-        .short = 'c',
-        .env = "REPOS_CONFIG",
-        .value_name = "file",
-        .help = "The configuration file (default: config.toml in the user's configuration " ++
-            "directory for repos)",
-    } };
 };
+const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .config = .{
+        .help = "The configuration file (default: config.toml in the user's " ++
+            "configuration directory for repos)",
+    },
+} }}), .{ .fields = .{
+    .config = .{ .short = 'c', .env = "REPOS_CONFIG", .value_name = "file" },
+} });
 
 /// The roots, on the commands that search.
 const Search = struct {
     roots: []const []const u8 = &.{},
-    pub const meta = .{ .roots = .{
-        .split = ',',
-        .value_name = "dir",
-        .help = "Search these directories instead of the configured roots",
-    } };
 };
+const search_flags = cli.flags(Search, field.Set(.{field.Spec(Search){ .fields = .{
+    .roots = .{ .help = "Search these directories instead of the configured roots" },
+} }}), .{ .fields = .{
+    .roots = .{ .split = ',', .value_name = "dir" },
+} });
 
 const Loaded = struct {
     /// Where the file is, or would be.
@@ -94,7 +101,6 @@ const Loaded = struct {
 fn load(ctx: *cli.Context) !Loaded {
     const global = try ctx.flags(Global);
     var config: cfg.Config = .init(ctx.arena);
-    try config.setDefaults(Settings{});
     config.useEnv(ctx.environ);
     var diag: cfg.Diagnostic = .{};
     const file = config.loadAppFile(ctx.io, "repos", .{ .path = global.config }, &diag) catch |err|
@@ -106,7 +112,7 @@ fn load(ctx: *cli.Context) !Loaded {
         };
     try config.automaticEnv("REPOS");
     try config.bindFlags(try ctx.changedFlags(), .{});
-    const settings = config.decode(Settings, .{}, &diag) catch |err| switch (err) {
+    const settings = config.decode(repo_settings, .{}, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return ctx.fail("{f}", .{diag}),
     };
@@ -141,26 +147,22 @@ const Setup = struct {
     /// The configuration file to write.
     file: []const u8 = "",
 
-    pub const meta = .{
-        .roots = .{ .split = ',', .help = "Directories to search", .value_name = "dirs" },
-        .usual = .{ .help = "Also search ~/src, ~/code, and ~/projects, those that exist" },
-        .concurrency = .{
-            .help = "Repositories to fetch at once",
-            .min = 1,
-            .max = 64,
-            .key = "fetch.concurrency",
-        },
-        .extra = .{ .internal = true },
-        .found = .{ .internal = true },
-        .file = .{ .internal = true },
-    };
-
     /// The roots, with the usual places when they were chosen.
     fn rootList(state: *const Setup, arena: Allocator) ![]const []const u8 {
         if (!state.usual) return state.roots;
         return std.mem.concat(arena, []const u8, &.{ state.roots, state.extra });
     }
 };
+const setup_flags = cli.flags(Setup, field.Set(.{field.Spec(Setup){ .fields = .{
+    .roots = .{ .help = "Directories to search" },
+    .usual = .{ .help = "Also search ~/src, ~/code, and ~/projects, those that exist" },
+    .concurrency = .{ .help = "Repositories to fetch at once", .checks = &.{ .min(1), .max(64) } },
+} }}), .{ .fields = .{
+    .roots = .{ .split = ',', .value_name = "dirs" },
+    .extra = .{ .internal = true },
+    .found = .{ .internal = true },
+    .file = .{ .internal = true },
+} });
 
 const SetupStep = enum { roots, look, ask_usual, count, ask_concurrency, save };
 
@@ -260,7 +262,7 @@ fn runSetup(ctx: *cli.Context, flags: Setup) !void {
     const now = try load(ctx);
     var state = flags;
     state.roots = now.settings.roots;
-    state.concurrency = now.settings.fetch.concurrency;
+    if (!ctx.isSet("concurrency")) state.concurrency = now.settings.fetch.concurrency;
     state.file = now.path;
     _ = try setup.run(ctx, &state);
 }
@@ -514,19 +516,22 @@ fn listRepos(ctx: *cli.Context) !void {
 
 // fetch
 
+/// Shaped like the settings, so each flag's path is its key: `-j` sets `fetch.concurrency`.
 const FetchFlags = struct {
     roots: []const []const u8 = &.{},
-    concurrency: ?u8 = null,
-    pub const meta = .{
-        .roots = Search.meta.roots,
-        .concurrency = .{
-            .short = 'j',
-            .help = "Repositories to fetch at once",
-            .min = 1,
-            .key = "fetch.concurrency",
-        },
-    };
+    fetch: struct { concurrency: ?u8 = null } = .{},
 };
+const fetch_flags = cli.flags(FetchFlags, field.Set(.{
+    field.Spec(FetchFlags){ .fields = .{
+        .roots = .{ .help = "Search these directories instead of the configured roots" },
+    } },
+    field.Spec(@FieldType(FetchFlags, "fetch")){ .fields = .{
+        .concurrency = .{ .help = "Repositories to fetch at once", .checks = &.{.min(1)} },
+    } },
+}), .{ .fields = .{
+    .roots = .{ .split = ',', .value_name = "dir" },
+    .fetch = .{ .name = "", .fields = .{ .concurrency = .{ .short = 'j' } } },
+} });
 
 const Fetching = struct {
     ctx: *cli.Context,
@@ -827,13 +832,16 @@ const UiFlags = struct {
     roots: []const []const u8 = &.{},
     web: ?[]const u8 = null,
     snapshot: bool = false,
-    pub const meta = .{
-        .roots = Search.meta.roots,
-        .web = .{ .value_name = "host:port", .help = "Serve the interface to browsers on " ++
-            "this address instead (open the link it prints, token and all)" },
-        .snapshot = .{ .help = "Print the first screen as text, and quit" },
-    };
 };
+const ui_flags = cli.flags(UiFlags, field.Set(.{field.Spec(UiFlags){ .fields = .{
+    .roots = .{ .help = "Search these directories instead of the configured roots" },
+    .web = .{ .help = "Serve the interface to browsers on " ++
+        "this address instead (open the link it prints, token and all)" },
+    .snapshot = .{ .help = "Print the first screen as text, and quit" },
+} }}), .{ .fields = .{
+    .roots = .{ .split = ',', .value_name = "dir" },
+    .web = .{ .value_name = "host:port" },
+} });
 
 fn ui(ctx: *cli.Context, flags: UiFlags) !void {
     const settings = try settingsWithRoots(ctx);
@@ -893,13 +901,13 @@ fn visit(served: *Served, session: *web.Session) anyerror!void {
 pub const root = cli.command(.{
     .name = "repos",
     .summary = "The git repositories on this machine, at a glance",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .logging = true,
     .subcommands = .{
         cli.command(.{
             .name = "setup",
             .summary = "Choose where to look for repositories, and write the configuration",
-            .flags = Setup,
+            .flags = setup_flags,
             .dry_run = true,
             .output = true,
             .examples =
@@ -912,7 +920,7 @@ pub const root = cli.command(.{
             .name = "list",
             .aliases = &.{"ls"},
             .summary = "List the repositories: branch, changes, ahead and behind",
-            .flags = Search,
+            .flags = search_flags,
             .output = true,
             .examples =
             \\repos list
@@ -923,13 +931,13 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "fetch",
             .summary = "Fetch every repository, several at once",
-            .flags = FetchFlags,
+            .flags = fetch_flags,
             .run = fetch,
         }),
         cli.command(.{
             .name = "ui",
             .summary = "Browse the repositories: filter with /, details beside",
-            .flags = UiFlags,
+            .flags = ui_flags,
             .run = ui,
         }),
     },

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const tui = @import("tui");
 
 fn width(ctx: *cli.Context) !void {
@@ -61,7 +62,10 @@ fn spin(ctx: *cli.Context) !void {
     display.io = ctx.io;
     try display.draw(.now(ctx.io, .awake));
     // Without this, the check after Ctrl-C would pass whatever `term.live` did.
-    if (kernel32.cursorShown(stdout.handle)) return ctx.fail("the spinner left the cursor shown", .{});
+    if (kernel32.cursorShown(stdout.handle)) return ctx.fail(
+        "the spinner left the cursor shown",
+        .{},
+    );
     ctx.io.sleep(.fromSeconds(30), .awake) catch |err| {
         const shown = kernel32.cursorShown(stdout.handle);
         try ctx.out.writeAll(if (shown) "cursor shown\n" else "cursor hidden\n");
@@ -75,8 +79,12 @@ fn tidy(ctx: *cli.Context) !void {
 
 const SecretFlags = struct {
     token: []const u8,
-    pub const meta = .{ .token = .{ .prompt = "Token", .secret = true } };
 };
+const secret_flags = cli.flags(SecretFlags, field.Set(.{field.Spec(SecretFlags){ .fields = .{
+    .token = .{ .secret = true },
+} }}), .{ .fields = .{
+    .token = .{ .prompt = "Token" },
+} });
 
 /// The answer's length: the answer itself must not reach the screen.
 fn secret(ctx: *cli.Context, flags: SecretFlags) !void {
@@ -145,7 +153,7 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "secret",
             .summary = "Ask for a token without showing it",
-            .flags = SecretFlags,
+            .flags = secret_flags,
             .run = secret,
         }),
     },

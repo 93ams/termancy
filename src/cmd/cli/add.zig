@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const flagspec = @import("flagspec.zig");
 const templates = @import("templates.zig");
 const project = @import("project.zig");
@@ -18,21 +19,19 @@ const AddFlags = struct {
     summary: []const u8 = "",
     dir: []const u8 = ".",
     flow: bool = false,
-    pub const meta = .{
-        .flow = .{ .help = "Write a flow: the flags are questions, asked when not given" },
-        .flag = .{
-            .short = 'f',
-            .help = "A flag: name:type[=default][,short=x][,required][,help=text]",
-            .value_name = "spec",
-        },
-        .args = .{
-            .help = "Positional arguments: N, N:M, or N: for no upper limit",
-            .value_name = "min[:max]",
-        },
-        .summary = .{ .short = 's', .help = "One line for help", .value_name = "text" },
-        .dir = .{ .short = 'C', .help = "The project directory", .value_name = "path" },
-    };
 };
+const add_flags = cli.flags(AddFlags, field.Set(.{field.Spec(AddFlags){ .fields = .{
+    .flow = .{ .help = "Write a flow: the flags are questions, asked when not given" },
+    .flag = .{ .help = "A flag: name:type[=default][,short=x][,required][,help=text]" },
+    .args = .{ .help = "Positional arguments: N, N:M, or N: for no upper limit" },
+    .summary = .{ .help = "One line for help" },
+    .dir = .{ .help = "The project directory" },
+} }}), .{ .fields = .{
+    .flag = .{ .short = 'f', .value_name = "spec" },
+    .args = .{ .value_name = "min[:max]" },
+    .summary = .{ .short = 's', .value_name = "text" },
+    .dir = .{ .short = 'C', .value_name = "path" },
+} });
 
 pub const command = cli.command(.{
     .name = "add",
@@ -46,7 +45,7 @@ pub const command = cli.command(.{
     \\enum(a|b|c), list(T). A scalar without a default is optional (?T) unless marked
     \\required.
     ,
-    .flags = AddFlags,
+    .flags = add_flags,
     .args = .{ .min = 1, .max = null, .usage = "<command>..." },
     .examples =
     \\termancy cli add greet --flag name:string=world --summary "Greet someone"
@@ -246,7 +245,9 @@ test "init, then add twice" {
     try testing.expectEqualStrings("", init.err);
     try testing.expectEqual(0, init.status);
 
-    const leaf = try termancy(&.{ "cli", "add", "-C", project_dir, "config", "get", "-f", "raw:bool" });
+    const leaf = try termancy(
+        &.{ "cli", "add", "-C", project_dir, "config", "get", "-f", "raw:bool" },
+    );
     defer leaf.deinit();
     try testing.expectEqualStrings("", leaf.err);
     try testing.expectEqualStrings(
@@ -255,7 +256,9 @@ test "init, then add twice" {
             "updated " ++ project_dir ++ "/src/main.zig\n",
         leaf.out,
     );
-    const sibling = try termancy(&.{ "cli", "add", "-C", project_dir, "config", "set", "--args", "2" });
+    const sibling = try termancy(
+        &.{ "cli", "add", "-C", project_dir, "config", "set", "--args", "2" },
+    );
     defer sibling.deinit();
     try testing.expectEqual(0, sibling.status);
 

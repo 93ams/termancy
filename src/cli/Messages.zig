@@ -55,6 +55,23 @@ at_most: []const u8 = "invalid value \"{0}\" for flag {1}: must be at most {2}",
 too_short: []const u8 = "invalid value \"{0}\" for flag {1}: must be at least {2} characters",
 /// {0} the value, {1} the flag, {2} the bound.
 too_long: []const u8 = "invalid value \"{0}\" for flag {1}: must be at most {2} characters",
+/// {0} the value, {1} the flag, {2} the pattern (`*.pem`).
+must_match: []const u8 = "invalid value \"{0}\" for flag {1}: must match {2}",
+/// {0} the value, {1} the flag, {2} what a check of the app's own says is wrong.
+invalid_value: []const u8 = "invalid value \"{0}\" for flag {1}: {2}",
+/// A check on a whole value, found before the command runs. {0} the flag or argument,
+/// {1} the bound.
+value_at_least: []const u8 = "{0}: must be at least {1}",
+/// {0} the flag or argument, {1} the bound.
+value_at_most: []const u8 = "{0}: must be at most {1}",
+/// {0} the flag or argument, {1} the length.
+value_too_short: []const u8 = "{0}: must be at least {1} long",
+/// {0} the flag or argument, {1} the length.
+value_too_long: []const u8 = "{0}: must be at most {1} long",
+/// {0} the flag or argument, {1} the choices, comma-separated.
+value_one_of: []const u8 = "{0}: must be one of {1}",
+/// {0} the flag or argument, {1} the pattern.
+value_must_match: []const u8 = "{0}: must match {1}",
 /// {0} a flag's environment variable, for `{1}` in the messages above.
 from_env: []const u8 = "(from ${0})",
 /// {0} where `App.defaults` reads, such as a file name, for `{1}` in the messages above.
@@ -63,6 +80,9 @@ from_config: []const u8 = "(from {0})",
 requires_flag: []const u8 = "flag --{0} requires --{1}",
 /// {0} the flag name, {1} the command path.
 not_valid_for: []const u8 = "flag --{0} is not valid for \"{1}\"",
+/// {0} a flag of a choice's variant, {1} the choice's flag, {2} the variant, {3} the
+/// variant given.
+wrong_variant: []const u8 = "flag --{0} is for --{1} {2}, but --{1} is {3}",
 /// {0} the flag name.
 required_flag: []const u8 = "required flag --{0} is not set",
 /// {0} the flag name, {1} its environment variable.
@@ -155,6 +175,8 @@ more_information: []const u8 = "Use \"{0} <command> --help\" for more informatio
 default_value: []const u8 = "(default {0})",
 /// {0} the variable.
 env_variable: []const u8 = "[env: {0}]",
+/// {0} where else a flag's value can be set, such as `$PORT, port in app.toml`.
+also_set: []const u8 = "(also {0})",
 required: []const u8 = "(required)",
 /// {0} and {1} the bounds.
 range: []const u8 = "({0} to {1})",

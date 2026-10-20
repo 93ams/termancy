@@ -18,26 +18,31 @@ const cases = [_]Case{
         .message = "cli.command(\"app\"): unknown spec field 'sumary'; did you mean 'summary'?",
     },
     .{ .name = "missing_name", .message = "cli.command: a command needs a .name" },
+    .{ .name = "unknown_flag_option_field", .message = "no field named 'prot' in struct" },
+    .{ .name = "spec_unknown_field", .message = "no field named 'zzz' in struct" },
     .{
-        .name = "meta_unknown_field",
-        .message = "cli.command(\"app\"): meta_unknown_field.Flags.meta names no field 'prot'" ++
-            "; did you mean 'port'? (fields: port, host)",
+        .name = "count_not_integer",
+        .message = "cli: --verbose: .count needs an integer field, found bool",
+    },
+    .{ .name = "split_not_list", .message = "cli: --tag: .split needs a list field" },
+    .{
+        .name = "list_of_structs_flag",
+        .message = "cli: mirrors: a list of structs cannot be flags; set .internal = true",
     },
     .{
-        .name = "meta_unknown_field_far",
-        .message = "cli: meta_unknown_field_far.Flags.meta names no field 'zzz' (fields: port)",
+        .name = "each_not_list",
+        .message = "each_not_list.Flags.port: .each is for lists; use .checks",
     },
-    .{ .name = "count_not_integer", .message = "cli: .count needs an integer field: verbose" },
+    .{
+        .name = "check_wrong_type",
+        .message = ".from on a u16 needs a function taking u16, not []const u8",
+    },
     .{ .name = "duplicate_long", .message = "cli: duplicate flag --port" },
     .{ .name = "duplicate_short", .message = "cli: duplicate short flag -p" },
     .{ .name = "help_reserved", .message = "cli: --help is reserved" },
     .{ .name = "duplicate_subcommand", .message = "cli: duplicate subcommand get" },
     .{ .name = "duplicate_alias", .message = "cli: duplicate subcommand rm" },
-    .{
-        .name = "constraint_unknown_flag",
-        .message = "cli.command(\"app\"): constraint names unknown flag 'yml'" ++
-            "; did you mean 'yaml'?",
-    },
+    .{ .name = "constraint_unknown_flag", .message = "has no member named 'yml'" },
     .{
         .name = "handler_first_param",
         .message = "cli.command(\"app\"): a handler's first parameter must be *cli.Context",
@@ -61,19 +66,20 @@ const cases = [_]Case{
         .message = "cli.command(\"app\"): unknown field 'maxx' in Command.Args" ++
             "; did you mean 'max'?",
     },
-    .{ .name = "one_of_not_string", .message = "cli: .one_of needs a string field: level" },
-    .{ .name = "bounds_not_numeric", .message = "cli: .min and .max need a numeric field: name" },
     .{
-        .name = "validate_signature",
-        .message = ".validate must be fn (validate_signature.Flags, *cli.Context) !void",
+        .name = "one_of_not_string",
+        .message = ".oneOf needs a string, found u8; an enum gives choices by itself",
     },
+    .{ .name = "bounds_not_numeric", .message = "MinMaxNeedANumberOrOrder([]const u8)" },
     .{
         .name = "args_required_after_optional",
-        .message = "cli.command(\"app\"): required positional second follows an optional one",
+        .message = "cli.args(args_required_after_optional.Args): " ++
+            "required positional second follows an optional one",
     },
     .{
         .name = "args_list_not_last",
-        .message = "cli.command(\"app\"): only the last positional may be a list: files",
+        .message = "cli.args(args_list_not_last.Args): " ++
+            "only the last positional may be a list: files",
     },
     .{
         .name = "completer_signature",
@@ -96,6 +102,7 @@ const cases = [_]Case{
 pub fn addCases(b: *std.Build, step: *std.Build.Step) void {
     const cli_root = b.path("src/cli/root.zig");
     const term_root = b.path("src/term/root.zig");
+    const field_root = b.path("src/field/root.zig");
     const tui_root = b.path("src/tui/root.zig");
     const local_cache: std.Build.LazyPath = .{ .relative = .{ .base = .local_cache } };
     const global_cache: std.Build.LazyPath = .{ .relative = .{ .base = .global_cache } };
@@ -108,15 +115,16 @@ pub fn addCases(b: *std.Build, step: *std.Build.Step) void {
         run.addDirectoryArg(local_cache);
         run.addArg("--global-cache-dir");
         run.addDirectoryArg(global_cache);
-        run.addArgs(&.{ "--dep", "cli", "--dep", "tui" });
+        run.addArgs(&.{ "--dep", "cli", "--dep", "tui", "--dep", "field" });
         run.addPrefixedFileArg("-Mroot=", b.path(b.fmt("test/compile_errors/{s}.zig", .{
             case.name,
         })));
-        run.addArgs(&.{ "--dep", "term" });
+        run.addArgs(&.{ "--dep", "term", "--dep", "field" });
         run.addPrefixedFileArg("-Mcli=", cli_root);
         run.addArgs(&.{ "--dep", "term" });
         run.addPrefixedFileArg("-Mtui=", tui_root);
         run.addPrefixedFileArg("-Mterm=", term_root);
+        run.addPrefixedFileArg("-Mfield=", field_root);
         // The library's other files are inputs too, but are not named on the command line;
         // rerunning every time is cheaper than keeping a list of them here.
         run.has_side_effects = true;

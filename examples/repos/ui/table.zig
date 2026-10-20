@@ -35,279 +35,279 @@ pub const Status = enum { active, submitted, canceled };
 /// The most columns a table lays out.
 pub const max_columns = 64;
 
-pub const Table = struct {
-    columns: []const Column,
-    rows: []const []const []const u8,
-    /// The highlighted row.
-    cursor: usize = 0,
-    /// The first row shown.
-    offset: usize = 0,
-    /// The most data rows shown; null shows them all.
-    height: ?usize = null,
-    /// Whether a row is highlighted and can be chosen.
-    selectable: bool = true,
-    border: ?Border = .rounded,
-    /// The screen row this is drawn from, for mouse clicks.
-    top: usize = 0,
-    status: Status = .active,
-    styles: Styles = .{},
+const Table = @This();
 
-    pub const Column = struct {
-        title: []const u8,
-        /// Columns of text; null fits the widest cell.
-        width: ?usize = null,
-        @"align": tui.layout.Position = .start,
-    };
+columns: []const Column,
+rows: []const []const []const u8,
+/// The highlighted row.
+cursor: usize = 0,
+/// The first row shown.
+offset: usize = 0,
+/// The most data rows shown; null shows them all.
+height: ?usize = null,
+/// Whether a row is highlighted and can be chosen.
+selectable: bool = true,
+border: ?Border = .rounded,
+/// The screen row this is drawn from, for mouse clicks.
+top: usize = 0,
+status: Status = .active,
+styles: Styles = .{},
 
-    pub const Styles = struct {
-        header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
-        cell: tui.Style = .{},
-        /// The highlighted row: bold as well as colored, so it shows under `NO_COLOR`.
-        selected: tui.Style = .{ .fg = .{ .indexed = 212 }, .bold = true },
-        border: tui.Style = .{ .fg = .{ .indexed = 238 } },
-    };
+pub const Column = struct {
+    title: []const u8,
+    /// Columns of text; null fits the widest cell.
+    width: ?usize = null,
+    @"align": tui.layout.Position = .start,
+};
 
-    /// The glyphs of a table's lines. Each must be one column wide.
-    pub const Border = struct {
-        horizontal: []const u8,
-        vertical: []const u8,
-        top_left: []const u8,
-        top_right: []const u8,
-        bottom_left: []const u8,
-        bottom_right: []const u8,
-        /// Where a column line meets the top, bottom, left, and right edges.
-        top: []const u8,
-        bottom: []const u8,
-        left: []const u8,
-        right: []const u8,
-        /// Where a column line crosses the line under the header.
-        cross: []const u8,
+pub const Styles = struct {
+    header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
+    cell: tui.Style = .{},
+    /// The highlighted row: bold as well as colored, so it shows under `NO_COLOR`.
+    selected: tui.Style = .{ .fg = .{ .indexed = 212 }, .bold = true },
+    border: tui.Style = .{ .fg = .{ .indexed = 238 } },
+};
 
-        pub const normal: Border = lines("─", "│", "┌┐└┘", "┬┴├┤┼");
-        pub const rounded: Border = lines("─", "│", "╭╮╰╯", "┬┴├┤┼");
-        pub const thick: Border = lines("━", "┃", "┏┓┗┛", "┳┻┣┫╋");
-        pub const double: Border = lines("═", "║", "╔╗╚╝", "╦╩╠╣╬");
-        pub const ascii: Border = lines("-", "|", "++++", "+++++");
-        pub const hidden: Border = lines(" ", " ", "    ", "     ");
+/// The glyphs of a table's lines. Each must be one column wide.
+pub const Border = struct {
+    horizontal: []const u8,
+    vertical: []const u8,
+    top_left: []const u8,
+    top_right: []const u8,
+    bottom_left: []const u8,
+    bottom_right: []const u8,
+    /// Where a column line meets the top, bottom, left, and right edges.
+    top: []const u8,
+    bottom: []const u8,
+    left: []const u8,
+    right: []const u8,
+    /// Where a column line crosses the line under the header.
+    cross: []const u8,
 
-        /// A border from its edges, four corners, and five junctions (as UTF-8 strings of
-        /// that many characters, in field order).
-        fn lines(
-            comptime horizontal: []const u8,
-            comptime vertical: []const u8,
-            comptime corners: []const u8,
-            comptime junctions: []const u8,
-        ) Border {
-            const c = split(4, corners);
-            const j = split(5, junctions);
-            return .{
-                .horizontal = horizontal,
-                .vertical = vertical,
-                .top_left = c[0],
-                .top_right = c[1],
-                .bottom_left = c[2],
-                .bottom_right = c[3],
-                .top = j[0],
-                .bottom = j[1],
-                .left = j[2],
-                .right = j[3],
-                .cross = j[4],
-            };
-        }
+    pub const normal: Border = lines("─", "│", "┌┐└┘", "┬┴├┤┼");
+    pub const rounded: Border = lines("─", "│", "╭╮╰╯", "┬┴├┤┼");
+    pub const thick: Border = lines("━", "┃", "┏┓┗┛", "┳┻┣┫╋");
+    pub const double: Border = lines("═", "║", "╔╗╚╝", "╦╩╠╣╬");
+    pub const ascii: Border = lines("-", "|", "++++", "+++++");
+    pub const hidden: Border = lines(" ", " ", "    ", "     ");
 
-        fn split(comptime n: usize, comptime text: []const u8) [n][]const u8 {
-            var out: [n][]const u8 = undefined;
-            const utf8 = std.unicode.Utf8View.initComptime(text);
-            var it = utf8.iterator();
-            for (&out) |*glyph| glyph.* = it.nextCodepointSlice().?;
-            return out;
-        }
-    };
-
-    /// As a program of its own: the keys `handleKey` takes, and enter chooses the row and
-    /// esc cancels, both quitting. Inside a larger model, forward keys to `handleKey`
-    /// instead and decide there what enter and esc do.
-    pub fn update(table: *Table, msg: tui.Msg) tui.Cmd {
-        const key = switch (msg) {
-            .key => |key| key,
-            .mouse => |mouse| return table.handleMouse(mouse),
-            else => return .none,
+    /// A border from its edges, four corners, and five junctions (as UTF-8 strings of
+    /// that many characters, in field order).
+    fn lines(
+        comptime horizontal: []const u8,
+        comptime vertical: []const u8,
+        comptime corners: []const u8,
+        comptime junctions: []const u8,
+    ) Border {
+        const c = split(4, corners);
+        const j = split(5, junctions);
+        return .{
+            .horizontal = horizontal,
+            .vertical = vertical,
+            .top_left = c[0],
+            .top_right = c[1],
+            .bottom_left = c[2],
+            .bottom_right = c[3],
+            .top = j[0],
+            .bottom = j[1],
+            .left = j[2],
+            .right = j[3],
+            .cross = j[4],
         };
-        if (key.matches("esc")) {
-            table.status = .canceled;
-            return .quit;
-        }
-        if (table.selectable and key.matches("enter") and table.rows.len > 0) {
-            table.status = .submitted;
-            return .quit;
-        }
-        _ = table.handleKey(key);
-        return .none;
     }
 
-    /// Moves the highlight on up/down (k/j), pgup/pgdown, and home/end (g/G); whether
-    /// `key` was one of them. Never quits. A table that is not selectable takes none.
-    pub fn handleKey(table: *Table, key: tui.input.Key) bool {
-        if (!table.selectable) return false;
-        const page: isize = @intCast(@max(table.height orelse table.rows.len, 1));
-        if (key.matches("up") or key.matches("k")) {
-            table.moveBy(-1);
-        } else if (key.matches("down") or key.matches("j")) {
-            table.moveBy(1);
-        } else if (key.matches("pgup")) {
-            table.moveBy(-page);
-        } else if (key.matches("pgdown")) {
-            table.moveBy(page);
-        } else if (key.matches("home") or key.matches("g")) {
-            table.moveTo(0);
-        } else if (key.matches("end") or key.matches("G")) {
-            table.moveTo(table.rows.len -| 1);
-        } else return false;
-        return true;
-    }
-
-    /// Moves the highlight by `delta` rows, stopping at either end.
-    pub fn moveBy(table: *Table, delta: isize) void {
-        const target = @as(isize, @intCast(table.cursor)) + delta;
-        table.moveTo(@intCast(@max(0, target)));
-    }
-
-    /// Highlights row `index` (clamped) and scrolls it into view.
-    pub fn moveTo(table: *Table, index: usize) void {
-        table.cursor = @min(index, table.rows.len -| 1);
-        const height = @max(table.height orelse return, 1);
-        if (table.cursor < table.offset) table.offset = table.cursor;
-        if (table.cursor >= table.offset + height) table.offset = table.cursor + 1 - height;
-    }
-
-    /// The highlighted (or chosen) row; null when there are none.
-    pub fn selected(table: *const Table) ?[]const []const u8 {
-        if (table.rows.len == 0) return null;
-        return table.rows[table.cursor];
-    }
-
-    /// The width of each column, at most `max_columns` of them.
-    pub fn widths(table: *const Table, buffer: *[max_columns]usize) []usize {
-        const count = @min(table.columns.len, max_columns);
-        for (table.columns[0..count], buffer[0..count], 0..) |column, *width, i| {
-            if (column.width) |fixed| {
-                width.* = fixed;
-                continue;
-            }
-            width.* = tui.width.of(column.title);
-            for (table.rows) |row| {
-                if (i < row.len) width.* = @max(width.*, tui.width.of(row[i]));
-            }
-        }
-        return buffer[0..count];
-    }
-
-    /// The wheel moves the cursor; a left click on a row chooses it. The table starts on
-    /// screen row `top`.
-    fn handleMouse(table: *Table, mouse: tui.input.Mouse) tui.Cmd {
-        if (!table.selectable) return .none;
-        switch (mouse.button) {
-            .wheel_up => table.moveBy(-1),
-            .wheel_down => table.moveBy(1),
-            .left => if (mouse.action == .press) {
-                // Above the rows: a top rule, the header, and a rule under it with a border.
-                const above: usize = if (table.border != null) 3 else 1;
-                if (mouse.y < table.top + above) return .none;
-                const index = table.offset + (mouse.y - table.top - above);
-                const end = if (table.height) |height| table.offset + height else table.rows.len;
-                if (index >= @min(end, table.rows.len)) return .none;
-                table.moveTo(index);
-                table.status = .submitted;
-                return .quit;
-            },
-            else => {},
-        }
-        return .none;
-    }
-
-    pub fn view(table: *const Table, w: *Writer) Writer.Error!void {
-        var buffer: [max_columns]usize = undefined;
-        const columns = table.widths(&buffer);
-        if (columns.len == 0) return;
-        const end = if (table.height) |height|
-            @min(table.offset + height, table.rows.len)
-        else
-            table.rows.len;
-        const start = @min(table.offset, end);
-        if (table.border != null) {
-            try table.rule(w, columns, .top);
-            try w.writeByte('\n');
-        }
-        try table.writeHeader(w, columns);
-        if (table.border != null) {
-            try w.writeByte('\n');
-            try table.rule(w, columns, .middle);
-        }
-        for (table.rows[start..end], start..) |row, i| {
-            try w.writeByte('\n');
-            const highlighted = table.selectable and i == table.cursor;
-            const style = if (highlighted) table.styles.selected else table.styles.cell;
-            try table.writeRow(w, columns, row, style);
-        }
-        if (table.border != null) {
-            try w.writeByte('\n');
-            try table.rule(w, columns, .bottom);
-        }
-    }
-
-    fn writeHeader(table: *const Table, w: *Writer, columns: []const usize) Writer.Error!void {
-        var titles: [max_columns][]const u8 = undefined;
-        for (titles[0..columns.len], table.columns[0..columns.len]) |*title, column| {
-            title.* = column.title;
-        }
-        try table.writeRow(w, columns, titles[0..columns.len], table.styles.header);
-    }
-
-    fn writeRow(
-        table: *const Table,
-        w: *Writer,
-        columns: []const usize,
-        cells: []const []const u8,
-        style: tui.Style,
-    ) Writer.Error!void {
-        // Inside a border, cells have a space on each side; without one, two spaces
-        // separate them.
-        const pad: []const u8 = if (table.border != null) " " else "";
-        for (columns, 0..) |width, i| {
-            if (table.border) |border| {
-                try table.styles.border.paint(w, border.vertical);
-            } else if (i > 0) {
-                try w.writeAll("  ");
-            }
-            const cell = if (i < cells.len) cells[i] else "";
-            try style.writeSgr(w);
-            try w.writeAll(pad);
-            try writeCell(w, cell, width, table.columns[i].@"align");
-            try w.writeAll(pad);
-            if (style.hasSgr()) try w.writeAll(tui.ansi.reset);
-        }
-        if (table.border) |border| try table.styles.border.paint(w, border.vertical);
-    }
-
-    const Edge = enum { top, middle, bottom };
-
-    fn rule(table: *const Table, w: *Writer, columns: []const usize, edge: Edge) Writer.Error!void {
-        const b = table.border.?;
-        const glyphs: [3][]const u8 = switch (edge) {
-            .top => .{ b.top_left, b.top, b.top_right },
-            .middle => .{ b.left, b.cross, b.right },
-            .bottom => .{ b.bottom_left, b.bottom, b.bottom_right },
-        };
-        try table.styles.border.writeSgr(w);
-        try w.writeAll(glyphs[0]);
-        for (columns, 0..) |width, i| {
-            if (i > 0) try w.writeAll(glyphs[1]);
-            try w.splatBytesAll(b.horizontal, width + 2);
-        }
-        try w.writeAll(glyphs[2]);
-        if (table.styles.border.hasSgr()) try w.writeAll(tui.ansi.reset);
+    fn split(comptime n: usize, comptime text: []const u8) [n][]const u8 {
+        var out: [n][]const u8 = undefined;
+        const utf8 = std.unicode.Utf8View.initComptime(text);
+        var it = utf8.iterator();
+        for (&out) |*glyph| glyph.* = it.nextCodepointSlice().?;
+        return out;
     }
 };
+
+/// As a program of its own: the keys `handleKey` takes, and enter chooses the row and
+/// esc cancels, both quitting. Inside a larger model, forward keys to `handleKey`
+/// instead and decide there what enter and esc do.
+pub fn update(table: *Table, msg: tui.Msg) tui.Cmd {
+    const key = switch (msg) {
+        .key => |key| key,
+        .mouse => |mouse| return table.handleMouse(mouse),
+        else => return .none,
+    };
+    if (key.matches("esc")) {
+        table.status = .canceled;
+        return .quit;
+    }
+    if (table.selectable and key.matches("enter") and table.rows.len > 0) {
+        table.status = .submitted;
+        return .quit;
+    }
+    _ = table.handleKey(key);
+    return .none;
+}
+
+/// Moves the highlight on up/down (k/j), pgup/pgdown, and home/end (g/G); whether
+/// `key` was one of them. Never quits. A table that is not selectable takes none.
+pub fn handleKey(table: *Table, key: tui.input.Key) bool {
+    if (!table.selectable) return false;
+    const page: isize = @intCast(@max(table.height orelse table.rows.len, 1));
+    if (key.matches("up") or key.matches("k")) {
+        table.moveBy(-1);
+    } else if (key.matches("down") or key.matches("j")) {
+        table.moveBy(1);
+    } else if (key.matches("pgup")) {
+        table.moveBy(-page);
+    } else if (key.matches("pgdown")) {
+        table.moveBy(page);
+    } else if (key.matches("home") or key.matches("g")) {
+        table.moveTo(0);
+    } else if (key.matches("end") or key.matches("G")) {
+        table.moveTo(table.rows.len -| 1);
+    } else return false;
+    return true;
+}
+
+/// Moves the highlight by `delta` rows, stopping at either end.
+pub fn moveBy(table: *Table, delta: isize) void {
+    const target = @as(isize, @intCast(table.cursor)) + delta;
+    table.moveTo(@intCast(@max(0, target)));
+}
+
+/// Highlights row `index` (clamped) and scrolls it into view.
+pub fn moveTo(table: *Table, index: usize) void {
+    table.cursor = @min(index, table.rows.len -| 1);
+    const height = @max(table.height orelse return, 1);
+    if (table.cursor < table.offset) table.offset = table.cursor;
+    if (table.cursor >= table.offset + height) table.offset = table.cursor + 1 - height;
+}
+
+/// The highlighted (or chosen) row; null when there are none.
+pub fn selected(table: *const Table) ?[]const []const u8 {
+    if (table.rows.len == 0) return null;
+    return table.rows[table.cursor];
+}
+
+/// The width of each column, at most `max_columns` of them.
+pub fn widths(table: *const Table, buffer: *[max_columns]usize) []usize {
+    const count = @min(table.columns.len, max_columns);
+    for (table.columns[0..count], buffer[0..count], 0..) |column, *width, i| {
+        if (column.width) |fixed| {
+            width.* = fixed;
+            continue;
+        }
+        width.* = tui.width.of(column.title);
+        for (table.rows) |row| {
+            if (i < row.len) width.* = @max(width.*, tui.width.of(row[i]));
+        }
+    }
+    return buffer[0..count];
+}
+
+/// The wheel moves the cursor; a left click on a row chooses it. The table starts on
+/// screen row `top`.
+fn handleMouse(table: *Table, mouse: tui.input.Mouse) tui.Cmd {
+    if (!table.selectable) return .none;
+    switch (mouse.button) {
+        .wheel_up => table.moveBy(-1),
+        .wheel_down => table.moveBy(1),
+        .left => if (mouse.action == .press) {
+            // Above the rows: a top rule, the header, and a rule under it with a border.
+            const above: usize = if (table.border != null) 3 else 1;
+            if (mouse.y < table.top + above) return .none;
+            const index = table.offset + (mouse.y - table.top - above);
+            const end = if (table.height) |height| table.offset + height else table.rows.len;
+            if (index >= @min(end, table.rows.len)) return .none;
+            table.moveTo(index);
+            table.status = .submitted;
+            return .quit;
+        },
+        else => {},
+    }
+    return .none;
+}
+
+pub fn view(table: *const Table, w: *Writer) Writer.Error!void {
+    var buffer: [max_columns]usize = undefined;
+    const columns = table.widths(&buffer);
+    if (columns.len == 0) return;
+    const end = if (table.height) |height|
+        @min(table.offset + height, table.rows.len)
+    else
+        table.rows.len;
+    const start = @min(table.offset, end);
+    if (table.border != null) {
+        try table.rule(w, columns, .top);
+        try w.writeByte('\n');
+    }
+    try table.writeHeader(w, columns);
+    if (table.border != null) {
+        try w.writeByte('\n');
+        try table.rule(w, columns, .middle);
+    }
+    for (table.rows[start..end], start..) |row, i| {
+        try w.writeByte('\n');
+        const highlighted = table.selectable and i == table.cursor;
+        const style = if (highlighted) table.styles.selected else table.styles.cell;
+        try table.writeRow(w, columns, row, style);
+    }
+    if (table.border != null) {
+        try w.writeByte('\n');
+        try table.rule(w, columns, .bottom);
+    }
+}
+
+fn writeHeader(table: *const Table, w: *Writer, columns: []const usize) Writer.Error!void {
+    var titles: [max_columns][]const u8 = undefined;
+    for (titles[0..columns.len], table.columns[0..columns.len]) |*title, column| {
+        title.* = column.title;
+    }
+    try table.writeRow(w, columns, titles[0..columns.len], table.styles.header);
+}
+
+fn writeRow(
+    table: *const Table,
+    w: *Writer,
+    columns: []const usize,
+    cells: []const []const u8,
+    style: tui.Style,
+) Writer.Error!void {
+    // Inside a border, cells have a space on each side; without one, two spaces
+    // separate them.
+    const pad: []const u8 = if (table.border != null) " " else "";
+    for (columns, 0..) |width, i| {
+        if (table.border) |border| {
+            try table.styles.border.paint(w, border.vertical);
+        } else if (i > 0) {
+            try w.writeAll("  ");
+        }
+        const cell = if (i < cells.len) cells[i] else "";
+        try style.writeSgr(w);
+        try w.writeAll(pad);
+        try writeCell(w, cell, width, table.columns[i].@"align");
+        try w.writeAll(pad);
+        if (style.hasSgr()) try w.writeAll(tui.ansi.reset);
+    }
+    if (table.border) |border| try table.styles.border.paint(w, border.vertical);
+}
+
+const Edge = enum { top, middle, bottom };
+
+fn rule(table: *const Table, w: *Writer, columns: []const usize, edge: Edge) Writer.Error!void {
+    const b = table.border.?;
+    const glyphs: [3][]const u8 = switch (edge) {
+        .top => .{ b.top_left, b.top, b.top_right },
+        .middle => .{ b.left, b.cross, b.right },
+        .bottom => .{ b.bottom_left, b.bottom, b.bottom_right },
+    };
+    try table.styles.border.writeSgr(w);
+    try w.writeAll(glyphs[0]);
+    for (columns, 0..) |width, i| {
+        if (i > 0) try w.writeAll(glyphs[1]);
+        try w.splatBytesAll(b.horizontal, width + 2);
+    }
+    try w.writeAll(glyphs[2]);
+    if (table.styles.border.hasSgr()) try w.writeAll(tui.ansi.reset);
+}
 
 /// Writes `cell` in exactly `width` columns: aligned when it fits, cut with "…" when not.
 pub fn writeCell(

@@ -1,18 +1,20 @@
 # termancy
 
-Five Zig libraries for command-line and terminal programs, and a program built from them.
+Six Zig libraries for command-line and terminal programs, and a program built from them.
 Zig **0.17.0**, standard library only.
 
 | | | |
 |---|---|---|
 | [**`cli`**](docs/cli.md) | command trees, flags decoded into structs, help, completion, generated docs | like [cobra] |
 | [**`cfg`**](docs/cfg.md) | layered configuration in TOML, YAML, JSON, ZON, dotenv, INI, decoded into structs | like [viper] |
+| [**`field`**](docs/field.md) | what settings mean, shared by `cli` and `cfg`: help, secrets, checks, by type | |
 | [**`term`**](docs/term.md) | styles, layout, Unicode widths, a terminal emulator, Markdown, images in the terminal | like lipgloss, x/vt, glamour |
 | [**`tui`**](docs/tui.md) | Elm-architecture UIs, components you copy and own, headless tests, serving over SSH | like Bubble Tea, Bubbles, huh |
 | [**`sys`**](docs/sys.md) | directories, processes, secure memory, logging, self-update, an SSH server | like wish, log, melt |
 | [**`termancy`**](docs/termancy.md) | the program: config tooling, generators, gum-style widgets, glow, vhs, freeze | |
 
-`cli` and `tui` build on `term`; otherwise no library imports another.
+`cli` and `tui` build on `term`, and `cli` and `cfg` on `field`; otherwise no library imports
+another, so `cli` and `cfg` work alone or together.
 
 [cobra]: https://github.com/spf13/cobra
 [viper]: https://github.com/spf13/viper
@@ -52,6 +54,7 @@ then import the modules you use in `build.zig`:
 const termancy = b.dependency("termancy", .{ .target = target, .optimize = optimize });
 exe.root_module.addImport("cli", termancy.module("cli"));
 exe.root_module.addImport("cfg", termancy.module("cfg"));
+exe.root_module.addImport("field", termancy.module("field"));
 exe.root_module.addImport("tui", termancy.module("tui"));
 exe.root_module.addImport("sys", termancy.module("sys"));
 ```
@@ -64,6 +67,7 @@ Or let `termancy` set the project up ([below](#start-a-project)).
 const std = @import("std");
 const cli = @import("cli");
 const cfg = @import("cfg");
+const field = @import("field");
 
 const Settings = struct {
     host: []const u8 = "localhost",
@@ -73,30 +77,56 @@ const Settings = struct {
 
 const ServeFlags = struct {
     config: ?[]const u8 = null,
-    port: ?u16 = null,
-    pub const meta = .{
-        .config = .{ .short = 'c', .help = "Config file" },
-        .port = .{ .short = 'p', .help = "Port to listen on" },
-    };
+    settings: Settings = .{}, // every setting is a flag too: --host, --port, --timeout
 };
 
-fn serve(ctx: *cli.Context, flags: ServeFlags) !void {
-    var config: cfg.Config = .init(ctx.gpa);
-    defer config.deinit();
-    try config.setDefaults(Settings{});
+// What the values mean, for the file, the environment, and the flags alike.
+const Specs = field.Set(.{
+    field.Spec(Settings){ .fields = .{
+        .port = .{ .help = "Port to listen on", .checks = &.{.min(1)} },
+    } },
+    field.Spec(ServeFlags){ .fields = .{ .config = .{ .help = "Config file" } } },
+});
+
+const settings = cfg.settings(Settings, Specs, .{});
+
+// How they are spelled on the command line.
+const serve_flags = cli.flags(ServeFlags, Specs, .{ .fields = .{
+    .config = .{ .short = 'c' },
+    .settings = .{ .name = "", .fields = .{ .port = .{ .short = 'p' } } },
+} });
+
+// Defaults, then the file, then APP_* variables, then the flags.
+fn load(ctx: *cli.Context) !Settings {
+    const flags = try ctx.flags(ServeFlags);
+    var config: cfg.Config = .init(ctx.arena);
     if (flags.config) |file| try config.loadFile(ctx.io, .cwd(), file, null, null);
     config.useEnv(ctx.environ);
     try config.automaticEnv("APP"); // APP_PORT=9000
     try config.bindFlags(try ctx.changedFlags(), .{}); // --port 9001
-    const settings = try config.decode(Settings, .{}, null);
-    try ctx.out.print("listening on {s}:{d}\n", .{ settings.host, settings.port });
+    var diag: cfg.Diagnostic = .{};
+    return config.decode(settings, .{}, &diag) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => ctx.configError("{f}", .{diag}),
+    };
+}
+
+fn serve(ctx: *cli.Context, flags: ServeFlags) !void {
+    const s = flags.settings;
+    try ctx.out.print("listening on {s}:{d}\n", .{ s.host, s.port });
 }
 
 const root = cli.command(.{
     .name = "app",
     .summary = "An example",
     .subcommands = .{
-        cli.command(.{ .name = "serve", .summary = "Serve", .flags = ServeFlags, .run = serve }),
+        cli.command(.{
+            .name = "serve",
+            .summary = "Serve",
+            .flags = serve_flags,
+            .settings = .{ .field = .settings, .load = load },
+            .run = serve,
+        }),
     },
 });
 
@@ -136,7 +166,7 @@ The generated project builds and its tests pass with no edits. For a walkthrough
 | | |
 |---|---|
 | [Your first app in 10 minutes](docs/guide.md) | a guided tour: config, a flow, live progress, a TUI picker |
-| [`cli`](docs/cli.md), [`cfg`](docs/cfg.md), [`term`](docs/term.md), [`tui`](docs/tui.md), [`sys`](docs/sys.md) | each library in depth |
+| [`cli`](docs/cli.md), [`cfg`](docs/cfg.md), [`field`](docs/field.md), [`term`](docs/term.md), [`tui`](docs/tui.md), [`sys`](docs/sys.md) | each library in depth |
 | [The `termancy` program](docs/termancy.md) | every command |
 | [Examples](examples/README.md) | small runnable apps, each showing a set of features |
 | [Coming from Charm](docs/coming-from-charm.md) | where each Charm library and tool's work is done here |

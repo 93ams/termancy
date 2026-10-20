@@ -6,8 +6,10 @@
 //! const Deploy = struct {                  // the flow's state; usually the flags struct too
 //!     env: enum { staging, production } = .staging,
 //!     migrate: bool = false,
-//!     pub const meta = .{ .migrate = .{ .help = "Run the migrations" } };
 //! };
+//! const deploy_flags = cli.flags(Deploy, field.Set(.{field.Spec(Deploy){ .fields = .{
+//!     .migrate = .{ .help = "Run the migrations" },
+//! } }}), .{});
 //! const Step = enum { where, build, ask_migrate, migrate, release };
 //!
 //! const deploy: cli.Flow(Deploy, Step) = .{ .start = .where, .steps = .{
@@ -47,8 +49,8 @@
 //!   `null`, to end). With neither, the flow ends.
 //!
 //! Fields of the state that are not settings (what the steps found, say) are marked
-//! `.internal = true` in its `meta`, so a state that is also the command's flags struct
-//! does not offer them as flags.
+//! `.internal = true` in its flag options (`cli.flags`), so a state that is also the
+//! command's flags struct does not offer them as flags.
 //!
 //! The graph is checked when it is compiled: steps are an enum, so every target exists,
 //! and a question names a field the state has, of a type that can be asked. A loop is
@@ -62,6 +64,8 @@
 //! `writeMermaid` draws the graph for documentation.
 
 const std = @import("std");
+const sets = @import("sets.zig");
+const field_ = @import("field");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Context = @import("Context.zig");
@@ -826,12 +830,12 @@ const Deploy = struct {
     version: []const u8 = "",
     attempts: u8 = 0,
     fail_at: ?[]const u8 = null,
-    pub const meta = .{
-        .env = .{ .help = "Where to deploy" },
-        .migrate = .{ .help = "Run the migrations" },
-        .fail_at = .{ .help = "Fail this step (for the tests)" },
-    };
 };
+const deploy_flags = sets.flags(Deploy, field_.Set(.{field_.Spec(Deploy){ .fields = .{
+    .env = .{ .help = "Where to deploy" },
+    .migrate = .{ .help = "Run the migrations" },
+    .fail_at = .{ .help = "Fail this step (for the tests)" },
+} }}), .{});
 
 const DeployStep = enum { version, where, build, ask_migrate, migrate, release, check, retry };
 
@@ -911,7 +915,7 @@ const deploy_root = spec_zig.command(.{
     .name = "app",
     .subcommands = &.{spec_zig.command(.{
         .name = "deploy",
-        .flags = Deploy,
+        .flags = deploy_flags,
         .dry_run = true,
         .output = true,
         .run = runDeploy,
@@ -1318,8 +1322,10 @@ test "step reports and warnings show on a buffered standard error as they happen
 const Hosts = struct {
     hosts: []const []const u8 = &.{"a"},
     retries: u8 = 1,
-    pub const meta = .{ .hosts = .{ .split = ',' } };
 };
+const hosts_flags = sets.flags(Hosts, field_.none, .{ .fields = .{
+    .hosts = .{ .split = ',' },
+} });
 
 const hosts_flow: Flow(Hosts, enum { hosts, retries, show }) = .{ .start = .hosts, .steps = .{
     .hosts = .{ .ask = .{ .field = "hosts", .label = "Hosts" }, .next = .retries },
@@ -1344,7 +1350,7 @@ fn runHosts(ctx: *Context, flags: Hosts) !void {
     _ = try hosts_flow.run(ctx, &state);
 }
 
-const hosts_root = spec_zig.command(.{ .name = "app", .flags = Hosts, .run = runHosts });
+const hosts_root = spec_zig.command(.{ .name = "app", .flags = hosts_flags, .run = runHosts });
 
 test "a list question, a label worked out when asked, and a refused answer said so" {
     const app: App = .{ .root = &hosts_root };

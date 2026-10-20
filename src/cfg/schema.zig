@@ -1,11 +1,12 @@
 //! JSON Schema (draft-07): `build` and `write` make one for a configuration struct, and
 //! `validate` checks an untyped tree against one.
 //!
-//! Field types map to schema types; defaults, `meta` help text (`description`), secrets
-//! (`writeOnly`), deprecations (`deprecated`, from a later draft, and the
-//! `deprecationMessage` editors show), and constraints (`.min`, `.max`, `.one_of`,
-//! `.pattern`) are carried over.
-//! A field with no default and a non-optional type is `required`.
+//! Field types map to schema types, under the keys a settings type (`cfg.settings`) gives
+//! them; defaults, the specs' help text (`description`), secrets (`writeOnly`),
+//! deprecations (`deprecated`, from a later draft, and the `deprecationMessage` editors
+//! show), and the built-in checks (`.min`, `.max`, `.minLen`, `.maxLen`, `.oneOf`, `.glob`)
+//! are carried over; checks of your own are not. A choice is `oneOf` its variants' names
+//! and one-key objects. A field with no default and a non-optional type is `required`.
 
 const std = @import("std");
 const assert = std.debug.assert;
@@ -17,13 +18,16 @@ const decoding = @import("decode.zig");
 const json = @import("json.zig");
 const Diagnostic = @import("Diagnostic.zig");
 const path = @import("path.zig");
+const field = @import("field");
+const settings_ = @import("settings.zig");
 
 /// The JSON Schema draft the schemas follow.
 pub const draft = "http://json-schema.org/draft-07/schema#";
 
-/// Builds the schema for `T` as a tree in `arena`.
-pub fn build(comptime T: type, arena: Allocator) decoding.EncodeError!Value {
-    var root = try node(T, arena);
+/// Builds the schema for the settings type `X` (or a plain struct) as a tree in `arena`.
+pub fn build(comptime X: type, arena: Allocator) decoding.EncodeError!Value {
+    const Set = settings_.Of(X);
+    var root = try node(Set.Type, Set.Specs, Set.root, arena);
     try root.table.put(arena, "$schema", .{ .string = draft });
     // Put `$schema` first, where readers expect it.
     const last = root.table.count() - 1;
@@ -35,22 +39,28 @@ pub fn build(comptime T: type, arena: Allocator) decoding.EncodeError!Value {
     return .{ .table = reordered };
 }
 
-/// Writes the schema for `T` as indented JSON.
+/// Writes the schema for the settings type `X` (or a plain struct) as indented JSON.
 pub fn write(
-    comptime T: type,
+    comptime X: type,
     arena: Allocator,
     writer: *std.Io.Writer,
 ) (json.WriteError || Allocator.Error)!void {
-    const tree = build(T, arena) catch |err| switch (err) {
+    const tree = build(X, arena) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Unrepresentable => return error.Unrepresentable,
     };
     try json.write(writer, tree, .{});
 }
 
-fn node(comptime T: type, arena: Allocator) decoding.EncodeError!Value {
+fn node(
+    comptime T: type,
+    comptime S: type,
+    comptime place: anytype,
+    arena: Allocator,
+) decoding.EncodeError!Value {
     var out: Table = .empty;
     if (T == Value) return .{ .table = out };
+    if (comptime settings_.isChoice(T)) return choiceNode(T, S, place, arena);
     if (comptime decoding.hasParse(T)) {
         try out.put(arena, "type", .{ .string = "string" });
         try out.put(
@@ -61,7 +71,7 @@ fn node(comptime T: type, arena: Allocator) decoding.EncodeError!Value {
         return .{ .table = out };
     }
     switch (@typeInfo(T)) {
-        .optional => |o| return node(o.child, arena),
+        .optional => |o| return node(o.child, S, place, arena),
         .bool => try out.put(arena, "type", .{ .string = "boolean" }),
         .int => {
             try out.put(arena, "type", .{ .string = "integer" });
@@ -86,38 +96,45 @@ fn node(comptime T: type, arena: Allocator) decoding.EncodeError!Value {
                 try out.put(arena, "type", .{ .string = "string" });
             } else {
                 try out.put(arena, "type", .{ .string = "array" });
-                try out.put(arena, "items", try node(p.child, arena));
+                const item_place = comptime if (settings_.isTable(field.Unwrap(p.child)) and
+                    @hasField(@TypeOf(place), "fields"))
+                    settings_.Place(p.child){ .fields = place.fields }
+                else
+                    settings_.Place(p.child){};
+                try out.put(arena, "items", try node(p.child, S, item_place, arena));
             }
         },
-        .@"struct" => return object(T, arena),
+        .@"struct" => return object(T, S, place, arena),
         else => @compileError("no schema for " ++ @typeName(T)),
     }
     return .{ .table = out };
 }
 
-fn object(comptime T: type, arena: Allocator) decoding.EncodeError!Value {
+fn object(
+    comptime T: type,
+    comptime S: type,
+    comptime place: anytype,
+    arena: Allocator,
+) decoding.EncodeError!Value {
     const info = @typeInfo(T).@"struct";
+    const spec = comptime S.of(T);
     var properties: Table = .empty;
     var required: Array = .empty;
     inline for (info.field_names, info.field_types, info.field_attrs) |name, Field, attrs| {
-        const key = comptime decoding.metaOption(T, name, "key", @as([]const u8, name));
-        var property = try node(Field, arena);
-        const help = comptime decoding.metaOption(T, name, "help", @as([]const u8, ""));
-        if (help.len > 0) try property.table.put(arena, "description", .{ .string = help });
-        if (comptime decoding.metaOption(T, name, "secret", false)) {
-            try property.table.put(arena, "writeOnly", .{ .bool = true });
-        }
-        if (comptime decoding.metaHas(T, name, "deprecated")) {
-            const reason: []const u8 = @field(T.meta, name).deprecated;
-            try property.table.put(arena, "deprecated", .{ .bool = true });
-            try property.table.put(arena, "deprecationMessage", .{ .string = reason });
-        }
-        try constraints(T, name, arena, &property);
+        const field_place = @field(place.fields, name);
+        const field_spec = @field(spec.fields, name);
+        const key = comptime settings_.keyOf(field_place, name);
+        var property = try node(Field, S, field_place, arena);
+        try describe(field_spec, arena, &property);
         if (attrs.default_value_ptr) |ptr| {
             const default = @as(*const Field, @ptrCast(@alignCast(ptr))).*;
-            const encoded = try decoding.encode(arena, default);
+            const encoded = try decoding.encodeAs(
+                settings_.settings(Field, S, .{}),
+                arena,
+                default,
+            );
             if (encoded != .null) try property.table.put(arena, "default", encoded);
-        } else if (@typeInfo(Field) != .optional) {
+        } else if (@typeInfo(Field) != .optional and !settings_.isTable(Field)) {
             try required.append(arena, .{ .string = key });
         }
         try properties.put(arena, key, property);
@@ -129,32 +146,92 @@ fn object(comptime T: type, arena: Allocator) decoding.EncodeError!Value {
     return .{ .table = out };
 }
 
+/// A choice: the name of a variant, or an object with one key naming it.
+fn choiceNode(
+    comptime U: type,
+    comptime S: type,
+    comptime place: anytype,
+    arena: Allocator,
+) decoding.EncodeError!Value {
+    const spec = comptime S.of(U);
+    var alternatives: Array = .empty;
+    var names: Array = .empty;
+    inline for (comptime field.fieldNames(U), comptime field.fieldTypes(U)) |name, P| {
+        const variant_place = @field(place.variants, name);
+        const key = comptime settings_.keyOf(variant_place, name);
+        try names.append(arena, .{ .string = key });
+        if (P != void) {
+            var payload = try node(P, S, variant_place, arena);
+            try describe(@field(spec.fields, name), arena, &payload);
+            var properties: Table = .empty;
+            try properties.put(arena, key, payload);
+            var wrapped: Table = .empty;
+            try wrapped.put(arena, "type", .{ .string = "object" });
+            try wrapped.put(arena, "properties", .{ .table = properties });
+            var only: Array = .empty;
+            try only.append(arena, .{ .string = key });
+            try wrapped.put(arena, "required", .{ .array = only });
+            try wrapped.put(arena, "additionalProperties", .{ .bool = false });
+            try alternatives.append(arena, .{ .table = wrapped });
+        }
+    }
+    var by_name: Table = .empty;
+    try by_name.put(arena, "type", .{ .string = "string" });
+    try by_name.put(arena, "enum", .{ .array = names });
+    try alternatives.insert(arena, 0, .{ .table = by_name });
+    var out: Table = .empty;
+    try out.put(arena, "oneOf", .{ .array = alternatives });
+    return .{ .table = out };
+}
+
+/// A field's spec in its schema: help, secrecy, deprecation, and built-in checks.
+fn describe(comptime spec: anytype, arena: Allocator, property: *Value) decoding.EncodeError!void {
+    if (spec.help.len > 0) try property.table.put(arena, "description", .{ .string = spec.help });
+    if (spec.secret) try property.table.put(arena, "writeOnly", .{ .bool = true });
+    if (spec.deprecated) |reason| {
+        try property.table.put(arena, "deprecated", .{ .bool = true });
+        try property.table.put(arena, "deprecationMessage", .{ .string = reason });
+    }
+    inline for (spec.checks) |c| if (c.about) |about| try constrain(about, arena, property);
+    // `.each` bounds a list's elements: its `items`.
+    if (spec.each.len > 0) if (property.table.getPtr("items")) |items| {
+        inline for (spec.each) |c| if (c.about) |about| try constrain(about, arena, items);
+    };
+}
+
 /// A bound as it is written: `1` rather than `1.0` when it is whole.
 fn boundValue(bound: f64) Value {
     const whole = @floor(bound) == bound and @abs(bound) <= 1 << 53;
     return if (whole) .{ .int = @intFromFloat(bound) } else .{ .float = bound };
 }
 
-/// Adds `meta`'s constraints for the field `name` to its schema: to `items` for a list.
-fn constraints(
-    comptime T: type,
-    comptime name: []const u8,
-    arena: Allocator,
-    property: *Value,
-) decoding.EncodeError!void {
-    const target = if (property.table.getPtr("items")) |items| items else property;
-    const none: ?f64 = null;
-    if (comptime decoding.metaOption(T, name, "min", none)) |min| {
-        try target.table.put(arena, "minimum", boundValue(min));
-    }
-    if (comptime decoding.metaOption(T, name, "max", none)) |max| {
-        try target.table.put(arena, "maximum", boundValue(max));
-    }
-    const choices = comptime decoding.metaOption(T, name, "one_of", @as([]const []const u8, &.{}));
-    if (choices.len > 0) try target.table.put(arena, "enum", try decoding.encode(arena, choices));
-    const pattern = comptime decoding.metaOption(T, name, "pattern", @as([]const u8, ""));
-    if (pattern.len > 0) {
-        try target.table.put(arena, "pattern", .{ .string = try globRegex(arena, pattern) });
+/// Adds a built-in check to a schema.
+fn constrain(about: field.About, arena: Allocator, target: *Value) decoding.EncodeError!void {
+    switch (about) {
+        .min => |b| if (b.number) |n| try target.table.put(arena, "minimum", boundValue(n)),
+        .max => |b| if (b.number) |n| try target.table.put(arena, "maximum", boundValue(n)),
+        .min_len => |n| try target.table.put(arena, if (target.table.get("type") != null and
+            std.mem.eql(
+                u8,
+                target.table.get("type").?.string,
+                "array",
+            )) "minItems" else "minLength", .{ .int = @intCast(n) }),
+        .max_len => |n| try target.table.put(arena, if (target.table.get("type") != null and
+            std.mem.eql(
+                u8,
+                target.table.get("type").?.string,
+                "array",
+            )) "maxItems" else "maxLength", .{ .int = @intCast(n) }),
+        .one_of => |choices| try target.table.put(
+            arena,
+            "enum",
+            try decoding.encode(arena, choices),
+        ),
+        .glob => |pattern| try target.table.put(
+            arena,
+            "pattern",
+            .{ .string = try globRegex(arena, pattern) },
+        ),
     }
 }
 
@@ -621,17 +698,16 @@ const testing = std.testing;
 test "schema for a struct" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const T = struct {
+    const Plain = struct {
         port: u16 = 80,
         mode: enum { a, b },
         token: ?[]const u8 = null,
         tags: []const []const u8 = &.{},
-
-        pub const meta = .{
-            .port = .{ .help = "Port" },
-            .token = .{ .secret = true, .deprecated = "use a key file" },
-        };
     };
+    const T = settings_.settings(Plain, field.Set(.{field.Spec(Plain){ .fields = .{
+        .port = .{ .help = "Port" },
+        .token = .{ .secret = true, .deprecated = "use a key file" },
+    } }}), .{});
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
     try write(T, arena.allocator(), &out.writer);
@@ -687,14 +763,21 @@ fn expectSchema(comptime T: type, expected: []const u8) !void {
 
 test "schema for nested and optional structs, slices of structs, and renames" {
     const Endpoint = struct { url: []const u8, weight: f32 = 1.0 };
-    const T = struct {
+    const Plain = struct {
         server: struct { host: []const u8 = "h" } = .{},
         tls: ?struct { cert: []const u8 } = null,
         endpoints: []const Endpoint,
         level: enum { low, high } = .low,
         tls_verify: bool = true,
-        pub const meta = .{ .tls_verify = .{ .key = "tls-verify", .help = "Verify peers" } };
     };
+    const specs = field.Set(
+        .{field.Spec(Plain){ .fields = .{ .tls_verify = .{ .help = "Verify peers" } } }},
+    );
+    const T = settings_.settings(
+        Plain,
+        specs,
+        .{ .fields = .{ .tls_verify = .{ .key = "tls-verify" } } },
+    );
     try expectSchema(T,
         \\{
         \\  "$schema": "http://json-schema.org/draft-07/schema#",
@@ -764,15 +847,17 @@ test "schema for nested and optional structs, slices of structs, and renames" {
 }
 
 test "schema for parse-convention types, Value fields, and wide integers" {
-    const T = struct {
+    const Plain = struct {
         timeout: @import("scalar.zig").Duration = .{ .ns = std.time.ns_per_s },
         limit: ?@import("scalar.zig").ByteSize = null,
         extra: Value = .null,
         big: u64 = 0,
         huge: i128 = 0,
         signed: i8 = -1,
-        pub const meta = .{ .extra = .{ .help = "Anything" } };
     };
+    const T = settings_.settings(Plain, field.Set(.{field.Spec(Plain){ .fields = .{
+        .extra = .{ .help = "Anything" },
+    } }}), .{});
     try expectSchema(T,
         \\{
         \\  "$schema": "http://json-schema.org/draft-07/schema#",
@@ -891,16 +976,16 @@ test "a schema built from a struct validates what decode accepts" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const T = struct {
+    const Plain = struct {
         port: u16 = 80,
         host: []const u8 = "x.example.com",
         ports: []const u16 = &.{},
-        pub const meta = .{
-            .port = .{ .min = 1024 },
-            .host = .{ .pattern = "*.example.com" },
-            .ports = .{ .max = 9000 },
-        };
     };
+    const T = settings_.settings(Plain, field.Set(.{field.Spec(Plain){ .fields = .{
+        .port = .{ .checks = &.{.min(1024)} },
+        .host = .{ .checks = &.{.glob("*.example.com")} },
+        .ports = .{ .each = &.{.max(9000)} },
+    } }}), .{});
     const schema = try build(T, a);
     var problems: std.ArrayList(Diagnostic) = .empty;
     const value = try json.parse(a,
@@ -932,4 +1017,24 @@ test "infer a schema that the document validates against" {
     // A document of another shape does not conform.
     const other = try json.parse(a, "{\"name\": 1, \"port\": 80}", null);
     try testing.expect(!try validate(a, schema, other, .{ .coerce = false }, &problems));
+}
+
+test "schema for a choice: a variant's name, or an object naming it" {
+    const T = struct {
+        storage: union(enum) { disk: struct { path: []const u8 = "/var" }, memory } = .memory,
+    };
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const schema = try build(T, a);
+    var problems: std.ArrayList(Diagnostic) = .empty;
+    const goods = [_][]const u8{
+        "{\"storage\": \"memory\"}",
+        "{\"storage\": {\"disk\": {\"path\": \"/x\"}}}",
+    };
+    for (goods) |good| {
+        try testing.expect(try validate(a, schema, try json.parse(a, good, null), .{}, &problems));
+    }
+    const bad = try json.parse(a, "{\"storage\": \"tape\"}", null);
+    try testing.expect(!try validate(a, schema, bad, .{}, &problems));
 }

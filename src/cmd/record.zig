@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const term = @import("term");
 const tape = @import("record/tape.zig");
 const session = @import("record/session.zig");
@@ -15,14 +16,13 @@ const Io = std.Io;
 
 const RunFlags = struct {
     output: []const []const u8 = &.{},
-    pub const meta = .{
-        .output = .{
-            .short = 'o',
-            .help = "Also write this (repeatable): .gif, .png, .txt, .svg, .mp4, " ++
-                "or a directory/ of frames",
-        },
-    };
 };
+const run_flags = cli.flags(RunFlags, field.Set(.{field.Spec(RunFlags){ .fields = .{
+    .output = .{ .help = "Also write this (repeatable): .gif, .png, .txt, .svg, .mp4, " ++
+        "or a directory/ of frames" },
+} }}), .{ .fields = .{
+    .output = .{ .short = 'o' },
+} });
 
 pub const command = cli.command(.{
     .name = "record",
@@ -36,7 +36,7 @@ pub const command = cli.command(.{
     \\machine's: Set FontFamily names one, else a common monospace font is found.
     ,
     .args = .{ .min = 1, .max = 1, .usage = "<file.tape>" },
-    .flags = RunFlags,
+    .flags = run_flags,
     .logging = true,
     .examples =
     \\termancy record new demo
@@ -65,7 +65,7 @@ pub const command = cli.command(.{
             \\exits, write it as a tape (Type, the keys, Sleep for pauses) to record later.
             ,
             .args = .{ .min = 1, .max = 1, .usage = "<file.tape>" },
-            .flags = CaptureFlags,
+            .flags = capture_flags,
             .run = captureTape,
         }),
         cli.command(.{
@@ -334,8 +334,10 @@ fn newTape(ctx: *cli.Context) !void {
 
 const CaptureFlags = struct {
     shell: ?[]const u8 = null,
-    pub const meta = .{ .shell = .{ .help = "The shell to run (default: $SHELL, else bash)" } };
 };
+const capture_flags = cli.flags(CaptureFlags, field.Set(.{field.Spec(CaptureFlags){ .fields = .{
+    .shell = .{ .help = "The shell to run (default: $SHELL, else bash)" },
+} }}), .{});
 
 fn captureTape(ctx: *cli.Context, flags: CaptureFlags) !void {
     const path = ctx.args[0];

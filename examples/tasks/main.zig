@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const cfg = @import("cfg");
 
 const Task = struct { title: []const u8, age_days: u32 };
@@ -24,8 +25,12 @@ const tasks = [_]Task{
 
 const Global = struct {
     config: ?[]const u8 = null,
-    pub const meta = .{ .config = .{ .short = 'c', .help = "Configuration file" } };
 };
+const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .config = .{ .help = "Configuration file" },
+} }}), .{ .fields = .{
+    .config = .{ .short = 'c' },
+} });
 
 fn list(ctx: *cli.Context) !void {
     try ctx.render(@as([]const Task, &tasks));
@@ -33,8 +38,10 @@ fn list(ctx: *cli.Context) !void {
 
 const ClearFlags = struct {
     older_than: u32 = 30,
-    pub const meta = .{ .older_than = .{ .help = "Clear tasks older than this many days" } };
 };
+const clear_flags = cli.flags(ClearFlags, field.Set(.{field.Spec(ClearFlags){ .fields = .{
+    .older_than = .{ .help = "Clear tasks older than this many days" },
+} }}), .{});
 
 fn clear(ctx: *cli.Context, flags: ClearFlags) !void {
     var count: u32 = 0;
@@ -54,13 +61,13 @@ fn clear(ctx: *cli.Context, flags: ClearFlags) !void {
 pub const root = cli.command(.{
     .name = "tasks",
     .summary = "Keep track of things to do",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = &.{
         cli.command(.{ .name = "list", .summary = "List the tasks", .output = true, .run = list }),
         cli.command(.{
             .name = "clear",
             .summary = "Clear old tasks",
-            .flags = ClearFlags,
+            .flags = clear_flags,
             .confirm = "Clear the old tasks?",
             .dry_run = true,
             .run = clear,

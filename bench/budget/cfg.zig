@@ -12,7 +12,6 @@ const Settings = struct {
 pub fn main(init: std.process.Init) !void {
     var config: cfg.Config = .init(init.gpa);
     defer config.deinit();
-    try config.setDefaults(Settings{});
     var args = init.minimal.args.iterate();
     _ = args.skip();
     var diag: cfg.Diagnostic = .{};

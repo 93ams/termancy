@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field_ = @import("field");
 const sys = @import("sys");
 const log = sys.log;
 
@@ -13,15 +14,21 @@ const Flags = struct {
     time: ?log.TimeFormat = null,
     file: ?[]const u8 = null,
     min_level: log.Level = .trace,
-    pub const meta = .{
-        .level = .{ .short = 'l', .help = "The record's level" },
-        .prefix = .{ .help = "Written before the message" },
-        .format = .{ .short = 'f', .help = "How the record is written" },
-        .time = .{ .short = 't', .help = "Add the time, in this format" },
-        .file = .{ .short = 'o', .help = "Append to this file instead of standard error" },
-        .min_level = .{ .help = "Write nothing for levels below this", .env = "GUM_LOG_LEVEL" },
-    };
 };
+const flags_flags = cli.flags(Flags, field_.Set(.{field_.Spec(Flags){ .fields = .{
+    .level = .{ .help = "The record's level" },
+    .prefix = .{ .help = "Written before the message" },
+    .format = .{ .help = "How the record is written" },
+    .time = .{ .help = "Add the time, in this format" },
+    .file = .{ .help = "Append to this file instead of standard error" },
+    .min_level = .{ .help = "Write nothing for levels below this" },
+} }}), .{ .fields = .{
+    .level = .{ .short = 'l' },
+    .format = .{ .short = 'f' },
+    .time = .{ .short = 't' },
+    .file = .{ .short = 'o' },
+    .min_level = .{ .env = "GUM_LOG_LEVEL" },
+} });
 
 const Format = enum { text, json, logfmt };
 
@@ -35,7 +42,7 @@ pub const command = cli.command(.{
     \\token, ...) are redacted.
     ,
     .args = .{ .min = 1, .max = null, .usage = "<message> [key value]..." },
-    .flags = Flags,
+    .flags = flags_flags,
     .examples =
     \\termancy ui log --level warn "disk almost full" used 93%
     \\termancy ui log -f json --time rfc3339 "deployed" version 1.4.0

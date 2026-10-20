@@ -1,6 +1,8 @@
 //! Help text, generated from the command tree.
 
 const std = @import("std");
+const sets = @import("sets.zig");
+const field = @import("field");
 const assert = std.debug.assert;
 const Writer = std.Io.Writer;
 const Command = @import("Command.zig");
@@ -587,20 +589,18 @@ fn describeFlag(writer: *Writer, flag: *const Flag, options: Options) Writer.Err
         try options.close(writer, note);
         separator = " ";
     }
-    if (flag.min != null or flag.max != null) {
+    const minimum = flag.minimum();
+    const maximum = flag.maximum();
+    if (minimum != null or maximum != null) {
         try writer.writeAll(separator);
         try options.open(writer, note);
         defer options.close(writer, note) catch {};
-        var low: [64]u8 = undefined;
-        var high: [64]u8 = undefined;
-        const min = if (flag.min) |n| std.fmt.bufPrint(&low, "{d}", .{n}) catch "" else "";
-        const max = if (flag.max) |n| std.fmt.bufPrint(&high, "{d}", .{n}) catch "" else "";
-        if (flag.min != null and flag.max != null) {
-            try Messages.render(writer, m.range, &.{ min, max });
-        } else if (flag.min != null) {
-            try Messages.render(writer, m.minimum, &.{min});
+        if (minimum != null and maximum != null) {
+            try Messages.render(writer, m.range, &.{ minimum.?.text, maximum.?.text });
+        } else if (minimum) |low| {
+            try Messages.render(writer, m.minimum, &.{low.text});
         } else {
-            try Messages.render(writer, m.maximum, &.{max});
+            try Messages.render(writer, m.maximum, &.{maximum.?.text});
         }
         separator = " ";
     }
@@ -608,6 +608,13 @@ fn describeFlag(writer: *Writer, flag: *const Flag, options: Options) Writer.Err
         try writer.writeAll(separator);
         try options.open(writer, note);
         try Messages.render(writer, m.env_variable, &.{env});
+        try options.close(writer, note);
+        separator = " ";
+    }
+    if (flag.also.len > 0) {
+        try writer.writeAll(separator);
+        try options.open(writer, note);
+        try Messages.render(writer, m.also_set, &.{flag.also});
         try options.close(writer, note);
         separator = " ";
     }
@@ -662,11 +669,15 @@ fn noop(_: *Context) !void {}
 const test_root = spec.command(.{
     .name = "app",
     .summary = "An example application",
-    .persistent_flags = struct {
-        config: ?[]const u8 = null,
-        pub const meta = .{
-            .config = .{ .short = 'c', .help = "Config file", .value_name = "path" },
+    .persistent_flags = flags: {
+        const T = struct {
+            config: ?[]const u8 = null,
         };
+        break :flags sets.flags(
+            T,
+            field.Set(.{field.Spec(T){ .fields = .{ .config = .{ .help = "Config file" } } }}),
+            .{ .fields = .{ .config = .{ .short = 'c', .value_name = "path" } } },
+        );
     },
     .subcommands = .{
         spec.command(.{
@@ -675,16 +686,26 @@ const test_root = spec.command(.{
             .aliases = &.{"s"},
             .examples = "app serve --port 80\napp s",
             .args = .{ .max = 1, .usage = "[dir]" },
-            .flags = struct {
-                port: u16 = 8080,
-                mode: enum { dev, prod } = .dev,
-                name: []const u8,
-                old: bool = false,
-                pub const meta = .{
-                    .port = .{ .short = 'p', .help = "Port to listen on", .env = "PORT" },
-                    .mode = .{ .help = "Run mode" },
-                    .old = .{ .deprecated = "gone" },
+            .flags = flags: {
+                const T = struct {
+                    port: u16 = 8080,
+                    mode: enum { dev, prod } = .dev,
+                    name: []const u8,
+                    old: bool = false,
                 };
+                break :flags sets.flags(
+                    T,
+                    field.Set(
+                        .{
+                            field.Spec(T){ .fields = .{
+                                .port = .{ .help = "Port to listen on" },
+                                .mode = .{ .help = "Run mode" },
+                                .old = .{ .deprecated = "gone" },
+                            } },
+                        },
+                    ),
+                    .{ .fields = .{ .port = .{ .short = 'p', .env = "PORT" } } },
+                );
             },
             .run = noop,
         }),
@@ -787,9 +808,15 @@ test "subcommand help" {
 
 const shape_root = spec.command(.{
     .name = "app",
-    .persistent_flags = struct {
-        output: []const u8 = "text",
-        pub const meta = .{ .output = .{ .short = 'o', .help = "Root output" } };
+    .persistent_flags = flags: {
+        const T = struct {
+            output: []const u8 = "text",
+        };
+        break :flags sets.flags(
+            T,
+            field.Set(.{field.Spec(T){ .fields = .{ .output = .{ .help = "Root output" } } }}),
+            .{ .fields = .{ .output = .{ .short = 'o' } } },
+        );
     },
     .args = .{ .max = null },
     .run = noop,
@@ -801,17 +828,26 @@ const shape_root = spec.command(.{
         spec.command(.{
             .name = "show",
             .summary = "Show things",
-            .flags = struct {
-                output: []const u8 = "",
-                host: bool = false,
-                secret: bool = false,
-                legacy: bool = false,
-                pub const meta = .{
-                    .output = .{ .help = "Show output" },
-                    .host = .{ .short = 'h', .help = "Show the host" },
-                    .secret = .{ .hidden = true },
-                    .legacy = .{ .deprecated = "gone" },
+            .flags = flags: {
+                const T = struct {
+                    output: []const u8 = "",
+                    host: bool = false,
+                    secret: bool = false,
+                    legacy: bool = false,
                 };
+                break :flags sets.flags(
+                    T,
+                    field.Set(
+                        .{
+                            field.Spec(T){ .fields = .{
+                                .output = .{ .help = "Show output" },
+                                .host = .{ .help = "Show the host" },
+                                .legacy = .{ .deprecated = "gone" },
+                            } },
+                        },
+                    ),
+                    .{ .fields = .{ .host = .{ .short = 'h' }, .secret = .{ .hidden = true } } },
+                );
             },
             .run = noop,
         }),
@@ -896,13 +932,15 @@ test "hidden, deprecated, and shadowed flags; a user flag on -h" {
 test "long flag help wraps under its column" {
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
-            name: []const u8 = "",
-            pub const meta = .{ .name = .{
+        .flags = flags: {
+            const T = struct {
+                name: []const u8 = "",
+            };
+            const specs = field.Set(.{field.Spec(T){ .fields = .{ .name = .{
                 .help = "The name of the thing that this command operates on, which is " ++
                     "given here in a deliberately long sentence so that it has to wrap",
-                .env = "APP_NAME",
-            } };
+            } } }});
+            break :flags sets.flags(T, specs, .{ .fields = .{ .name = .{ .env = "APP_NAME" } } });
         },
         .run = noop,
     });
@@ -962,20 +1000,33 @@ test "help topics are listed apart and print their page" {
 
 const WideFlags = struct {
     name: []const u8 = "",
-    pub const meta = .{
-        .name = .{ .help = "one two three four five six seven eight nine ten" },
-    };
 };
+const wide_flags = sets.flags(WideFlags, field.Set(.{field.Spec(WideFlags){ .fields = .{
+    .name = .{ .help = "one two three four five six seven eight nine ten" },
+} }}), .{});
 
-const wide_root = spec.command(.{ .name = "app", .flags = WideFlags, .run = noopHandler });
+const wide_root = spec.command(.{ .name = "app", .flags = wide_flags, .run = noopHandler });
 
 test "a flag too wide for the column gets a line of its own" {
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
-            format: enum { text, json, yaml, toml, zon, env, ini, systemd } = .text,
-            all: bool = false,
-            pub const meta = .{ .format = .{ .help = "Output format" }, .all = .{ .help = "All" } };
+        .flags = flags: {
+            const T = struct {
+                format: enum { text, json, yaml, toml, zon, env, ini, systemd } = .text,
+                all: bool = false,
+            };
+            break :flags sets.flags(
+                T,
+                field.Set(
+                    .{
+                        field.Spec(T){ .fields = .{
+                            .format = .{ .help = "Output format" },
+                            .all = .{ .help = "All" },
+                        } },
+                    },
+                ),
+                .{},
+            );
         },
         .run = noop,
     });
@@ -1036,12 +1087,15 @@ test "the default theme styles each kind of text, and plain text is unchanged un
 test "wide and accented text wraps by its display width" {
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
-            name: []const u8 = "",
-            pub const meta = .{ .name = .{
+        .flags = flags: {
+            const T = struct {
+                name: []const u8 = "",
+            };
+            const specs = field.Set(.{field.Spec(T){ .fields = .{ .name = .{
                 .help = "Größe änderung überall Größe änderung überall Größe änderung " ++
                     "überall Größe änderung überall 名前を設定する 名前を設定する",
-            } };
+            } } }});
+            break :flags sets.flags(T, specs, .{});
         },
         .run = noop,
     });
@@ -1078,19 +1132,23 @@ test "sections replace parts of the page" {
 
 const SecretFlags = struct {
     token: []const u8 = "hunter2",
-    pub const meta = .{ .token = .{ .secret = true, .help = "API token" } };
 };
+const secret_flags = sets.flags(SecretFlags, field.Set(.{field.Spec(SecretFlags){ .fields = .{
+    .token = .{ .secret = true, .help = "API token" },
+} }}), .{});
 
 const Copy = struct {
     source: []const u8,
     target: ?[]const u8 = null,
-    pub const meta = .{ .source = .{ .help = "File to copy" } };
 };
+const copy_args = sets.args(Copy, field.Set(.{field.Spec(Copy){ .fields = .{
+    .source = .{ .help = "File to copy" },
+} }}), .{});
 
 const arguments_root = spec.command(.{
     .name = "app",
     .subcommands = .{
-        spec.command(.{ .name = "copy", .args = Copy, .flags = SecretFlags, .run = noop }),
+        spec.command(.{ .name = "copy", .args = copy_args, .flags = secret_flags, .run = noop }),
         spec.command(.{ .name = "plain", .args = struct { key: []const u8 }, .run = noop }),
         spec.command(.{ .name = "move", .summary = "Move", .run = noop }),
         spec.command(.{ .name = "mv", .summary = "Old", .deprecated = "use move", .run = noop }),
@@ -1132,10 +1190,9 @@ test "deprecated commands are not listed" {
 test "-V is left to a flag that takes it" {
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
+        .flags = sets.flags(struct {
             verify: bool = false,
-            pub const meta = .{ .verify = .{ .short = 'V' } };
-        },
+        }, field.none, .{ .fields = .{ .verify = .{ .short = 'V' } } }),
         .run = noop,
     });
     const text = try render(&.{&root}, .{ .version = true });

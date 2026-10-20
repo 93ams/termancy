@@ -6,12 +6,15 @@
 //! final command, environment fallbacks are applied, and requirements are checked.
 
 const std = @import("std");
+const sets = @import("sets.zig");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Command = @import("Command.zig");
 const Flag = @import("Flag.zig");
 const text = @import("text.zig");
+const field = @import("field");
 const Messages = @import("Messages.zig");
+const i18n = @import("i18n.zig");
 
 /// Deeper command trees than this are rejected rather than recorded unbounded.
 pub const max_depth = 32;
@@ -96,6 +99,8 @@ pub const Options = struct {
     prefix_matching: bool = false,
     /// The sentences of usage errors and warnings.
     messages: *const Messages = &Messages.english,
+    /// The user's language, for what a flag's own checks say (looked up by its text).
+    translation: ?*const i18n.Translation = null,
     /// A required flag with a `prompt` may be missing: it goes to `Result.missing` for the
     /// caller to ask for; so may required positionals that all have one (the caller compares
     /// `Result.positionals` with `args.min`). Set when the run is interactive.
@@ -504,7 +509,7 @@ const Parser = struct {
     /// mean" hint hints at what was typed.
     fn checkOne(p: *Parser, occurrence: Occurrence, value: []const u8) Error!void {
         const flag = occurrence.flag;
-        if (flag.check(value) and inChoices(flag, value)) return p.checkBounds(occurrence, value);
+        if (flag.check(value) and inChoices(flag, value)) return p.checkValidate(occurrence, value);
         const label = try p.flagLabel(occurrence);
         const shown = flag.shownValue(value);
         if (flag.choices.len > 0) {
@@ -516,32 +521,38 @@ const Parser = struct {
         return p.fail(p.messages().expected_type, &.{ shown, label, flag.value_name });
     }
 
-    /// `.min` and `.max`, on a value that already parsed as the flag's number type;
-    /// `.min_len` and `.max_len` on a string.
-    fn checkBounds(p: *Parser, occurrence: Occurrence, value: []const u8) Error!void {
+    /// The field's checks (`field` specs), on a value that already parsed as the flag's
+    /// type. A built-in check is worded from `Messages`, in the user's language; a check
+    /// of the app's own, in its own words.
+    fn checkValidate(p: *Parser, occurrence: Occurrence, value: []const u8) Error!void {
         const flag = occurrence.flag;
-        const shown = flag.shownValue(value);
-        if (flag.min_len != null or flag.max_len != null) {
-            const length = std.unicode.utf8CountCodepoints(value) catch value.len;
-            if (flag.min_len) |min| if (length < min) return p.fail(
-                p.messages().too_short,
-                &.{ shown, try p.flagLabel(occurrence), try p.number(min) },
-            );
-            if (flag.max_len) |max| if (length > max) return p.fail(
-                p.messages().too_long,
-                &.{ shown, try p.flagLabel(occurrence), try p.number(max) },
-            );
-        }
-        if (flag.min == null and flag.max == null) return;
-        const amount = numberOf(value) orelse return;
-        if (flag.min) |min| if (amount < min) return p.fail(
-            p.messages().at_least,
-            &.{ shown, try p.flagLabel(occurrence), try p.number(min) },
-        );
-        if (flag.max) |max| if (amount > max) return p.fail(
-            p.messages().at_most,
-            &.{ shown, try p.flagLabel(occurrence), try p.number(max) },
-        );
+        const validate = flag.validate orelse return;
+        var buffer: [256]u8 = undefined;
+        var reason: std.Io.Writer = .fixed(&buffer);
+        var about: ?field.About = null;
+        validate(value, &reason, &about) catch |err| switch (err) {
+            error.Invalid, error.WriteFailed => {
+                const shown = flag.shownValue(value);
+                const label = try p.flagLabel(occurrence);
+                const m = p.messages();
+                const said = try i18n.filledIn(p.options.translation, p.arena, reason.buffered());
+                const a = about orelse return p.fail(
+                    m.invalid_value,
+                    &.{ shown, label, try p.arena.dupe(u8, said) },
+                );
+                return switch (a) {
+                    .min => |b| p.fail(m.at_least, &.{ shown, label, b.text }),
+                    .max => |b| p.fail(m.at_most, &.{ shown, label, b.text }),
+                    .min_len => |n| p.fail(m.too_short, &.{ shown, label, try p.number(n) }),
+                    .max_len => |n| p.fail(m.too_long, &.{ shown, label, try p.number(n) }),
+                    .glob => |pattern| p.fail(m.must_match, &.{ shown, label, pattern }),
+                    .one_of => |choices| p.fail(
+                        m.expected_one_of,
+                        &.{ shown, label, try std.mem.join(p.arena, ", ", choices) },
+                    ),
+                };
+            },
+        };
     }
 
     fn checkRequired(p: *Parser) Error!void {
@@ -561,6 +572,29 @@ const Parser = struct {
     }
 
     fn checkConstraints(p: *Parser) Error!void {
+        // A flag of a choice's variant with the choice naming another variant.
+        for (p.occurrences.items) |occurrence| {
+            const flag = occurrence.flag;
+            const choice = flag.choice orelse continue;
+            for (p.occurrences.items) |other| {
+                const named = other.flag;
+                const same_choice = std.mem.eql(u8, named.name, choice) and
+                    std.mem.eql(u8, named.owner, flag.owner);
+                if (!same_choice) continue;
+                if (field.sameName(other.value, flag.variant)) continue;
+                const variant = try p.arena.dupe(u8, flag.variant);
+                std.mem.replaceScalar(u8, variant, '_', '-');
+                return p.fail(
+                    p.messages().wrong_variant,
+                    &.{
+                        flag.name,
+                        choice,
+                        variant,
+                        other.value,
+                    },
+                );
+            }
+        }
         for (p.occurrences.items) |occurrence| {
             for (occurrence.flag.requires) |name| {
                 if (!p.givenName(name)) {
@@ -672,11 +706,6 @@ fn inChoices(flag: *const Flag, value: []const u8) bool {
 }
 
 /// A flag value as a number, for bounds: integers in any base the flag accepts, or floats.
-fn numberOf(value: []const u8) ?f64 {
-    if (std.fmt.parseInt(i128, value, 0)) |int| return @floatFromInt(int) else |_| {}
-    return std.fmt.parseFloat(f64, value) catch null;
-}
-
 /// The count a counter flag's environment variable holds, or null when it is not one.
 pub fn envCount(value: []const u8) ?usize {
     return std.fmt.parseInt(usize, value, 10) catch null;
@@ -756,11 +785,11 @@ fn noop(_: *Context) !void {}
 const Global = struct {
     verbose: u8 = 0,
     config: ?[]const u8 = null,
-    pub const meta = .{
-        .verbose = .{ .short = 'v', .count = true },
-        .config = .{ .short = 'c', .env = "APP_CONFIG" },
-    };
 };
+const global_flags = sets.flags(Global, field.none, .{ .fields = .{
+    .verbose = .{ .short = 'v', .count = true },
+    .config = .{ .short = 'c', .env = "APP_CONFIG" },
+} });
 
 const ServeFlags = struct {
     port: u16 = 8080,
@@ -770,24 +799,24 @@ const ServeFlags = struct {
     json: bool = false,
     yaml: bool = false,
     old: bool = false,
-    pub const meta = .{
-        .port = .{ .short = 'p', .env = "PORT" },
-        .tag = .{ .short = 't', .split = ',' },
-        .force = .{ .short = 'f' },
-        .old = .{ .deprecated = "use --force" },
-    };
 };
+const serve_flags = sets.flags(ServeFlags, field.Set(.{field.Spec(ServeFlags){ .fields = .{
+    .old = .{ .deprecated = "use --force" },
+} }}), .{ .fields = .{
+    .port = .{ .short = 'p', .env = "PORT" },
+    .tag = .{ .short = 't', .split = ',' },
+    .force = .{ .short = 'f' },
+}, .exclusive = &.{&.{ .json, .yaml }} });
 
 const test_root = spec.command(.{
     .name = "app",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = .{
         spec.command(.{
             .name = "serve",
             .aliases = &.{"s"},
-            .flags = ServeFlags,
+            .flags = serve_flags,
             .args = .{ .max = 1 },
-            .exclusive = &.{&.{ "json", "yaml" }},
             .run = noop,
         }),
         spec.command(.{
@@ -973,14 +1002,15 @@ test "visible flags, nearest first" {
 
 const constraint_root = spec.command(.{
     .name = "app",
-    .flags = struct {
+    .flags = sets.flags(struct {
         user: ?[]const u8 = null,
         password: ?[]const u8 = null,
         file: ?[]const u8 = null,
         url: ?[]const u8 = null,
-    },
-    .together = &.{&.{ "user", "password" }},
-    .one_required = &.{&.{ "file", "url" }},
+    }, field.none, .{
+        .together = &.{&.{ .user, .password }},
+        .one_required = &.{&.{ .file, .url }},
+    }),
     .run = noop,
 });
 
@@ -1016,10 +1046,9 @@ test "split values from the environment are checked element by element" {
     defer arena.deinit();
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
+        .flags = sets.flags(struct {
             id: []const u16 = &.{},
-            pub const meta = .{ .id = .{ .split = ',', .env = "IDS" } };
-        },
+        }, field.none, .{ .fields = .{ .id = .{ .split = ',', .env = "IDS" } } }),
         .run = noop,
     });
     var environ: std.process.Environ.Map = .init(testing.allocator);
@@ -1043,10 +1072,9 @@ test "split values from the environment are checked element by element" {
 
 const shape_root = spec.command(.{
     .name = "app",
-    .persistent_flags = struct {
+    .persistent_flags = sets.flags(struct {
         debug: bool = false,
-        pub const meta = .{ .debug = .{ .short = 'd' } };
-    },
+    }, field.none, .{ .fields = .{ .debug = .{ .short = 'd' } } }),
     .flags = struct { local: bool = false },
     .args = .{ .max = null },
     .run = noop,
@@ -1055,15 +1083,18 @@ const shape_root = spec.command(.{
             .name = "list",
             .aliases = &.{"ls"},
             .deprecated = "use show",
-            .flags = struct {
+            .flags = sets.flags(struct {
                 host: bool = false,
                 offset: i32 = 0,
                 name: []const u8 = "",
-                pub const meta = .{
-                    .host = .{ .short = 'h' },
+            }, field.none, .{
+                .fields = .{
+                    .host = .{
+                        .short = 'h',
+                    },
                     .offset = .{ .short = 'o' },
-                };
-            },
+                },
+            }),
             .args = .{ .max = null },
             .run = noop,
         }),
@@ -1222,10 +1253,9 @@ test "-p= is an empty value, like --name=" {
     defer arena.deinit();
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
+        .flags = sets.flags(struct {
             prefix: []const u8 = "x",
-            pub const meta = .{ .prefix = .{ .short = 'p' } };
-        },
+        }, field.none, .{ .fields = .{ .prefix = .{ .short = 'p' } } }),
         .args = .{ .max = 1 },
         .run = noop,
     });
@@ -1241,14 +1271,18 @@ test "boolean and counter flags from the environment are validated" {
     defer arena.deinit();
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
+        .flags = sets.flags(struct {
             force: bool = false,
             verbose: u8 = 0,
-            pub const meta = .{
+        }, field.none, .{
+            .fields = .{
                 .force = .{ .env = "FORCE" },
-                .verbose = .{ .count = true, .env = "VERBOSE" },
-            };
-        },
+                .verbose = .{
+                    .count = true,
+                    .env = "VERBOSE",
+                },
+            },
+        }),
         .run = noop,
     });
     var environ: std.process.Environ.Map = .init(testing.allocator);
@@ -1289,15 +1323,16 @@ const Checked = struct {
     level: []const u8 = "info",
     colour: bool = false,
     mode: enum { dev, prod } = .dev,
-    pub const meta = .{
-        .port = .{ .min = 1024, .max = 49151 },
-        .ratio = .{ .min = 0, .max = 1.0 },
-        .level = .{ .one_of = &[_][]const u8{ "debug", "info", "warn" } },
-        .colour = .{ .name = "color", .aliases = &[_][]const u8{"colour"} },
-    };
 };
+const checked_flags = sets.flags(Checked, field.Set(.{field.Spec(Checked){ .fields = .{
+    .port = .{ .checks = &.{ .min(1024), .max(49151) } },
+    .ratio = .{ .checks = &.{ .min(0), .max(1.0) } },
+    .level = .{ .checks = &.{.oneOf(&[_][]const u8{ "debug", "info", "warn" })} },
+} }}), .{ .fields = .{
+    .colour = .{ .name = "color", .aliases = &[_][]const u8{"colour"} },
+} });
 
-const checked_root = spec.command(.{ .name = "app", .flags = Checked, .run = noop });
+const checked_root = spec.command(.{ .name = "app", .flags = checked_flags, .run = noop });
 
 fn expectUsage(args: []const []const u8, message: []const u8, hint: []const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1349,16 +1384,18 @@ const SecretFlags = struct {
     level: enum { low, high } = .low,
     code: []const u8 = "",
     force: bool = false,
-    pub const meta = .{
-        .token = .{ .short = 't', .secret = true, .env = "TOKEN", .min_len = 8 },
-        .pin = .{ .secret = true, .max = 9999 },
-        .level = .{ .secret = true },
-        .code = .{ .secret = true, .one_of = &[_][]const u8{ "alpha", "bravo" } },
-        .force = .{ .short = 'f' },
-    };
 };
+const secret_flags = sets.flags(SecretFlags, field.Set(.{field.Spec(SecretFlags){ .fields = .{
+    .token = .{ .secret = true, .checks = &.{.minLen(8)} },
+    .pin = .{ .secret = true, .checks = &.{.max(9999)} },
+    .level = .{ .secret = true },
+    .code = .{ .secret = true, .checks = &.{.oneOf(&[_][]const u8{ "alpha", "bravo" })} },
+} }}), .{ .fields = .{
+    .token = .{ .short = 't', .env = "TOKEN" },
+    .force = .{ .short = 'f' },
+} });
 
-const secret_root = spec.command(.{ .name = "app", .flags = SecretFlags, .run = noop });
+const secret_root = spec.command(.{ .name = "app", .flags = secret_flags, .run = noop });
 
 test "a secret's value never appears in a usage error" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -1430,10 +1467,9 @@ test "-V is --version on the root, unless a flag takes it" {
     );
     const root = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
+        .flags = sets.flags(struct {
             verify: bool = false,
-            pub const meta = .{ .verify = .{ .short = 'V' } };
-        },
+        }, field.none, .{ .fields = .{ .verify = .{ .short = 'V' } } }),
         .run = noop,
     });
     const taken = try parse(arena.allocator(), &root, &.{"-V"}, .{ .version = true }, &usage);
@@ -1443,10 +1479,20 @@ test "-V is --version on the root, unless a flag takes it" {
 
 const deprecated_root = spec.command(.{
     .name = "app",
-    .flags = struct {
-        colour: bool = false,
-        color: bool = false,
-        pub const meta = .{ .colour = .{ .deprecated = "use --color" } };
+    .flags = flags: {
+        const T = struct {
+            colour: bool = false,
+            color: bool = false,
+        };
+        break :flags sets.flags(
+            T,
+            field.Set(
+                .{field.Spec(T){
+                    .fields = .{ .colour = .{ .deprecated = "use --color" } },
+                }},
+            ),
+            .{},
+        );
     },
     .subcommands = .{
         spec.command(.{ .name = "remove", .deprecated = "use delete", .run = noop }),
@@ -1528,10 +1574,9 @@ test "edge cases of words, bundles, negations, and requirements" {
     // A required flag with a variable: the variable satisfies it; an empty one does not.
     const required = comptime spec.command(.{
         .name = "app",
-        .flags = struct {
+        .flags = sets.flags(struct {
             key: []const u8,
-            pub const meta = .{ .key = .{ .env = "APP_KEY" } };
-        },
+        }, field.none, .{ .fields = .{ .key = .{ .env = "APP_KEY" } } }),
         .run = noop,
     });
     var environ: std.process.Environ.Map = .init(testing.allocator);
@@ -1560,8 +1605,10 @@ const cli_testing = @import("testing.zig");
 
 const GatedFlags = struct {
     fast: bool = false,
-    pub const meta = .{ .fast = .{ .short = 'f', .env = "FAST", .feature = "APP_FAST" } };
 };
+const gated_flags = sets.flags(GatedFlags, field.none, .{ .fields = .{
+    .fast = .{ .short = 'f', .env = "FAST", .feature = "APP_FAST" },
+} });
 
 fn gatedRun(ctx: *Context, flags: GatedFlags) !void {
     try ctx.out.print("fast={}\n", .{flags.fast});
@@ -1574,7 +1621,7 @@ fn gatedBeta(ctx: *Context) !void {
 const gated_root = spec.command(.{
     .name = "app",
     .subcommands = .{
-        spec.command(.{ .name = "go", .flags = GatedFlags, .run = gatedRun }),
+        spec.command(.{ .name = "go", .flags = gated_flags, .run = gatedRun }),
         spec.command(.{ .name = "beta", .feature = "APP_BETA", .run = gatedBeta }),
     },
 });

@@ -21,14 +21,17 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 const sys = @import("sys");
 
 const dirs = sys.dirs;
 
 const Global = struct {
     profile: bool = false,
-    pub const meta = .{ .profile = .{ .help = "Print how long each phase took" } };
 };
+const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .profile = .{ .help = "Print how long each phase took" },
+} }}), .{});
 
 const Profiler = sys.profiler.Profiler(true);
 
@@ -61,10 +64,10 @@ fn profiled(ctx: *cli.Context, next: cli.Context.Next) anyerror!void {
 
 const DirsFlags = struct {
     os: ?enum { linux, macos, windows, freebsd } = null,
-    pub const meta = .{
-        .os = .{ .help = "Show another system's directories (default: this one)" },
-    };
 };
+const dirs_flags = cli.flags(DirsFlags, field.Set(.{field.Spec(DirsFlags){ .fields = .{
+    .os = .{ .help = "Show another system's directories (default: this one)" },
+} }}), .{});
 
 fn showDirs(ctx: *cli.Context, flags: DirsFlags) !void {
     const os: dirs.Os = if (flags.os) |os| switch (os) {
@@ -97,7 +100,7 @@ fn showEnv(ctx: *cli.Context) !void {
 const NewerArgs = struct { current: []const u8, latest: []const u8 };
 
 fn newer(ctx: *cli.Context, args: NewerArgs) !void {
-    const Version = sys.version.Version;
+    const Version = sys.Version;
     const current = Version.parse(args.current) catch
         return ctx.usageError("\"{s}\" is not a version", .{args.current});
     const latest = Version.parse(args.latest) catch
@@ -111,13 +114,19 @@ fn newer(ctx: *cli.Context, args: NewerArgs) !void {
 
 const PathsFlags = struct {
     root: []const []const u8 = &.{"."},
-    pub const meta = .{ .root = .{ .help = "A directory paths may be in; repeat for more" } };
 };
+const paths_flags = cli.flags(PathsFlags, field.Set(.{field.Spec(PathsFlags){ .fields = .{
+    .root = .{ .help = "A directory paths may be in; repeat for more" },
+} }}), .{});
 
 const PathsArgs = struct {
     paths: []const []const u8,
-    pub const meta = .{ .paths = .{ .name = "path" } };
 };
+const paths_args = cli.args(
+    PathsArgs,
+    field.none,
+    .{ .fields = .{ .paths = .{ .name = "path" } } },
+);
 
 fn checkPaths(ctx: *cli.Context, flags: PathsFlags, args: PathsArgs) !void {
     const policy: sys.sandbox.Policy = .{ .roots = flags.root };
@@ -139,15 +148,17 @@ const LogFlags = struct {
     format: sys.log.Format = .text,
     level: []const u8 = "info",
     token: ?[]const u8 = null,
-    pub const meta = .{
-        .format = .{ .help = "Text for people, JSON lines for collectors" },
-        .token = .{ .secret = true, .env = "DOCTOR_TOKEN", .help = "An API token to log in with" },
-        .level = .{
-            .one_of = &.{ "trace", "debug", "info", "warn", "error" },
-            .help = "The least to show",
-        },
-    };
 };
+const log_flags = cli.flags(LogFlags, field.Set(.{field.Spec(LogFlags){ .fields = .{
+    .format = .{ .help = "Text for people, JSON lines for collectors" },
+    .token = .{ .secret = true, .help = "An API token to log in with" },
+    .level = .{
+        .help = "The least to show",
+        .checks = &.{.oneOf(&.{ "trace", "debug", "info", "warn", "error" })},
+    },
+} }}), .{ .fields = .{
+    .token = .{ .env = "DOCTOR_TOKEN" },
+} });
 
 fn showLog(ctx: *cli.Context, flags: LogFlags) !void {
     phase(ctx, "log");
@@ -186,12 +197,12 @@ fn showTrace(ctx: *cli.Context) !void {
 pub const root = cli.command(.{
     .name = "doctor",
     .summary = "Check what a program sees of its system",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = .{
         cli.command(.{
             .name = "dirs",
             .summary = "Where the app's files go",
-            .flags = DirsFlags,
+            .flags = dirs_flags,
             .run = showDirs,
         }),
         cli.command(.{ .name = "env", .summary = "Facts about the environment", .run = showEnv }),
@@ -204,14 +215,14 @@ pub const root = cli.command(.{
         cli.command(.{
             .name = "paths",
             .summary = "Whether paths stay inside allowed roots",
-            .flags = PathsFlags,
-            .args = PathsArgs,
+            .flags = paths_flags,
+            .args = paths_args,
             .run = checkPaths,
         }),
         cli.command(.{
             .name = "log",
             .summary = "Write sample logs",
-            .flags = LogFlags,
+            .flags = log_flags,
             .run = showLog,
         }),
         cli.command(.{ .name = "trace", .summary = "Continue a trace", .run = showTrace }),

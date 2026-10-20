@@ -1,16 +1,13 @@
-//! Must not compile: `.one_of` on a field that is not a string.
+//! Must not compile: `.oneOf` on a field that is not a string.
 
-const cli = @import("cli");
+const field = @import("field");
 
-const Flags = struct {
-    level: u8 = 1,
-    pub const meta = .{ .level = .{ .one_of = &[_][]const u8{ "1", "2" } } };
-};
+const Flags = struct { level: u8 = 1 };
 
-fn run(_: *cli.Context, _: Flags) !void {}
-
-const bad = cli.command(.{ .name = "app", .flags = Flags, .run = run });
+const Specs = field.Set(.{field.Spec(Flags){ .fields = .{
+    .level = .{ .checks = &.{.oneOf(&.{ "1", "2" })} },
+} }});
 
 comptime {
-    _ = bad;
+    _ = Specs;
 }

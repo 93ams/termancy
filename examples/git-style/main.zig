@@ -7,12 +7,17 @@
 
 const std = @import("std");
 const cli = @import("cli");
+const field = @import("field");
 
 /// Inherited by every command below the root.
 const Global = struct {
     verbose: bool = false,
-    pub const meta = .{ .verbose = .{ .short = 'v', .help = "Say what is happening" } };
 };
+const global_flags = cli.flags(Global, field.Set(.{field.Spec(Global){ .fields = .{
+    .verbose = .{ .help = "Say what is happening" },
+} }}), .{ .fields = .{
+    .verbose = .{ .short = 'v' },
+} });
 
 const AddArgs = struct {
     name: []const u8,
@@ -35,11 +40,13 @@ fn remoteRemove(ctx: *cli.Context, args: RemoveArgs) !void {
 const LogFlags = struct {
     format: enum { oneline, full } = .oneline,
     max_count: u8 = 3,
-    pub const meta = .{
-        .format = .{ .help = "How much of each commit to show" },
-        .max_count = .{ .short = 'n', .min = 1, .max = 50, .help = "How many commits" },
-    };
 };
+const log_flags = cli.flags(LogFlags, field.Set(.{field.Spec(LogFlags){ .fields = .{
+    .format = .{ .help = "How much of each commit to show" },
+    .max_count = .{ .help = "How many commits", .checks = &.{ .min(1), .max(50) } },
+} }}), .{ .fields = .{
+    .max_count = .{ .short = 'n' },
+} });
 
 const commits = [_][2][]const u8{
     .{ "a1b2c3d", "Add the parser" },
@@ -57,7 +64,7 @@ fn log(ctx: *cli.Context, flags: LogFlags) !void {
 pub const root = cli.command(.{
     .name = "git-style",
     .summary = "A git-style command tree",
-    .persistent_flags = Global,
+    .persistent_flags = global_flags,
     .subcommands = .{
         cli.command(.{
             .name = "remote",
@@ -78,7 +85,7 @@ pub const root = cli.command(.{
                 }),
             },
         }),
-        cli.command(.{ .name = "log", .summary = "Show commits", .flags = LogFlags, .run = log }),
+        cli.command(.{ .name = "log", .summary = "Show commits", .flags = log_flags, .run = log }),
     },
 });
 
