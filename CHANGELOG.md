@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `sys.dirs` on macOS: a relative `$TMPDIR` no longer makes the runtime directory relative
+  to the working directory; `/tmp` is used instead, as `tempDir` already did.
 - `sys.files.Store` refuses blob names Windows reads as something else: device names
   (`CON`, `NUL`, `nul.txt`, `COM1`, ...) and names ending in a dot or a space. Writing
   `nul` reported success and kept nothing; `con` wrote the blob to the console.

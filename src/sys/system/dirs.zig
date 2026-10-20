@@ -5,7 +5,8 @@
 //!   (`~/.config`), `$XDG_CACHE_HOME` (`~/.cache`), `$XDG_DATA_HOME` (`~/.local/share`),
 //!   `$XDG_STATE_HOME` (`~/.local/state`), `$XDG_RUNTIME_DIR` (no default).
 //! - macOS: `~/Library/Application Support` for config and data (state in a `state`
-//!   subdirectory), `~/Library/Caches` for cache, `$TMPDIR` (`/tmp`) for runtime.
+//!   subdirectory), `~/Library/Caches` for cache, `$TMPDIR` when absolute (else `/tmp`) for
+//!   runtime.
 //! - Windows: `%APPDATA%` for config; `%LOCALAPPDATA%` for cache, data, and state, each in
 //!   its own subdirectory; `%TEMP%` (then `%TMP%`) for runtime.
 //!
@@ -253,7 +254,7 @@ fn macos(environ: *const Environ.Map, os: Os, kind: Kind) error{HomeNotFound}!Pa
     if (xdgVar(environ, os, kind)) |dir| return .{ .base = dir };
     if (kind == .runtime) {
         const tmp = nonEmpty(environ.get("TMPDIR")) orelse "/tmp";
-        return .{ .base = tmp };
+        return .{ .base = if (isAbsolute(os, tmp)) tmp else "/tmp" };
     }
     const home = try homeDir(environ, os);
     return switch (kind) {
@@ -445,6 +446,11 @@ test "macos uses Library, TMPDIR, and honors explicit XDG" {
     defer xdg_env.deinit();
     try expectPath("/x/termancy", &xdg_env, .macos, .config);
     try expectPath("/tmp/termancy", &xdg_env, .macos, .runtime);
+
+    // A relative TMPDIR would name a directory under whatever the working directory is.
+    var relative_env = try testEnviron(&.{ .{ "HOME", "/Users/ann" }, .{ "TMPDIR", "tmp" } });
+    defer relative_env.deinit();
+    try expectPath("/tmp/termancy", &relative_env, .macos, .runtime);
 }
 
 test "windows known folders" {
