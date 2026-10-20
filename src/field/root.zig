@@ -81,7 +81,6 @@ pub const sameName = name.sameName;
 pub const editDistance = name.editDistance;
 pub const suggest = name.suggest;
 pub const join = name.join;
-pub const ordinal = name.ordinal;
 pub const max_name_len = name.max_name_len;
 
 /// Whether `S` is a `Set` of specs.

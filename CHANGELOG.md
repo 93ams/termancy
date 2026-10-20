@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new
+  `Messages.nth_value`, translated in the bundled tables, instead of an English
+  `(2nd value)`. `field.ordinal`, now unused, is gone.
 - With `App.prefix_matching`, completion descends through a prefix of a subcommand's alias
   as the parser does (`app ru <Tab>` for `serve`, alias `run`); it took names only.
 - fish completion runs the program once per Tab, not three times (each `complete`
