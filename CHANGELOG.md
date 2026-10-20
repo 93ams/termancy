@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `webauthn.verifyAssertion` (and so `verify` and `Registration.credential`) refuses
+  authenticator data flagged backed up (BS) but not backup eligible (BE), as WebAuthn
+  requires.
 - `oauth.DevicePoll.next` no longer overflows when a server that sent an `interval` near
   2^32 then answers `slow_down`; the interval stops at its largest.
 - `webauthn.Registration.credential(arena, expected)` makes the registration checks

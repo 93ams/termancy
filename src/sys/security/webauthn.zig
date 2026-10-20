@@ -318,7 +318,7 @@ pub const VerifyError = JsonObject.Error || error{
     OriginMismatch,
     /// `crossOrigin` is true and that was not allowed.
     CrossOrigin,
-    /// The authenticator data is shorter than 37 bytes.
+    /// The authenticator data is shorter than 37 bytes, or malformed.
     InvalidAuthenticatorData,
     /// The authenticator data is for another RP ID.
     RpIdMismatch,
@@ -390,10 +390,10 @@ pub const AuthenticatorData = struct {
     }
 };
 
-/// Every check of WebAuthn §7.2 that needs no stored state: client data, RP ID hash,
-/// user presence, and user verification when `expected` requires it. The signature
-/// over `authenticator_data ++ SHA-256(client_data_json)` and the signature counter are
-/// left to the caller, who holds the public key and the last count.
+/// Every check of WebAuthn §7.2 that needs no stored state: client data, RP ID hash, the
+/// backup flags, user presence, and user verification when `expected` requires it. The
+/// signature over `authenticator_data ++ SHA-256(client_data_json)` and the signature
+/// counter are left to the caller, who holds the public key and the last count.
 pub fn verifyAssertion(
     arena: Allocator,
     assertion: Assertion,
@@ -402,6 +402,10 @@ pub fn verifyAssertion(
     try verifyClientData(arena, assertion.client_data_json, expected);
     const data: AuthenticatorData = try .parse(assertion.authenticator_data);
     try data.checkRpId(expected.rp_id);
+    // Backed up (BS) but not eligible for backup (BE): no authenticator says that.
+    if (data.flags.backed_up and !data.flags.backup_eligible) {
+        return error.InvalidAuthenticatorData;
+    }
     if (!data.flags.user_present) return error.UserNotPresent;
     if (expected.user_verification == .required and !data.flags.user_verified) {
         return error.UserNotVerified;
@@ -904,6 +908,10 @@ test "verifyAssertion and the challenge check" {
     case = good;
     case.flags = 0;
     try e(error.UserNotPresent, case.verify(a));
+    case.flags = 0x11; // backed up, not eligible for backup
+    try e(error.InvalidAuthenticatorData, case.verify(a));
+    case.flags = 0x19;
+    try case.verify(a);
     case = good;
     case.expected.user_verification = .required;
     try e(error.UserNotVerified, case.verify(a));
