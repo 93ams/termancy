@@ -1502,7 +1502,7 @@ fn ordered(flags: RangeFlags, w: *std.Io.Writer) !void {
     if (flags.low > flags.high) {
         return field_.fail(
             w,
-            "--low ({d}) must not exceed --high ({d})",
+            "--low ({0}) must not exceed --high ({1})",
             .{ flags.low, flags.high },
         );
     }
@@ -2011,7 +2011,7 @@ const I18nFlags = struct {
     count: u32 = 1,
 };
 fn below100(count: u32, w: *std.Io.Writer) !void {
-    if (count >= 100) return field_.fail(w, "{d} at once is over 99", .{count});
+    if (count >= 100) return field_.fail(w, "{0} at once is over {1}", .{ count, 99 });
 }
 const i18n_flags = sets.flags(I18nFlags, field_.Set(.{field_.Spec(I18nFlags){ .fields = .{
     .count = .{ .help = "How many files", .checks = &.{.from(below100)} },
@@ -2085,7 +2085,7 @@ test "translations: help, the library's sentences, and the app's own, by locale"
     const unknown = try cli_testing.run(app, &.{"clan"}, .{ .env = &.{.{ "LANG", "de" }} });
     defer unknown.deinit();
     try testing.expect(std.mem.startsWith(u8, unknown.err, "app: unbekannter Befehl \"clan\""));
-    // A check's own words too, matched to a template for their arguments.
+    // A check's own words too, by their template, with the arguments filled in.
     const many = try cli_testing.run(app, &.{ "clean", "-n", "100" }, .{
         .env = &.{.{ "LANG", "de" }},
     });

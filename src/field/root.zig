@@ -43,6 +43,9 @@ pub const About = check.About;
 pub const Bound = check.Bound;
 pub const Error = check.Error;
 pub const fail = check.fail;
+pub const Reason = check.Reason;
+pub const render = check.render;
+pub const max_args = check.max_args;
 /// Whether `text` matches a `glob` pattern: `*` any run of bytes, `?` one byte.
 pub const matches = check.matches;
 

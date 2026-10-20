@@ -112,8 +112,9 @@ pub const Scope = enum {
 };
 
 /// Runs every check in `S` on `value` and everything in it, calling
-/// `report.fail(path: []const Segment, message: []const u8, about: ?About) !void` for each
-/// failure; `path` is empty for a check on the whole of `value`. Returns how many failed.
+/// `report.fail(path: []const Segment, reason: *const Reason, about: ?About) !void` for
+/// each failure; `path` is empty for a check on the whole of `value`. Returns how many
+/// failed.
 pub fn validate(comptime T: type, comptime S: type, value: T, report: anytype) !usize {
     var at: [max_depth]Segment = undefined;
     return walk(T, S, .every, &.{}, &.{}, value, &at, 0, report);
@@ -241,16 +242,12 @@ fn run(
     var failures: usize = 0;
     inline for (checks) |c| {
         var buffer: [512]u8 = undefined;
-        var w: std.Io.Writer = .fixed(&buffer);
-        c.run(value, &w) catch |err| switch (err) {
-            error.Invalid => {
-                failures += 1;
-                try report.fail(at, w.buffered(), c.about);
-            },
+        var reason: check.Reason = .init(&buffer);
+        c.run(value, &reason.writer) catch |err| switch (err) {
             // A message longer than the buffer is cut short rather than lost.
-            error.WriteFailed => {
+            error.Invalid, error.WriteFailed => {
                 failures += 1;
-                try report.fail(at, w.buffered(), c.about);
+                try report.fail(at, &reason, c.about);
             },
         };
     }
@@ -260,7 +257,7 @@ fn run(
 /// Runs the checks a field at `path_` of `T` has, on one value of it (one element, for a
 /// list's `.each`), writing the first failure's reason: for checking a value as it is
 /// given, such as a flag on the command line or an answer to a prompt. Checks across
-/// fields wait for `validate`.
+/// fields wait for `validate`. Give it a `Reason`'s writer to keep `fail`'s template.
 pub fn checkOne(
     comptime T: type,
     comptime S: type,
@@ -311,12 +308,12 @@ const Specs = Set(.{ app, listener });
 const Collect = struct {
     out: *std.Io.Writer,
 
-    pub fn fail(r: Collect, at: []const Segment, message: []const u8, _: ?check.About) !void {
+    pub fn fail(r: Collect, at: []const Segment, reason: *const check.Reason, _: ?check.About) !void {
         for (at) |s| switch (s) {
             .field => |f| try r.out.print("{s}.", .{f}),
             .index => |i| try r.out.print("{d}.", .{i}),
         };
-        try r.out.print(" {s}\n", .{message});
+        try r.out.print(" {s}\n", .{reason.text()});
     }
 };
 

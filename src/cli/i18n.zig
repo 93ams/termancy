@@ -20,14 +20,15 @@
 //!
 //! Help translates every summary, description, group heading, flag help, and example
 //! found in `strings`. Handlers translate their own text with `ctx.tr`, `ctx.plural`, and
-//! `ctx.translate`. A check's reason is looked up by its text, or matched to a template
-//! (`"{0} is in use"`) for the arguments it wrote (see `filledIn`).
+//! `ctx.translate`. A check's reason is looked up by the template it gave `field.fail`
+//! (`"{0} is in use"`), filled in with its arguments (see `reasonIn`).
 //! Templates mark arguments `{0}`, `{1}`, ... as `Messages` does. A plural's translation
 //! holds its forms separated by `|`, in the order of the language's `PluralRule` (for
 //! English and German, one and other; for Russian, one, few, and many).
 
 const std = @import("std");
 const Messages = @import("Messages.zig");
+const field = @import("field");
 
 /// A language tag: `de`, `pt_BR`, `en-GB`, with any `.UTF-8` or `@euro` removed.
 pub const Locale = struct {
@@ -172,71 +173,20 @@ pub fn textIn(translation: ?*const Translation, english: []const u8) []const u8 
     return t.text(english);
 }
 
-/// `english`, text already written with its arguments (a check's reason), translated by
-/// the first of `translation`'s strings it matches: exactly, or as a template whose `{0}`,
-/// `{1}`, ... stand for any text, which the translation's own `{0}`, `{1}`, ... repeat.
-/// `"must be below 100, not 250"` matches `"must be below {0}, not {1}"`. As is when
-/// nothing matches, or when there is no translation.
-pub fn filledIn(
+/// A check's reason in the user's language: the template `field.fail` was given, translated
+/// and filled in with its arguments, or else the text as a whole. As written when there is
+/// no translation for it.
+pub fn reasonIn(
     translation: ?*const Translation,
     arena: std.mem.Allocator,
-    english: []const u8,
+    reason: *const field.Reason,
 ) std.mem.Allocator.Error![]const u8 {
-    const t = translation orelse return english;
-    const exact = t.text(english);
-    if (exact.ptr != english.ptr) return exact;
-    var args: [10][]const u8 = undefined;
-    for (t.strings) |entry| {
-        const count = capture(entry[0], english, &args) orelse continue;
-        return Messages.allocRender(arena, entry[1], args[0..count]);
-    }
-    return english;
-}
-
-/// Matches `text` against `template`, putting what each `{n}` stands for in `args[n]`;
-/// how many of `args` it set, or null when `text` does not match. A template with no
-/// argument, with two arguments side by side, or with gaps in their numbers never matches.
-fn capture(template: []const u8, text: []const u8, args: *[10][]const u8) ?usize {
-    var set: [10]bool = @splat(false);
-    var t: usize = 0; // in `template`
-    var at: usize = 0; // in `text`
-    var count: usize = 0;
-    var pending: ?usize = null; // an argument waiting for the literal after it
-    while (t < template.len) {
-        const open = std.mem.indexOfScalarPos(u8, template, t, '{');
-        const literal_end = open orelse template.len;
-        const literal = template[t..literal_end];
-        if (pending) |n| {
-            if (literal.len == 0) return null;
-            // The last literal ends the text; any other is its first occurrence.
-            const found = if (literal_end == template.len)
-                if (std.mem.endsWith(u8, text[at..], literal)) text.len - literal.len else null
-            else
-                std.mem.indexOfPos(u8, text, at, literal);
-            const start = found orelse return null;
-            args[n] = text[at..start];
-            at = start + literal.len;
-            pending = null;
-        } else {
-            if (!std.mem.startsWith(u8, text[at..], literal)) return null;
-            at += literal.len;
-        }
-        const o = open orelse break;
-        const close = std.mem.indexOfScalarPos(u8, template, o, '}') orelse return null;
-        const n = std.fmt.parseUnsigned(u4, template[o + 1 .. close], 10) catch return null;
-        if (n >= args.len or set[n]) return null;
-        set[n] = true;
-        count = @max(count, n + 1);
-        pending = n;
-        t = close + 1;
-    }
-    if (pending) |n| {
-        args[n] = text[at..];
-        at = text.len;
-    }
-    if (at != text.len or count == 0) return null;
-    for (set[0..count]) |s| if (!s) return null;
-    return count;
+    const t = translation orelse return reason.text();
+    const template = reason.template orelse return t.text(reason.text());
+    const translated = t.text(template);
+    if (translated.ptr == template.ptr) return reason.text();
+    var args: [field.max_args][]const u8 = undefined;
+    return Messages.allocRender(arena, translated, reason.args(&args));
 }
 
 /// The translation for `locale` among `translations`: same language and territory, else
@@ -318,28 +268,30 @@ test "text and plural forms" {
     try testing.expectEqualStrings("b", short.plural(5, "x1", "x"));
 }
 
-test filledIn {
+test reasonIn {
     const german: Translation = .{ .locale = "de", .strings = &.{
         .{ "is in use", "ist belegt" },
-        .{ "must be below {0}, not {1}", "muss unter {0} liegen, nicht {1}" },
         .{ "{0} is taken by {1}", "{1} belegt schon {0}" },
     } };
-    const a = testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(a);
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const ar = arena.allocator();
-    try testing.expectEqualStrings("ist belegt", try filledIn(&german, ar, "is in use"));
-    try testing.expectEqualStrings(
-        "muss unter 100 liegen, nicht 250",
-        try filledIn(&german, ar, "must be below 100, not 250"),
-    );
-    try testing.expectEqualStrings(
-        "ada belegt schon port 80",
-        try filledIn(&german, ar, "port 80 is taken by ada"),
-    );
-    try testing.expectEqualStrings("must be below 100", try filledIn(&german, ar, "must be below 100"));
-    try testing.expectEqualStrings("is free", try filledIn(&german, ar, "is free"));
-    try testing.expectEqualStrings("is free", try filledIn(null, ar, "is free"));
+    var buffer: [64]u8 = undefined;
+    var taken: field.Reason = .init(&buffer);
+    _ = field.fail(&taken.writer, "{0} is taken by {1}", .{ "port 80", "ada" }) catch {};
+    try testing.expectEqualStrings("ada belegt schon port 80", try reasonIn(&german, ar, &taken));
+    try testing.expectEqualStrings("port 80 is taken by ada", try reasonIn(null, ar, &taken));
+    // An argument holding the template's own words is no trouble: nothing is matched.
+    var tricky: field.Reason = .init(&buffer);
+    _ = field.fail(&tricky.writer, "{0} is taken by {1}", .{ "a is taken by b", "c" }) catch {};
+    try testing.expectEqualStrings("c belegt schon a is taken by b", try reasonIn(&german, ar, &tricky));
+    // Written another way: translated by its text.
+    var plain: field.Reason = .init(&buffer);
+    try plain.writer.writeAll("is in use");
+    try testing.expectEqualStrings("ist belegt", try reasonIn(&german, ar, &plain));
+    var untranslated: field.Reason = .init(&buffer);
+    _ = field.fail(&untranslated.writer, "{0} is free", .{"x"}) catch {};
+    try testing.expectEqualStrings("x is free", try reasonIn(&german, ar, &untranslated));
 }
 
 test "plural rules" {

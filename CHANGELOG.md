@@ -154,9 +154,9 @@ git history.
 
 ### Added
 
-- A check's own message is translated by its text, like help and `ctx.tr`, from the app's
-  `translations`, or by a template for one with arguments: `"{0} is in use"` translates
-  `"8080 is in use"`.
+- A check's own message is translated from the app's `translations` by the template it
+  gave `field.fail` (`"{0} is in use"`, the `{0}` form `ctx.tr` takes), with its arguments
+  filled into the translation.
 - **`field`:** specs and checks (`min`, `max` on numbers or any type with `order`, `minLen`,
   `maxLen`, `oneOf`, `glob`, `from`) that describe themselves for help, docs, schemas, and
   completion; typed field paths; "did you mean" (the one edit distance `cli` and `cfg` share).

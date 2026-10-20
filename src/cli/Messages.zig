@@ -194,34 +194,8 @@ status_cannot_run: []const u8 = "A plugin was found but could not be started",
 status_interrupted: []const u8 = "Interrupted (Ctrl-C)",
 
 /// Writes `template` with `{n}` replaced by `args[n]`; a reference past the end of `args`
-/// is written as is.
-pub fn render(writer: *Writer, template: []const u8, args: []const []const u8) Writer.Error!void {
-    var i: usize = 0;
-    while (i < template.len) {
-        const c = template[i];
-        if (c == '{' and i + 1 < template.len and template[i + 1] == '{') {
-            try writer.writeByte('{');
-            i += 2;
-            continue;
-        }
-        if (c == '{') {
-            const close = std.mem.indexOfScalarPos(u8, template, i, '}') orelse {
-                try writer.writeAll(template[i..]);
-                return;
-            };
-            const index = std.fmt.parseUnsigned(usize, template[i + 1 .. close], 10) catch null;
-            if (index != null and index.? < args.len) {
-                try writer.writeAll(args[index.?]);
-            } else {
-                try writer.writeAll(template[i .. close + 1]);
-            }
-            i = close + 1;
-            continue;
-        }
-        try writer.writeByte(c);
-        i += 1;
-    }
-}
+/// is written as is. The same as a check's reason (`field.render`).
+pub const render = @import("field").render;
 
 /// `render` into a new string in `arena`.
 pub fn allocRender(
