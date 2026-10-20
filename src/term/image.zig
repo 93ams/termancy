@@ -923,6 +923,8 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
     if (@as(usize, width) * height > max_pixels) return error.UnsupportedImage;
     var canvas: Image = try .init(gpa, width, height);
     defer canvas.deinit(gpa);
+    // Each frame's copy of the canvas, or its own pixels if more (off the screen).
+    var budget: usize = 0;
     var transparent: ?u8 = null;
     while (at < data.len) {
         switch (data[at]) {
@@ -947,7 +949,8 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 at += 10;
                 if (@as(usize, fw) * fh > max_pixels) return error.UnsupportedImage;
                 // Frames past `max_pixels` in all are dropped.
-                if ((frames.items.len + 1) * canvas.pixels.len > max_pixels) break;
+                budget += @max(canvas.pixels.len, @as(usize, fw) * fh);
+                if (budget > max_pixels) break;
                 var palette = global;
                 if (flags & 0x80 != 0) {
                     const n = @as(usize, 2) << @intCast(flags & 7);
@@ -1779,6 +1782,19 @@ test "LZW round trips across table resets" {
     const back = try unlzw(gpa, stream.items, 8, data.len);
     defer gpa.free(back);
     try testing.expectEqualSlices(u8, data, back);
+}
+
+test "GIF: frames larger than the screen count toward max_pixels" {
+    const gpa = testing.allocator;
+    // A 1 by 1 screen, a 1 by 1 frame, then one of 8192 by 8192 in 12 bytes: decoded too.
+    const frames = try readGif(gpa, "GIF89a\x01\x00\x01\x00\x00\x00\x00" ++
+        "\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00" ++
+        "\x2c\x00\x00\x00\x00\x00\x20\x00\x20\x00\x02\x00;");
+    defer {
+        for (frames) |*f| f.deinit(gpa);
+        gpa.free(frames);
+    }
+    try testing.expectEqual(1, frames.len);
 }
 
 /// Decodes testdata/jpeg/`name`.jpg and compares it with the pixels libjpeg-turbo decodes

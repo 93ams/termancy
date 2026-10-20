@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A GIF's frames larger than its screen count toward `image.max_pixels`: a few kilobytes of
+  8192 by 8192 frames on a 1 by 1 screen took most of a minute to read.
 - A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new
   `Messages.nth_value`, translated in the bundled tables, instead of an English
   `(2nd value)`. `field.ordinal`, now unused, is gone.
