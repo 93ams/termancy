@@ -155,6 +155,11 @@ git history.
 
 ### Added
 
+- `Config.initFor(X, gpa)`: a configuration that knows its settings type, and its defaults,
+  from the start. `field.Reason`, a writer that keeps the template and arguments a check gave
+  `field.fail`. `input.Report.cursor` and `ansi.queryCursorPosition` (DECXCPR), and
+  `Renderer.cursorColumn`.
+
 - A check's own message is translated from the app's `translations` by the template it
   gave `field.fail` (`"{0} is in use"`, the `{0}` form `ctx.tr` takes), with its arguments
   filled into the translation.
@@ -466,8 +471,11 @@ From a review before the repository went public:
 
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
-  programs count one row a line on terminals that cut lines instead (xterm, st, the Linux
-  console: `Capability.reflows`), rather than moving up over earlier output.
+  programs count one row a line on terminals that cut lines instead, rather than moving up
+  over earlier output. A tui program learns which the terminal does from where its cursor
+  went after the first narrowing (`CSI ? 6 n`); `Capability.reflows` is the guess before
+  then, and for `term.live` and terminals that do not answer (false for xterm, st, and the
+  Linux console).
 - A tui program redraws as soon as the terminal is resized (on `SIGWINCH`), instead of at
   its next size check, up to 200 ms later.
 - macOS: bash completion with more than one word before the cursor (bash 3.2 joined them

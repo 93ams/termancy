@@ -403,6 +403,12 @@ pub fn Program(comptime Model: type) type {
         screen_switch: ?bool = null,
         /// The first row of the laid-out frame that is on screen.
         frame_first: usize = 0,
+        /// After the terminal narrowed: where its cursor would be if it rewrapped the
+        /// frame's lines, and if it cut them, while its reply to where the cursor is, is
+        /// awaited (see `probeReflow`). Frames wait for it, until `deadline`.
+        reflow_probe: ?ReflowProbe = null,
+        /// The terminal showed, by where its cursor went, whether it rewraps lines.
+        reflow_learned: bool = false,
 
         const Self = @This();
 
@@ -416,6 +422,9 @@ pub fn Program(comptime Model: type) type {
         pub const Error = ViewError || Io.Writer.Error || Allocator.Error;
 
         const Timer = struct { deadline: Io.Timestamp, id: u32, seq: u64 };
+        const ReflowProbe = struct { rewrapped: usize, cut: usize, deadline: Io.Timestamp };
+        /// How long a redraw waits for the terminal to say where its cursor went.
+        const reflow_wait: Io.Duration = .fromMilliseconds(100);
         /// Why the terminal is lent out.
         pub const Release = union(enum) { handoff: u32, suspend_process };
         const State = enum { ready, running, quitting, done };
@@ -602,6 +611,14 @@ pub fn Program(comptime Model: type) type {
             if (p.state != .running) return;
             assert(now.nanoseconds >= p.now.nanoseconds);
             p.now = now;
+            // No answer in time: the guess stands, and a terminal that does not answer is
+            // not asked again.
+            if (p.reflow_probe) |probe| {
+                if (probe.deadline.nanoseconds <= now.nanoseconds) {
+                    p.reflow_probe = null;
+                    p.reflow_learned = true;
+                }
+            }
             if (p.escapeDeadline()) |deadline| {
                 if (deadline.nanoseconds <= now.nanoseconds) {
                     while (p.state == .running) try p.dispatch(p.decoder.flush() orelse break);
@@ -620,11 +637,48 @@ pub fn Program(comptime Model: type) type {
         pub fn resize(p: *Self, size: Size) Error!void {
             if (p.state != .running) return;
             if (std.meta.eql(size, p.size)) return;
+            try p.probeReflow(size);
             p.size = size;
             p.dirty = true;
             p.redraw = true;
             try p.apply(.{ .resize = size });
             try p.settle();
+        }
+
+        /// After the terminal narrowed to `size`, asks where its cursor went, when its column
+        /// tells whether the terminal rewrapped the frame's lines or cut them: the answer
+        /// replaces `Capability.reflows`'s guess for every later redraw (`learnReflow`).
+        /// There is no asking a terminal which it does; a terminal that does not answer
+        /// keeps the guess.
+        fn probeReflow(p: *Self, size: Size) Io.Writer.Error!void {
+            if (p.reflow_learned or p.reflow_probe != null) return;
+            if (p.alt_screen or !p.options.capability.escapes) return;
+            if (size.width == 0 or size.width >= p.size.width) return;
+            const column = p.renderer.cursorColumn() orelse return;
+            const columns: usize = size.width;
+            // Inside the narrower width, the cursor stays put either way.
+            if (column < columns) return;
+            const rewrapped = column % columns;
+            const cut = columns - 1;
+            if (rewrapped == cut) return;
+            try ansi.queryCursorPosition(p.out);
+            try p.out.flush();
+            p.reflow_probe = .{
+                .rewrapped = rewrapped,
+                .cut = cut,
+                .deadline = p.now.addDuration(reflow_wait),
+            };
+        }
+
+        /// The terminal's answer to `probeReflow`: the cursor's column says which it did.
+        /// The held redraw goes out when the input is settled.
+        fn learnReflow(p: *Self, column: usize) void {
+            const probe = p.reflow_probe orelse return;
+            p.reflow_probe = null;
+            if (column == probe.rewrapped or column == probe.cut) {
+                p.renderer.options.reflows = column == probe.rewrapped;
+                p.reflow_learned = true;
+            }
         }
 
         /// Ends the program without the model: as on quit, but `interrupted` is unchanged.
@@ -639,6 +693,9 @@ pub fn Program(comptime Model: type) type {
         /// `max_fps` held back.
         pub fn nextDeadline(p: *const Self) ?Io.Timestamp {
             var best = p.escapeDeadline();
+            if (p.reflow_probe) |probe| {
+                if (best == null or probe.deadline.nanoseconds < best.?.nanoseconds) best = probe.deadline;
+            }
             for (p.timers.items) |timer| {
                 if (best == null or timer.deadline.nanoseconds < best.?.nanoseconds) {
                     best = timer.deadline;
@@ -691,7 +748,13 @@ pub fn Program(comptime Model: type) type {
                 .paste => |text| try p.apply(.{ .paste = text }),
                 .focus_in => try p.apply(.{ .focus = true }),
                 .focus_out => try p.apply(.{ .focus = false }),
-                .report => |report| try p.apply(.{ .report = report }),
+                .report => |report| {
+                    // The answer to `probeReflow` is the program's; any other, the model's.
+                    if (report == .cursor and p.reflow_probe != null) {
+                        return p.learnReflow(report.cursor.column);
+                    }
+                    try p.apply(.{ .report = report });
+                },
             }
         }
 
@@ -783,6 +846,8 @@ pub fn Program(comptime Model: type) type {
         /// Draws the view if it changed, then tears down if the program is quitting.
         fn settle(p: *Self) Error!void {
             if (p.state == .ready or p.state == .done or p.released) return;
+            // How far up the redraw starts waits on the terminal's answer.
+            if (p.reflow_probe != null and p.state == .running) return;
             try p.render();
             if (p.state == .quitting) try p.finish();
         }

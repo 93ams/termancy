@@ -141,6 +141,12 @@ pub fn queryKittyKeyboard(w: *Writer) Writer.Error!void {
     try w.writeAll(csi ++ "?u");
 }
 
+/// Asks where the cursor is, in the DEC form (DECXCPR), whose reply cannot be taken for a
+/// key (`input.Report.cursor`); terminals without it do not reply.
+pub fn queryCursorPosition(w: *Writer) Writer.Error!void {
+    try w.writeAll(csi ++ "?6n");
+}
+
 /// Asks for the primary device attributes (DA1), which every terminal answers
 /// (`input.Report.device_attributes`). Sent after other queries, its reply marks the end
 /// of theirs.

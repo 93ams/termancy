@@ -34,6 +34,9 @@ showing: bool = false,
 cursor_row: usize = 0,
 /// The column the cursor is on, while known.
 cursor_column: ?usize = null,
+/// With `cursor_column` null: the cursor is just after the end of the row it is on, which
+/// was just written; otherwise where it is is not known.
+cursor_after_row: bool = false,
 
 /// Where frames go.
 pub const Mode = enum {
@@ -96,6 +99,7 @@ pub fn draw(
         try out.finish();
         r.cursor_row = next.rows -| 1;
         r.cursor_column = null;
+        r.cursor_after_row = true;
     } else {
         try r.drawChanges(w, next);
     }
@@ -116,6 +120,7 @@ fn drawChanges(
             try r.moveTo(w, row, 0, true);
             for (next.row(row)[0..next.rowEnd(row)]) |*c| try out.cell(next, c);
             r.cursor_column = null;
+            r.cursor_after_row = true;
             continue;
         }
         const new_end = next.rowEnd(row);
@@ -146,6 +151,7 @@ fn drawChanges(
             try r.moveTo(w, row, start, false);
             for (next.row(row)[start..end]) |*cell| try out.cell(next, cell);
             r.cursor_column = if (end >= next.width) null else end;
+            r.cursor_after_row = false;
             c = end;
         }
         if (old_end > new_end) {
@@ -255,6 +261,16 @@ pub fn forget(r: *Renderer) void {
     r.showing = false;
     r.cursor_row = 0;
     r.cursor_column = 0;
+}
+
+/// The column the cursor is on, when it is known for sure: not after a row that fills the
+/// width, where terminals differ in where they leave it.
+pub fn cursorColumn(r: *const Renderer) ?usize {
+    if (!r.showing) return null;
+    if (r.cursor_column) |column| return column;
+    if (!r.cursor_after_row) return null;
+    const end = r.shown.rowEnd(r.cursor_row);
+    return if (end < r.shown.width) end else null;
 }
 
 /// Rows of the frame on screen.
