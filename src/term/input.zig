@@ -194,7 +194,9 @@ pub const Mouse = struct {
 pub const Event = union(enum) {
     key: Key,
     mouse: Mouse,
-    /// Bracketed paste. Points into the decoder's buffer: valid until the next `feed`.
+    /// Bracketed paste. Points into the decoder's buffer: valid until the next `feed`. A
+    /// paste longer than about a MiB arrives as several, in order, each to be inserted
+    /// after the last; none splits a UTF-8 character or a CR LF.
     paste: []const u8,
     focus_in,
     focus_out,
@@ -236,6 +238,10 @@ pub const Report = union(enum) {
 
 const paste_start = "\x1b[200~";
 const paste_end = "\x1b[201~";
+
+/// The most of a paste buffered before it goes out as a `paste` event, the rest following
+/// in more: memory stays bounded however long a paste runs, or if its end never comes.
+const max_paste = 1 << 20;
 
 /// A sequence longer than this without a final byte is garbage, not a sequence still
 /// arriving; its ESC is dropped so decoding can move on.
@@ -302,7 +308,18 @@ pub const Decoder = struct {
                 const from = d.paste_scanned -| (paste_end.len - 1);
                 const end = std.mem.indexOfPos(u8, rest, from, paste_end) orelse {
                     d.paste_scanned = rest.len;
-                    return null;
+                    if (rest.len <= max_paste) return null;
+                    // Too long to hold: out goes what is buffered, but the start of a
+                    // marker still arriving, a character cut short, or a CR its LF may
+                    // follow.
+                    var n = rest.len - (paste_end.len - 1);
+                    for (0..4) |_| {
+                        if (rest[n] & 0xc0 != 0x80 and rest[n - 1] != '\r') break;
+                        n -= 1;
+                    }
+                    d.start += n;
+                    d.paste_scanned -= n;
+                    return .{ .paste = rest[0..n] };
                 };
                 d.pasting = false;
                 d.paste_scanned = 0;
@@ -985,6 +1002,36 @@ test "Decoder: a paste arriving in pieces, and an unfinished paste survives flus
     try decoder.feed("1~");
     try testing.expectEqualStrings("abcdef", decoder.next().?.paste);
     try testing.expectEqual(null, decoder.next());
+}
+
+test "Decoder: a paste longer than max_paste arrives whole, in pieces, in bounded memory" {
+    var decoder: Decoder = .init(testing.allocator);
+    defer decoder.deinit();
+    const text = try testing.allocator.alloc(u8, (3 * max_paste / 6 + 1) * 6); // whole characters
+    defer testing.allocator.free(text);
+    for (text, 0..) |*c, i| c.* = "\xc3\xa9\r\nab"[i % 6];
+    var got: std.ArrayList(u8) = .empty;
+    defer got.deinit(testing.allocator);
+    var key: ?Key = null;
+    const read = 4093; // not a multiple of the pattern, so pieces end everywhere
+    const input = try std.mem.concat(testing.allocator, u8, &.{ paste_start, text, paste_end, "x" });
+    defer testing.allocator.free(input);
+    var at: usize = 0;
+    while (at < input.len) : (at += read) {
+        try decoder.feed(input[at..@min(at + read, input.len)]);
+        while (decoder.next()) |event| switch (event) {
+            .paste => |piece| {
+                try testing.expect(std.unicode.utf8ValidateSlice(piece));
+                if (decoder.pasting) try testing.expect(piece[piece.len - 1] != '\r');
+                try got.appendSlice(testing.allocator, piece);
+            },
+            .key => |k| key = k,
+            else => return error.TestUnexpectedResult,
+        };
+        try testing.expect(decoder.buffer.items.len - decoder.start <= max_paste + read);
+    }
+    try testing.expectEqualSlices(u8, text, got.items);
+    try testing.expect(key.?.matches("x"));
 }
 
 test "Decoder: a paste is searched once for its end, wherever the reads split it" {

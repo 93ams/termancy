@@ -478,7 +478,9 @@ From a review before the repository went public:
   cut between codepoints, not inside one, so the rest of the row is no longer drawn a
   column off.
 - `term.input`: a bracketed paste arriving in many reads is searched for its end marker
-  once, not again on every read (an 8 MB paste took seconds to decode).
+  once, not again on every read (an 8 MB paste took seconds to decode). A paste past
+  1 MiB arrives as several `paste` events in order, so memory stays bounded even when its
+  end marker never comes.
 - Windows: `Terminal.enterRaw` puts the console modes back when a later step fails,
   instead of leaving the console without echo.
 - `term.Pty.deinit` sends `SIGKILL` to the program's process group when it ignores
