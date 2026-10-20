@@ -411,7 +411,7 @@ const Report = struct {
     pub fn fail(
         r: Report,
         at: []const field_.Segment,
-        message: []const u8,
+        reason: *const field_.Reason,
         about: ?field_.About,
     ) !void {
         var path_buffer: [256]u8 = undefined;
@@ -425,7 +425,7 @@ const Report = struct {
             .index => |i| index = i,
         };
         // A check's own words, in the user's language when the app translates them.
-        const said = try i18n.filledIn(r.ctx.translation, r.ctx.arena, message);
+        const said = try i18n.reasonIn(r.ctx.translation, r.ctx.arena, reason);
         if (path.end == 0) return r.ctx.invalid("{s}", .{said});
         var label_buffer: [256]u8 = undefined;
         var label = r.labelOf(path.buffered(), &label_buffer);

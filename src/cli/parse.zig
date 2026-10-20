@@ -528,14 +528,14 @@ const Parser = struct {
         const flag = occurrence.flag;
         const validate = flag.validate orelse return;
         var buffer: [256]u8 = undefined;
-        var reason: std.Io.Writer = .fixed(&buffer);
+        var reason: field.Reason = .init(&buffer);
         var about: ?field.About = null;
-        validate(value, &reason, &about) catch |err| switch (err) {
+        validate(value, &reason.writer, &about) catch |err| switch (err) {
             error.Invalid, error.WriteFailed => {
                 const shown = flag.shownValue(value);
                 const label = try p.flagLabel(occurrence);
                 const m = p.messages();
-                const said = try i18n.filledIn(p.options.translation, p.arena, reason.buffered());
+                const said = try i18n.reasonIn(p.options.translation, p.arena, &reason);
                 const a = about orelse return p.fail(
                     m.invalid_value,
                     &.{ shown, label, try p.arena.dupe(u8, said) },

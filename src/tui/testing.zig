@@ -798,16 +798,47 @@ test "Driver: resize redraws and tells the model" {
     try d.resize(.{ .width = 30, .height = 8 }); // the same size: nothing to do
 }
 
-test "Driver: after narrowing, the erase counts the rows the old frame reflowed into" {
+test "Driver: after narrowing, the terminal's cursor says whether the old frame reflowed" {
+    // The cursor ends the frame after "  cherry", on column 8; at 6 wide it would be on
+    // column 2 if the terminal rewrapped the lines, and on 5 (the last) if it cut them.
+    const Case = struct { reply: []const u8, erase: []const u8 };
+    for ([_]Case{
+        // Rewrapped: each 7- and 8-column line takes 2 rows.
+        .{ .reply = "\x1b[?5;3R", .erase = "\x1b[?2026h\r\x1b[5A\x1b[J" },
+        // Cut: a row each.
+        .{ .reply = "\x1b[?3;6R", .erase = "\x1b[?2026h\r\x1b[2A\x1b[J" },
+    }) |case| {
+        var d: MenuDriver = undefined;
+        try startMenu(&d, .{ .program = .{ .size = .{ .width = 20, .height = 10 } } });
+        defer d.deinit();
+        const before = d.outputBytes().len;
+        try d.program.resize(.{ .width = 6, .height = 10 });
+        // The redraw waits for the answer.
+        try testing.expectEqualStrings("\x1b[?6n", d.outputBytes()[before..]);
+        try d.feed(case.reply);
+        try testing.expect(std.mem.startsWith(u8, d.outputBytes()[before + 5 ..], case.erase));
+        // Learned: the next narrowing asks nothing.
+        const again = d.outputBytes().len;
+        try d.program.resize(.{ .width = 4, .height = 10 });
+        try testing.expect(std.mem.indexOf(u8, d.outputBytes()[again..], "\x1b[?6n") == null);
+    }
+}
+
+test "Driver: a terminal that does not answer keeps the guess, after a moment" {
     var d: MenuDriver = undefined;
     try startMenu(&d, .{ .program = .{ .size = .{ .width = 20, .height = 10 } } });
     defer d.deinit();
     const before = d.outputBytes().len;
-    // A narrower terminal reflows the old frame: each 7- and 8-column line takes 2 rows.
     try d.program.resize(.{ .width = 6, .height = 10 });
-    try testing.expect(
-        std.mem.startsWith(u8, d.outputBytes()[before..], "\x1b[?2026h\r\x1b[5A\x1b[J"),
-    );
+    try d.advance(.fromMilliseconds(99));
+    try testing.expectEqualStrings("\x1b[?6n", d.outputBytes()[before..]);
+    try d.advance(.fromMilliseconds(1));
+    // `Capability.reflows`, true by default: the rewrapped rows.
+    try testing.expect(std.mem.startsWith(u8, d.outputBytes()[before + 5 ..], "\x1b[?2026h\r\x1b[5A\x1b[J"));
+    // Not asked again.
+    const again = d.outputBytes().len;
+    try d.program.resize(.{ .width = 4, .height = 10 });
+    try testing.expect(std.mem.indexOf(u8, d.outputBytes()[again..], "\x1b[?6n") == null);
 }
 
 test "Driver: without escapes, only the final frame is written, as plain text" {

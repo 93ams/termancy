@@ -216,6 +216,8 @@ pub const Report = union(enum) {
     /// The primary device attributes, from `ansi.queryDeviceAttributes`. Every terminal
     /// replies, and in order, so this marks the end of the replies to queries sent before it.
     device_attributes,
+    /// Where the cursor is, counting from 0 (DECXCPR), from `ansi.queryCursorPosition`.
+    cursor: struct { row: u16, column: u16 },
 
     /// What DECRPM says about a mode.
     pub const ModeStatus = enum(u3) {
@@ -549,7 +551,8 @@ fn parseCsi(bytes: []const u8) ?Csi {
     return null;
 }
 
-/// A reply in `CSI ? ...` form: DECRPM, kitty keyboard flags, or device attributes.
+/// A reply in `CSI ? ...` form: DECRPM, kitty keyboard flags, device attributes, or the
+/// cursor's position.
 fn decodeReport(csi: Csi) Decoded {
     const report: Report = switch (csi.final) {
         'y' => if (csi.intermediate == '$' and csi.count == 2 and csi.params[1] <= 4) .{
@@ -560,6 +563,12 @@ fn decodeReport(csi: Csi) Decoded {
         } else return .{ .skip = csi.len },
         'u' => .{ .kitty_keyboard = std.math.cast(u8, csi.param(0, 0)) orelse 0 },
         'c' => .device_attributes,
+        // `CSI ? row ; column R`, or with a page after (xterm): the `?` keeps it apart from
+        // a key such as Shift-F3 (`CSI 1 ; 2 R`).
+        'R' => if (csi.count >= 2) .{ .cursor = .{
+            .row = std.math.cast(u16, csi.params[0] -| 1) orelse return .{ .skip = csi.len },
+            .column = std.math.cast(u16, csi.params[1] -| 1) orelse return .{ .skip = csi.len },
+        } } else return .{ .skip = csi.len },
         else => return .{ .skip = csi.len },
     };
     return .{ .event = .{ .event = .{ .report = report }, .len = csi.len } };
@@ -690,6 +699,7 @@ fn encodeReport(w: *Writer, report: Report) Writer.Error!void {
         .mode => |m| try w.print("\x1b[?{d};{d}$y", .{ m.mode, @backingInt(m.status) }),
         .kitty_keyboard => |flags| try w.print("\x1b[?{d}u", .{flags}),
         .device_attributes => try w.writeAll("\x1b[?62;22c"),
+        .cursor => |at| try w.print("\x1b[?{d};{d}R", .{ @as(u32, at.row) + 1, @as(u32, at.column) + 1 }),
     }
 }
 
@@ -828,6 +838,7 @@ fn writeEvent(w: *Writer, event: Event) !void {
             .mode => |m| try w.print("[mode {d} {t}]", .{ m.mode, m.status }),
             .kitty_keyboard => |flags| try w.print("[kitty {d}]", .{flags}),
             .device_attributes => try w.writeAll("[device attributes]"),
+            .cursor => |at| try w.print("[cursor {d},{d}]", .{ at.row, at.column }),
         },
     }
 }
@@ -1100,7 +1111,7 @@ fn randomEvent(random: std.Random) Event {
             },
         } },
         4 => .{ .paste = "pasted \x1b[A text" },
-        5 => .{ .report = switch (random.uintLessThan(u8, 5)) {
+        5 => .{ .report = switch (random.uintLessThan(u8, 6)) {
             0 => .{ .foreground = .{
                 .r = random.int(u8),
                 .g = random.int(u8),
@@ -1116,6 +1127,7 @@ fn randomEvent(random: std.Random) Event {
                 .status = random.enumValue(Report.ModeStatus),
             } },
             3 => .{ .kitty_keyboard = random.int(u8) },
+            4 => .{ .cursor = .{ .row = random.int(u16) % 999, .column = random.int(u16) % 999 } },
             else => .device_attributes,
         } },
         else => if (random.boolean()) .focus_in else .focus_out,

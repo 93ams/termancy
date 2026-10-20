@@ -28,8 +28,9 @@ git history.
   follows keys a settings type renamed; `bindFlags` now leaves out every record whose key
   the configuration does not know (`setFlag` still sets any).
 - `Config.setDefaults` takes the settings type first, and is only for defaults other than
-  the struct's: `decode` registers a settings type and its own defaults by itself, and
-  `Config.register(X)` does so earlier. `setDefaults(X, value)` replaces what the struct's
+  the struct's: `Config.initFor(X, gpa)` makes a configuration that knows a settings type
+  and its defaults from the start (`decode` registers its type by itself, and
+  `Config.register(X)` does so on a configuration made with `init`). `setDefaults(X, value)` replaces what the struct's
   defaults set at those keys rather than merging with them.
 - A layer naming another variant of a choice replaces the lower layer's, instead of both
   being set ("set only one of disk and s3").
@@ -154,9 +155,14 @@ git history.
 
 ### Added
 
-- A check's own message is translated by its text, like help and `ctx.tr`, from the app's
-  `translations`, or by a template for one with arguments: `"{0} is in use"` translates
-  `"8080 is in use"`.
+- `Config.initFor(X, gpa)`: a configuration that knows its settings type, and its defaults,
+  from the start. `field.Reason`, a writer that keeps the template and arguments a check gave
+  `field.fail`. `input.Report.cursor` and `ansi.queryCursorPosition` (DECXCPR), and
+  `Renderer.cursorColumn`.
+
+- A check's own message is translated from the app's `translations` by the template it
+  gave `field.fail` (`"{0} is in use"`, the `{0}` form `ctx.tr` takes), with its arguments
+  filled into the translation.
 - **`field`:** specs and checks (`min`, `max` on numbers or any type with `order`, `minLen`,
   `maxLen`, `oneOf`, `glob`, `from`) that describe themselves for help, docs, schemas, and
   completion; typed field paths; "did you mean" (the one edit distance `cli` and `cfg` share).
@@ -465,8 +471,11 @@ From a review before the repository went public:
 
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
-  programs count one row a line on terminals that cut lines instead (xterm, st, the Linux
-  console: `Capability.reflows`), rather than moving up over earlier output.
+  programs count one row a line on terminals that cut lines instead, rather than moving up
+  over earlier output. A tui program learns which the terminal does from where its cursor
+  went after the first narrowing (`CSI ? 6 n`); `Capability.reflows` is the guess before
+  then, and for `term.live` and terminals that do not answer (false for xterm, st, and the
+  Linux console).
 - A tui program redraws as soon as the terminal is resized (on `SIGWINCH`), instead of at
   its next size check, up to 200 ms later.
 - macOS: bash completion with more than one word before the cursor (bash 3.2 joined them

@@ -60,7 +60,7 @@ fn boundedWait(flags: SendFlags, w: *std.Io.Writer) !void {
     const worst = flags.timeout.ns * (@as(u64, flags.retries) + 1);
     if (worst > 5 * std.time.ns_per_min) return field_.fail(
         w,
-        "--timeout {f} with --retries {d} could take {f}; at most 5m is allowed",
+        "--timeout {0} with --retries {1} could take {2}; at most 5m is allowed",
         .{ flags.timeout, flags.retries, cfg.Duration{ .ns = worst } },
     );
 }

@@ -377,10 +377,9 @@ const PtyCase = struct {
     then_wait_for: []const u8 = "",
     then_count: u8 = 1,
     then_keys: []const u8 = "",
-    /// Needs bash, for job control (`set -m`, `fg`); skipped without it, and on macOS, where
-    /// bash under BSD `script` does not resume a stopped job (the program stops, nothing
-    /// runs `fg`).
-    bash: bool = false,
+    /// Run under `test/jobctl.zig` (`$JOBCTL`), which stops and continues the command as a
+    /// shell's job control does.
+    jobctl: bool = false,
 };
 
 /// `cfg edit` of a fresh `app.toml` holding `a = 1`, with `reedit.sh` as the editor (a
@@ -460,6 +459,14 @@ const pty_cases = [_]PtyCase{
     .{
         .name = "pager from standard input: esc",
         .command = "printf 'text\\n' | \"$TERMANCY\" ui pager",
+        .keys = "\\033",
+        .status = 1,
+    },
+    .{
+        // No standard stream a terminal: the keys come through the controlling terminal
+        // (on macOS, its own device, which a lone Esc must not wait on).
+        .name = "pager with every stream redirected: esc",
+        .command = "printf 'text\\n' | \"$TERMANCY\" ui pager 2>/dev/null",
         .keys = "\\033",
         .status = 1,
     },
@@ -545,16 +552,16 @@ const pty_cases = [_]PtyCase{
         .stdout = "one\nappended-line\n",
     },
     .{
-        // Ctrl-Z stops the process group; the shell's `fg` continues it, and it redraws
-        // (the third frame) before enter chooses.
+        // Ctrl-Z stops the process group; jobctl continues it in the foreground, as `fg`
+        // does, and it redraws (the third frame) before enter chooses.
         .name = "choose: Ctrl-Z suspends, fg resumes",
-        .command = "bash -c 'set -m; \"$TERMANCY\" ui choose a b c; fg > /dev/null'",
+        .command = "\"$JOBCTL\" \"$TERMANCY\" ui choose a b c",
         .keys = "j\\032",
         .then_wait_for = "2026l",
         .then_count = 3,
         .then_keys = "\\r",
         .stdout = "b\n",
-        .bash = true,
+        .jobctl = true,
     },
     .{
         .name = "help taller than the terminal goes through $PAGER",
@@ -590,7 +597,7 @@ const pty_cases = [_]PtyCase{
 /// Works with util-linux `script` (`-qfc command log`) and BSD `script`, as macOS has it
 /// (`-qF log command...`); the status goes through a file, since only util-linux has `-e`.
 const pty_driver =
-    \\termancy=$1 keys=$2 command=$3 wait=$4 then_wait=$5 then_keys=$6 then_count=$7
+    \\termancy=$1 keys=$2 command=$3 wait=$4 then_wait=$5 then_keys=$6 then_count=$7 jobctl=$8
     \\dir=$(mktemp -d) || exit 99
     \\trap 'rm -f "$dir/log" "$dir/out" "$dir/status"; rmdir "$dir"' EXIT
     \\# A minute at most: with `timeout`, else perl's alarm (macOS has no `timeout`).
@@ -620,7 +627,7 @@ const pty_driver =
     \\# A handler (not `trap '' INT`, which children would inherit) keeps this shell alive
     \\# to record the status when Ctrl-C interrupts the command.
     \\inner="trap : INT; $command > \"$dir/out\"; echo \$? > \"$dir/status\""
-    \\export TERMANCY="$termancy"
+    \\export TERMANCY="$termancy" JOBCTL="$jobctl"
     \\if script --version > /dev/null 2>&1; then
     \\  feed | limit script -qfc "$inner" "$dir/log" > /dev/null
     \\else
@@ -648,8 +655,12 @@ pub fn addCases(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.St
     };
     const sh = b.findProgram(.{ .names = &.{"sh"} }) orelse return;
     _ = b.findProgram(.{ .names = &.{"script"} }) orelse return;
-    const bash = os == .linux and b.findProgram(.{ .names = &.{"bash"} }) != null;
-    for (pty_cases) |case| if (bash or !case.bash) addPtyCase(b, exe, step, sh, case);
+    const jobctl = b.addExecutable(.{ .name = "jobctl", .root_module = b.createModule(.{
+        .root_source_file = b.path("test/jobctl.zig"),
+        .target = b.graph.host,
+        .link_libc = true,
+    }) });
+    for (pty_cases) |case| addPtyCase(b, exe, step, sh, case, if (case.jobctl) jobctl else null);
 }
 
 /// A run of termancy, under `setsid` when given.
@@ -684,12 +695,14 @@ fn addPtyCase(
     step: *std.Build.Step,
     sh: []const u8,
     case: PtyCase,
+    jobctl: ?*std.Build.Step.Compile,
 ) void {
     const run = std.Build.Step.Run.create(b, b.fmt("e2e: tui in a terminal: {s}", .{case.name}));
     run.addArgs(&.{ sh, "-c", pty_driver, "sh" });
     run.addArtifactArg(exe);
     run.addArgs(&.{ case.keys, case.command, case.wait_for });
     run.addArgs(&.{ case.then_wait_for, case.then_keys, b.fmt("{d}", .{case.then_count}) });
+    if (jobctl) |j| run.addArtifactArg(j) else run.addArg("");
     run.setCwd(b.path("test/fixtures"));
     run.clearEnvironment();
     run.color = .manual;

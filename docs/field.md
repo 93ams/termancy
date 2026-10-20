@@ -40,7 +40,9 @@ value. A tagged union's spec has one entry per variant.
 ## Checks
 
 A check is a plain function, `fn (V, *std.Io.Writer) !void`, that writes why a value is wrong
-and returns `error.Invalid`; `field.fail(w, fmt, args)` does both. It imports nothing from
+and returns `error.Invalid`; `field.fail(w, template, args)` does both, with `{0}`, `{1}`,
+... for the arguments (`field.fail(w, "{0} is in use", .{port})`), so `cli` can translate
+the template and fill the arguments in. It imports nothing from
 `cli` or `cfg`. `.from(f)` makes it a check; the built-in ones are written the same way, as
 decl literals:
 

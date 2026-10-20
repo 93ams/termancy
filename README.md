@@ -99,7 +99,7 @@ const serve_flags = cli.flags(ServeFlags, Specs, .{ .fields = .{
 // Defaults, then the file, then APP_* variables, then the flags.
 fn load(ctx: *cli.Context) !Settings {
     const flags = try ctx.flags(ServeFlags);
-    var config: cfg.Config = .init(ctx.arena);
+    var config: cfg.Config = try .initFor(settings, ctx.arena);
     if (flags.config) |file| try config.loadFile(ctx.io, .cwd(), file, null, null);
     config.useEnv(ctx.environ);
     try config.automaticEnv("APP"); // APP_PORT=9000

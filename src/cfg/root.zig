@@ -13,7 +13,7 @@
 //!     .token = .{ .help = "API token", .secret = true },
 //! } }}), .{ .fields = .{ .token = .{ .env = "APP_TOKEN" } } });
 //!
-//! var config: cfg.Config = .init(gpa);
+//! var config: cfg.Config = try .initFor(app, gpa);
 //! defer config.deinit();
 //! if (try config.findFile(io, .{
 //!     .name = "app",
