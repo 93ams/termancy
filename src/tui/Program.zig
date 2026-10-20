@@ -331,7 +331,8 @@ pub const Outcome = struct {
     interrupted: bool,
 };
 
-/// How often `run` checks the terminal size while idle, in the absence of a resize signal.
+/// How often `run` checks the terminal size while idle, which a resize signal (`winch`)
+/// otherwise makes it do at once.
 const resize_poll: Io.Duration = .fromMilliseconds(200);
 
 /// A program running `Model`, which must declare `update` and `view` (see the file header).
@@ -1025,7 +1026,8 @@ pub fn Program(comptime Model: type) type {
 
         /// Runs the program on `terminal` until it quits: raw mode, the event loop, and
         /// restoring the terminal however the loop ends. Reads input with a timeout so
-        /// timers fire on time; checks the terminal size every 200 ms. With an `Io`
+        /// timers fire on time; checks the terminal size on a resize signal, and every
+        /// 200 ms (on Windows, or with another program listening for the signal). With an `Io`
         /// that cannot wait on a read and a clock at once, timers fire only when input
         /// arrives.
         pub fn run(p: *Self, terminal: *Terminal) RunError!Outcome {
@@ -1045,12 +1047,21 @@ pub fn Program(comptime Model: type) type {
             }
             // And what this one leaves, for the next.
             defer terminal.unread(p.decoder.buffer.items[p.decoder.start..]);
-            var storage: [1]Io.Operation.Storage = undefined;
+            // Slot 0 reads the terminal; slot 1, resize signals (see `winch`).
+            var storage: [2]Io.Operation.Storage = undefined;
             var batch: Io.Batch = .init(&storage);
             defer batch.cancel(io);
             var buffer: [1024]u8 = undefined;
             var data = [1][]u8{&buffer};
             var armed = false;
+            const resizes: ?Io.File = if (builtin.os.tag == .windows) null else if (winch.listen()) |fd|
+                .{ .handle = fd, .flags = .{ .nonblocking = false } }
+            else
+                null;
+            defer if (resizes != null) winch.stop();
+            var signal_buffer: [64]u8 = undefined;
+            var signal_data = [1][]u8{&signal_buffer};
+            var signal_armed = false;
             var jobs: Jobs = .{ .gpa = p.gpa, .io = io };
             defer jobs.cancelAll();
             while (!p.done()) {
@@ -1058,14 +1069,15 @@ pub fn Program(comptime Model: type) type {
                 try jobs.collect(p);
                 if (p.done()) break;
                 if (p.pending != null) {
-                    if (armed) {
+                    if (armed or signal_armed) {
                         // Stop reading, so the input goes to whoever has the terminal.
                         batch.cancel(io);
                         while (batch.next()) |completion| {
                             const n = completion.result.file_read_streaming catch 0;
-                            try p.decoder.feed(buffer[0..n]);
+                            if (completion.index == 0) try p.decoder.feed(buffer[0..n]);
                         }
                         armed = false;
+                        signal_armed = false;
                     }
                     try p.lend(terminal);
                     p.now = .now(io, .awake);
@@ -1099,10 +1111,22 @@ pub fn Program(comptime Model: type) type {
                     });
                     armed = true;
                 }
+                if (resizes) |file| if (!signal_armed) {
+                    batch.addAt(1, .{
+                        .file_read_streaming = .{ .file = file, .data = &signal_data },
+                    });
+                    signal_armed = true;
+                };
                 try p.wait(io, &batch, busy);
                 p.now = .now(io, .awake);
                 try p.deliverPosted();
                 while (batch.next()) |completion| {
+                    if (completion.index == 1) {
+                        // A resize: the size is read below, whatever woke the loop.
+                        signal_armed = false;
+                        _ = completion.result.file_read_streaming catch {};
+                        continue;
+                    }
                     armed = false;
                     const n = completion.result.file_read_streaming catch |err| switch (err) {
                         error.EndOfStream => {
@@ -1276,6 +1300,79 @@ pub fn Program(comptime Model: type) type {
     };
 }
 
+/// SIGWINCH as a byte on a pipe, which `run` waits on beside the terminal, so a resize is
+/// drawn at once rather than at the next size check. Process-wide, as signal handlers are:
+/// one program at a time listens; another checks every `resize_poll`.
+const winch = struct {
+    const posix = std.posix;
+    const linux = std.os.linux;
+
+    /// The pipe's write end for the handler; -1 when no program listens.
+    var write_end: std.atomic.Value(i32) = .init(-1);
+    var read_end: posix.fd_t = -1;
+    var previous: posix.Sigaction = undefined;
+
+    /// The pipe's read end, with the handler installed; null when another program
+    /// listens or there is no pipe.
+    fn listen() ?posix.fd_t {
+        if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
+        var fds: [2]posix.fd_t = undefined;
+        if (!pipe(&fds)) return null;
+        if (write_end.cmpxchgStrong(-1, fds[1], .acq_rel, .acquire) != null) {
+            close(fds[0]);
+            close(fds[1]);
+            return null;
+        }
+        read_end = fds[0];
+        const action: posix.Sigaction = .{
+            .handler = .{ .handler = handle },
+            .mask = posix.sigemptyset(),
+            .flags = posix.SA.RESTART,
+        };
+        posix.sigaction(.WINCH, &action, &previous);
+        return fds[0];
+    }
+
+    /// Puts the previous handler back and closes the pipe.
+    fn stop() void {
+        posix.sigaction(.WINCH, &previous, null);
+        close(write_end.swap(-1, .acq_rel));
+        close(read_end);
+        read_end = -1;
+    }
+
+    fn handle(_: posix.SIG) callconv(.c) void {
+        const fd = write_end.load(.acquire);
+        // The write end does not block: with the pipe full, a resize is already waiting.
+        if (fd >= 0) write(fd);
+    }
+
+    /// A pipe closed on exec, whose write end does not block.
+    fn pipe(fds: *[2]posix.fd_t) bool {
+        if (builtin.os.tag == .linux) {
+            if (posix.errno(linux.pipe2(fds, .{ .CLOEXEC = true })) != .SUCCESS) return false;
+            const flags = linux.fcntl(fds[1], linux.F.GETFL, 0);
+            _ = linux.fcntl(fds[1], linux.F.SETFL, flags | @as(usize, @as(u32, @bitCast(linux.O{ .NONBLOCK = true }))));
+            return true;
+        }
+        const c = std.c;
+        if (c.pipe(fds) != 0) return false;
+        for (fds) |fd| _ = c.fcntl(fd, c.F.SETFD, @as(c_int, c.FD_CLOEXEC));
+        const flags = c.fcntl(fds[1], c.F.GETFL);
+        _ = c.fcntl(fds[1], c.F.SETFL, flags | @as(c_int, @bitCast(c.O{ .NONBLOCK = true })));
+        return true;
+    }
+
+    fn write(fd: posix.fd_t) void {
+        const byte = [1]u8{'w'};
+        if (builtin.os.tag == .linux) _ = linux.write(fd, &byte, 1) else _ = std.c.write(fd, &byte, 1);
+    }
+
+    fn close(fd: posix.fd_t) void {
+        if (builtin.os.tag == .linux) _ = linux.close(fd) else _ = std.c.close(fd);
+    }
+};
+
 /// The terminal rows `text` takes at `columns` wide: one per line, plus one each time a
 /// line wraps. A cluster that does not fit in the columns left wraps whole, as terminals
 /// do with wide characters.
@@ -1334,6 +1431,16 @@ test "every declaration of an instance compiles, `run` included" {
         pub fn view(_: *const @This(), _: *Io.Writer) Io.Writer.Error!void {}
     };
     testing.refAllDecls(Program(Empty));
+}
+
+test "winch: a resize signal is a byte on the pipe; one listener at a time" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.SkipZigTest;
+    const fd = winch.listen() orelse return error.SkipZigTest;
+    defer winch.stop();
+    try std.testing.expectEqual(null, winch.listen());
+    try std.posix.raise(.WINCH);
+    var byte: [1]u8 = undefined;
+    try std.testing.expectEqual(1, try std.posix.read(fd, &byte));
 }
 
 test "runSession: input, a resize, and the end, from a remote session" {

@@ -464,7 +464,11 @@ From a review before the repository went public:
 ### Fixed
 
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
-  lines rewrapped into, instead of leaving copies of them on the screen.
+  lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
+  programs count one row a line on terminals that cut lines instead (xterm, st, the Linux
+  console: `Capability.reflows`), rather than moving up over earlier output.
+- A tui program redraws as soon as the terminal is resized (on `SIGWINCH`), instead of at
+  its next size check, up to 200 ms later.
 - macOS: bash completion with more than one word before the cursor (bash 3.2 joined them
   into one), and a lone Esc in a program reading keys from `/dev/tty` (stdin piped), which
   waited for the next key.
