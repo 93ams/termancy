@@ -66,7 +66,11 @@ pub const Modes = struct {
     /// Writes the sequences that turn off every mode set here.
     pub fn writeOff(modes: Modes, w: *Io.Writer) Io.Writer.Error!void {
         if (modes.kitty_keyboard) try ansi.setKittyKeyboard(w, false);
-        if (modes.mouse) try ansi.setMouse(w, false);
+        if (modes.mouse) {
+            // Every-movement reporting (`Cmd.mouse(.motion)` in tui) is a mode of its own.
+            try ansi.setMode(w, .mouse_motion, false);
+            try ansi.setMouse(w, false);
+        }
         if (modes.focus_events) try ansi.setMode(w, .focus_events, false);
         if (modes.bracketed_paste) try ansi.setMode(w, .bracketed_paste, false);
         if (modes.hidden_cursor) try ansi.setMode(w, .cursor_visible, true);
@@ -564,7 +568,7 @@ test "Modes.writeOff turns off exactly what is on" {
     w = .fixed(&buffer);
     try (Modes{ .mouse = true, .bracketed_paste = true, .focus_events = true }).writeOff(&w);
     try testing.expectEqualStrings(
-        "\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2004l",
+        "\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2004l",
         w.buffered(),
     );
 }

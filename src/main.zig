@@ -4,12 +4,14 @@
 //! (`cfg`, `cli`, `tui`, `ui`); a command or group of its own, at `cmd/<name>.zig`.
 //!
 //! A panic prints a banner and writes a JSON crash report (no argv, no environment) into
-//! termancy's state directory (`~/.local/state/termancy` on Linux), set at startup.
+//! termancy's state directory (`~/.local/state/termancy` on Linux), set at startup, after
+//! putting the terminal back as it was (`term.Terminal.restoreOnPanic`).
 
 const std = @import("std");
 const builtin = @import("builtin");
 const cli = @import("cli");
 const sys = @import("sys");
+const term = @import("term");
 const build_options = @import("build_options");
 
 /// From `build.zig.zon`, the one place the version is written.
@@ -61,6 +63,8 @@ pub const root = cli.command(.{
 });
 
 pub fn main(init: std.process.Init) u8 {
+    // A panic in a full-screen command leaves raw mode and the alternate screen first.
+    sys.crash.addHook(term.Terminal.restoreOnPanic) catch {};
     setCrashReportDir(init.arena.allocator(), init.environ_map);
     if (builtin.os.tag == .windows) removeUpdateLeftovers(init.io, init.arena.allocator());
     const app: cli.App = .{

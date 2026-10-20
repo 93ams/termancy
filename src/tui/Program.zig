@@ -392,8 +392,10 @@ pub fn Program(comptime Model: type) type {
         /// Messages posted from other threads (`post`), and the lock that guards them.
         inbox: std.ArrayList(Self.Msg) = .empty,
         inbox_lock: std.atomic.Mutex = .unlocked,
-        /// Some thread has posted: `run` checks the inbox often.
+        /// Some thread has posted: `run` checks the inbox, often when `post` cannot wake it.
         posting: std.atomic.Value(bool) = .init(false),
+        /// `run` listens on the signal pipe, so `post` wakes it there (see `winch.wake`).
+        wakeable: std.atomic.Value(bool) = .init(false),
         /// What commands asked for, written with the next frame.
         suspended: bool = false,
         mouse_changed: bool = false,
@@ -409,6 +411,9 @@ pub fn Program(comptime Model: type) type {
         reflow_probe: ?ReflowProbe = null,
         /// The terminal showed, by where its cursor went, whether it rewraps lines.
         reflow_learned: bool = false,
+        /// The answer to `probeReflow` has not come yet, even after `deadline`: it is the
+        /// program's when it does, not the model's.
+        reflow_asked: bool = false,
 
         const Self = @This();
 
@@ -422,7 +427,13 @@ pub fn Program(comptime Model: type) type {
         pub const Error = ViewError || Io.Writer.Error || Allocator.Error;
 
         const Timer = struct { deadline: Io.Timestamp, id: u32, seq: u64 };
-        const ReflowProbe = struct { rewrapped: usize, cut: usize, deadline: Io.Timestamp };
+        const ReflowProbe = struct {
+            rewrapped: usize,
+            cut: usize,
+            deadline: Io.Timestamp,
+            /// The width asked at: after another resize, the answer may be for either.
+            width: u16,
+        };
         /// How long a redraw waits for the terminal to say where its cursor went.
         const reflow_wait: Io.Duration = .fromMilliseconds(100);
         /// Why the terminal is lent out.
@@ -535,20 +546,23 @@ pub fn Program(comptime Model: type) type {
             defer p.inbox_lock.unlock();
             try p.inbox.append(p.gpa, msg);
             p.posting.store(true, .release);
+            if (builtin.os.tag != .windows and p.wakeable.load(.acquire)) winch.wake();
         }
 
-        /// Delivers what was posted, oldest first.
+        /// Delivers what was posted, oldest first, and draws the result once.
         pub fn deliverPosted(p: *Self) Error!void {
             if (!p.posting.load(.acquire)) return;
-            while (true) {
-                const msg = take: {
-                    while (!p.inbox_lock.tryLock()) std.atomic.spinLoopHint();
-                    defer p.inbox_lock.unlock();
-                    if (p.inbox.items.len == 0) return;
-                    break :take p.inbox.orderedRemove(0);
-                };
-                try p.send(msg);
-            }
+            var posted = take: {
+                while (!p.inbox_lock.tryLock()) std.atomic.spinLoopHint();
+                defer p.inbox_lock.unlock();
+                const posted = p.inbox;
+                p.inbox = .empty;
+                break :take posted;
+            };
+            defer posted.deinit(p.gpa);
+            if (posted.items.len == 0) return;
+            for (posted.items) |msg| try p.apply(msg);
+            try p.settle();
         }
 
         /// Decodes input bytes, delivers the events, and draws the result. An incomplete
@@ -663,18 +677,24 @@ pub fn Program(comptime Model: type) type {
             if (rewrapped == cut) return;
             try ansi.queryCursorPosition(p.out);
             try p.out.flush();
+            p.reflow_asked = true;
             p.reflow_probe = .{
                 .rewrapped = rewrapped,
                 .cut = cut,
                 .deadline = p.now.addDuration(reflow_wait),
+                .width = size.width,
             };
         }
 
         /// The terminal's answer to `probeReflow`: the cursor's column says which it did.
         /// The held redraw goes out when the input is settled.
         fn learnReflow(p: *Self, column: usize) void {
-            const probe = p.reflow_probe orelse return;
+            p.reflow_asked = false;
+            const probe = p.reflow_probe orelse return; // late: the guess already stood
             p.reflow_probe = null;
+            // Resized again meanwhile: the column may be for the newer width, where a cut
+            // line can land where the older width predicted a rewrapped one.
+            if (p.size.width != probe.width) return;
             if (column == probe.rewrapped or column == probe.cut) {
                 p.renderer.options.reflows = column == probe.rewrapped;
                 p.reflow_learned = true;
@@ -750,7 +770,7 @@ pub fn Program(comptime Model: type) type {
                 .focus_out => try p.apply(.{ .focus = false }),
                 .report => |report| {
                     // The answer to `probeReflow` is the program's; any other, the model's.
-                    if (report == .cursor and p.reflow_probe != null) {
+                    if (report == .cursor and p.reflow_asked) {
                         return p.learnReflow(report.cursor.column);
                     }
                     try p.apply(.{ .report = report });
@@ -1092,7 +1112,8 @@ pub fn Program(comptime Model: type) type {
         /// Runs the program on `terminal` until it quits: raw mode, the event loop, and
         /// restoring the terminal however the loop ends. Reads input with a timeout so
         /// timers fire on time; checks the terminal size on a resize signal, and every
-        /// 200 ms (on Windows, or with another program listening for the signal). With an `Io`
+        /// 200 ms (on Windows, or with another program listening for the signal). SIGTERM and
+        /// SIGHUP end it as Ctrl-C does, the terminal restored. With an `Io`
         /// that cannot wait on a read and a clock at once, timers fire only when input
         /// arrives.
         pub fn run(p: *Self, terminal: *Terminal) RunError!Outcome {
@@ -1101,8 +1122,9 @@ pub fn Program(comptime Model: type) type {
             defer terminal.restore();
             p.size = terminal.size() catch p.size;
             p.now = .now(io, .awake);
-            try p.start();
+            // Recorded before they go on, so a first frame that fails still turns them off.
             terminal.recordModes(p.modes());
+            try p.start();
             // What an earlier program on this terminal read and did not use.
             const pending = terminal.takePending();
             if (pending.len > 0) {
@@ -1112,7 +1134,7 @@ pub fn Program(comptime Model: type) type {
             }
             // And what this one leaves, for the next.
             defer terminal.unread(p.decoder.buffer.items[p.decoder.start..]);
-            // Slot 0 reads the terminal; slot 1, resize signals (see `winch`).
+            // Slot 0 reads the terminal; slot 1, resize and stop signals (see `winch`).
             var storage: [2]Io.Operation.Storage = undefined;
             var batch: Io.Batch = .init(&storage);
             defer batch.cancel(io);
@@ -1124,12 +1146,20 @@ pub fn Program(comptime Model: type) type {
             else
                 null;
             defer if (resizes != null) winch.stop();
+            // A post wakes the loop through the pipe; without one, the loop polls for posts.
+            p.wakeable.store(resizes != null, .release);
+            defer p.wakeable.store(false, .release);
+            // What was posted before the pipe could say so.
+            try p.deliverPosted();
             var signal_buffer: [64]u8 = undefined;
             var signal_data = [1][]u8{&signal_buffer};
             var signal_armed = false;
             var jobs: Jobs = .{ .gpa = p.gpa, .io = io };
             defer jobs.cancelAll();
             while (!p.done()) {
+                // `Cmd.altScreen` and `Cmd.mouse` change them; an error or a panic restores
+                // what was last recorded.
+                terminal.recordModes(p.modes());
                 try jobs.start(p);
                 try jobs.collect(p);
                 if (p.done()) break;
@@ -1148,7 +1178,8 @@ pub fn Program(comptime Model: type) type {
                     p.now = .now(io, .awake);
                     continue;
                 }
-                const busy = jobs.running.items.len > 0 or p.posting.load(.acquire);
+                const busy = jobs.running.items.len > 0 or
+                    (p.posting.load(.acquire) and !p.wakeable.load(.acquire));
                 if (builtin.os.tag == .windows) {
                     // shortcut: on Windows a console handle is never asynchronous, and
                     // `Io.Batch.awaitConcurrent` leaves the batch broken when it says
@@ -1187,9 +1218,14 @@ pub fn Program(comptime Model: type) type {
                 try p.deliverPosted();
                 while (batch.next()) |completion| {
                     if (completion.index == 1) {
-                        // A resize: the size is read below, whatever woke the loop.
+                        // A resize: the size is read below, whatever woke the loop. SIGTERM
+                        // or SIGHUP: end as on Ctrl-C, putting the terminal back.
                         signal_armed = false;
-                        _ = completion.result.file_read_streaming catch {};
+                        const n = completion.result.file_read_streaming catch 0;
+                        if (std.mem.indexOfScalar(u8, signal_buffer[0..n], winch.stop_byte) != null) {
+                            p.interrupted = true;
+                            try p.stop();
+                        }
                         continue;
                     }
                     armed = false;
@@ -1366,50 +1402,71 @@ pub fn Program(comptime Model: type) type {
 }
 
 /// SIGWINCH as a byte on a pipe, which `run` waits on beside the terminal, so a resize is
-/// drawn at once rather than at the next size check. Process-wide, as signal handlers are:
-/// one program at a time listens; another checks every `resize_poll`.
+/// drawn at once rather than at the next size check; SIGTERM and SIGHUP as `stop_byte`, so
+/// the program ends and restores the terminal instead of dying with it raw. Process-wide,
+/// as signal handlers are: one program at a time listens; another checks every
+/// `resize_poll` (and dies on SIGTERM as before).
 const winch = struct {
     const posix = std.posix;
     const linux = std.os.linux;
 
-    /// The pipe's write end for the handler; -1 when no program listens.
+    /// What SIGTERM and SIGHUP write; SIGWINCH and `wake` write anything else.
+    const stop_byte = 's';
+    const signals = [_]posix.SIG{ .WINCH, .TERM, .HUP };
+
+    /// A program listens.
+    var listening: std.atomic.Value(bool) = .init(false);
+    /// The pipe, made by the first `listen` and never closed: a handler or `wake` that
+    /// writes after `stop` reaches the pipe, never a file that took its descriptor number.
     var write_end: std.atomic.Value(i32) = .init(-1);
     var read_end: posix.fd_t = -1;
-    var previous: posix.Sigaction = undefined;
+    var previous: [signals.len]posix.Sigaction = undefined;
 
-    /// The pipe's read end, with the handler installed; null when another program
-    /// listens or there is no pipe.
+    /// The pipe's read end, emptied, with the handlers installed; null when another
+    /// program listens or there is no pipe.
     fn listen() ?posix.fd_t {
         if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
-        var fds: [2]posix.fd_t = undefined;
-        if (!pipe(&fds)) return null;
-        if (write_end.cmpxchgStrong(-1, fds[1], .acq_rel, .acquire) != null) {
-            close(fds[0]);
-            close(fds[1]);
-            return null;
+        if (listening.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return null;
+        if (read_end < 0) {
+            var fds: [2]posix.fd_t = undefined;
+            if (!pipe(&fds)) {
+                listening.store(false, .release);
+                return null;
+            }
+            read_end = fds[0];
+            write_end.store(fds[1], .release);
         }
-        read_end = fds[0];
+        drain();
         const action: posix.Sigaction = .{
             .handler = .{ .handler = handle },
             .mask = posix.sigemptyset(),
             .flags = posix.SA.RESTART,
         };
-        posix.sigaction(.WINCH, &action, &previous);
-        return fds[0];
+        for (signals, &previous) |sig, *old| posix.sigaction(sig, &action, old);
+        return read_end;
     }
 
-    /// Puts the previous handler back and closes the pipe.
+    /// Puts the previous handlers back; the pipe stays for the next listener.
     fn stop() void {
-        posix.sigaction(.WINCH, &previous, null);
-        close(write_end.swap(-1, .acq_rel));
-        close(read_end);
-        read_end = -1;
+        for (signals, &previous) |sig, *old| posix.sigaction(sig, old, null);
+        listening.store(false, .release);
     }
 
-    fn handle(_: posix.SIG) callconv(.c) void {
+    /// Drops what an earlier listener left unread, such as a SIGTERM that came too late
+    /// for it, which would otherwise stop the next program at once.
+    fn drain() void {
+        var bytes: [64]u8 = undefined;
+        var fds = [1]posix.pollfd{.{ .fd = read_end, .events = posix.POLL.IN, .revents = 0 }};
+        while ((posix.poll(&fds, 0) catch 0) > 0) {
+            if ((posix.read(read_end, &bytes) catch 0) == 0) break;
+        }
+    }
+
+    fn handle(sig: posix.SIG) callconv(.c) void {
         const fd = write_end.load(.acquire);
-        // The write end does not block: with the pipe full, a resize is already waiting.
-        if (fd >= 0) write(fd);
+        // The write end does not block: with the pipe full, a resize is already waiting
+        // (a stop may then be lost; the next SIGTERM gets through once it drains).
+        if (fd >= 0) write(fd, if (sig == .WINCH) 'w' else stop_byte);
     }
 
     /// A pipe closed on exec, whose write end does not block.
@@ -1428,13 +1485,15 @@ const winch = struct {
         return true;
     }
 
-    fn write(fd: posix.fd_t) void {
-        const byte = [1]u8{'w'};
-        if (builtin.os.tag == .linux) _ = linux.write(fd, &byte, 1) else _ = std.c.write(fd, &byte, 1);
+    /// Wakes the listening program, from any thread: a message was posted (`post`).
+    fn wake() void {
+        const fd = write_end.load(.acquire);
+        if (fd >= 0 and listening.load(.acquire)) write(fd, 'p');
     }
 
-    fn close(fd: posix.fd_t) void {
-        if (builtin.os.tag == .linux) _ = linux.close(fd) else _ = std.c.close(fd);
+    fn write(fd: posix.fd_t, b: u8) void {
+        const byte = [1]u8{b};
+        if (builtin.os.tag == .linux) _ = linux.write(fd, &byte, 1) else _ = std.c.write(fd, &byte, 1);
     }
 };
 
@@ -1450,6 +1509,9 @@ pub fn rowsOf(text: []const u8, columns: u16) usize {
         if (cluster.bytes[0] == '\n') {
             rows += 1;
             column = 0;
+        } else if (cluster.bytes[0] == '\t') {
+            // As `term.Buffer.layout`: to the next stop of 8, and no further than the edge.
+            column = @min(column / 8 * 8 + 8, columns);
         } else if (cluster.width > 0) {
             if (column + cluster.width > columns) {
                 rows += 1;
@@ -1471,6 +1533,8 @@ test rowsOf {
     try testing.expectEqual(2, rowsOf("\x1b[1m0123456789\x1b[0m\n", 10));
     try testing.expectEqual(2, rowsOf("012345678中", 10)); // the wide char wraps whole
     try testing.expectEqual(3, rowsOf("0123456789012345678901", 10));
+    try testing.expectEqual(2, rowsOf("\txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", 40)); // the tab takes 8 columns
+    try testing.expectEqual(1, rowsOf("\t\t\t\t\t\t", 40)); // and stops at the edge
 }
 
 test "Cmd: constructors and batch" {
@@ -1506,6 +1570,47 @@ test "winch: a resize signal is a byte on the pipe; one listener at a time" {
     try std.posix.raise(.WINCH);
     var byte: [1]u8 = undefined;
     try std.testing.expectEqual(1, try std.posix.read(fd, &byte));
+    try std.testing.expect(byte[0] != winch.stop_byte);
+    // SIGTERM is caught too, as a request to stop, rather than killing the test.
+    try std.posix.raise(.TERM);
+    try std.testing.expectEqual(1, try std.posix.read(fd, &byte));
+    try std.testing.expectEqual(winch.stop_byte, byte[0]);
+}
+
+test "winch: the next listener does not see a stop the last one left unread" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.SkipZigTest;
+    const first = winch.listen() orelse return error.SkipZigTest;
+    try std.posix.raise(.TERM);
+    winch.stop();
+    const fd = winch.listen() orelse return error.SkipZigTest;
+    defer winch.stop();
+    try std.testing.expectEqual(first, fd); // the same pipe: never closed, never reused
+    try std.posix.raise(.WINCH);
+    var byte: [1]u8 = undefined;
+    try std.testing.expectEqual(1, try std.posix.read(fd, &byte));
+    try std.testing.expect(byte[0] != winch.stop_byte);
+}
+
+test "post wakes a program listening on the signal pipe, rather than its polling" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.SkipZigTest;
+    const Empty = struct {
+        pub fn update(_: *@This(), _: Msg) Cmd {
+            return .none;
+        }
+        pub fn view(_: *const @This(), _: *Io.Writer) Io.Writer.Error!void {}
+    };
+    var out: Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var model: Empty = .{};
+    var p: Program(Empty) = .init(testing.allocator, &model, &out.writer, .{});
+    defer p.deinit();
+    const fd = winch.listen() orelse return error.SkipZigTest;
+    defer winch.stop();
+    p.wakeable.store(true, .release); // as `run` sets it
+    try p.post(.{ .tick = 1 });
+    var byte: [1]u8 = undefined;
+    try testing.expectEqual(1, try std.posix.read(fd, &byte));
+    try testing.expectEqual('p', byte[0]);
 }
 
 test "runSession: input, a resize, and the end, from a remote session" {

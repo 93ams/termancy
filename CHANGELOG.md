@@ -514,6 +514,24 @@ From a review before the repository went public:
   when an accept fails for one connection (the peer hung up first) or for want of file
   descriptors (they wait 100 ms and accept again), instead of returning and ending every
   open session. A peer opening many idle connections could stop the server.
+||||||| bbead15
+- termancy puts the terminal back (raw mode off, main screen, cursor shown) before printing
+  a panic, instead of leaving it as a full-screen command had it.
+- A tui program whose first frame fails, or that switched to the alternate screen or turned
+  the mouse on with a command and then fails, turns those modes off again on the way out.
+- A tui program ends on `SIGTERM` or `SIGHUP` as on Ctrl-C, restoring the terminal, instead
+  of being killed with it in raw mode.
+- Turning the mouse off also ends every-movement reporting (`?1003`), which
+  `Cmd.mouse(.motion)` turns on.
+- A tui program resized again before the terminal said where its cursor went no longer
+  learns the wrong thing about whether it rewraps lines, and an answer that comes after the
+  wait no longer reaches the model as a `.report`.
+- The terminal's cursor (`Model.cursor`) sits on the right row below a line that starts
+  with a tab and wraps.
+- `focus.Grid.move` no longer panics when `count` shrank below the focused part.
+- Messages posted from other threads are drawn in one frame per batch, not one each.
+- After a message is posted from another thread, a tui program no longer wakes every 15 ms
+  for the rest of its run: `post` wakes it once, through its signal pipe.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up
