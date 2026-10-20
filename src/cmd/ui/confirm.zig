@@ -6,7 +6,7 @@ const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const plain = @import("plain.zig");
-const Confirm = @import("../tui/registry/confirm.zig").Confirm;
+const Confirm = @import("../tui/registry/confirm.zig");
 
 pub const Answer = enum { yes, no };
 

@@ -9,13 +9,12 @@ const tui = @import("tui");
 const live = @import("term").live;
 const term = @import("../ui/term.zig");
 const plain = @import("../ui/plain.zig");
-const List = @import("registry/list.zig").List;
-const MultiSelect = @import("registry/multiselect.zig").MultiSelect;
+const List = @import("registry/list.zig");
+const MultiSelect = @import("registry/multiselect.zig");
 const catalog = @import("project/catalog.zig");
 const manifest = @import("project/manifest.zig");
 const status = @import("project/status.zig");
-const workspace = @import("project/workspace.zig");
-const Workspace = workspace.Workspace;
+const Workspace = @import("project/workspace.zig");
 const group = @import("init.zig").group;
 
 const AddFlags = struct {
@@ -74,7 +73,7 @@ fn run(ctx: *cli.Context, flags: AddFlags) !void {
     var m = try ws.loadManifest(ctx) orelse return ctx.fail("{s}{s}: not found (run termancy " ++
         "tui init first)", .{ ws.prefix, manifest.file_name });
     ws.manifest_before = try ws.loadManifest(ctx);
-    const components = try workspace.components(ctx);
+    const components = try Workspace.components(ctx);
     const wanted = if (ctx.args.len > 0) ctx.args else try ask(ctx, components);
     const order = try resolve(ctx, components, wanted);
 
@@ -235,7 +234,7 @@ fn addComponent(
     var record: manifest.Files = .empty;
     var any_skipped = false;
     for (component.files) |name| {
-        const registry = try workspace.source(ctx, name);
+        const registry = try Workspace.source(ctx, name);
         const path = try manifest.filePath(ctx.arena, m.*, name);
         const recorded = m.recorded(component.name, name);
         const action = status.decide(try ws.read(ctx, path), recorded, registry, force);

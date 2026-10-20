@@ -27,230 +27,230 @@ const std = @import("std");
 const tui = @import("tui");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
-const Input = @import("input.zig").Input;
-const List = @import("list.zig").List;
+const Input = @import("input.zig");
+const List = @import("list.zig");
 
 pub const Status = enum { active, submitted, canceled };
 
-pub const Filter = struct {
-    gpa: Allocator,
-    items: []const []const u8,
-    /// The query being typed.
-    query: Input,
-    /// The matching items, best first; `list.items` is `shown.items`.
-    list: List,
-    matches: std.ArrayList(Match) = .empty,
-    shown: std.ArrayList([]const u8) = .empty,
-    /// One flag per item of `items`.
-    chosen: []bool,
-    /// The most items that may be chosen; null for no limit. Tab chooses when above 1.
-    limit: ?usize = 1,
-    /// A line above the query; none when empty.
-    header: []const u8 = "",
-    chosen_mark: []const u8 = "✓ ",
-    unchosen_mark: []const u8 = "• ",
-    status: Status = .active,
-    styles: Styles = .{},
+const Filter = @This();
 
-    pub const Styles = struct {
-        header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
-        /// Matched characters: colored, and underlined so they show under `NO_COLOR`.
-        match: tui.Style = .{ .fg = .{ .indexed = 212 }, .underline = true },
-        chosen: tui.Style = .{ .fg = .{ .indexed = 212 } },
-        count: tui.Style = .{ .fg = .{ .indexed = 240 } },
-    };
+gpa: Allocator,
+items: []const []const u8,
+/// The query being typed.
+query: Input,
+/// The matching items, best first; `list.items` is `shown.items`.
+list: List,
+matches: std.ArrayList(Match) = .empty,
+shown: std.ArrayList([]const u8) = .empty,
+/// One flag per item of `items`.
+chosen: []bool,
+/// The most items that may be chosen; null for no limit. Tab chooses when above 1.
+limit: ?usize = 1,
+/// A line above the query; none when empty.
+header: []const u8 = "",
+chosen_mark: []const u8 = "✓ ",
+unchosen_mark: []const u8 = "• ",
+status: Status = .active,
+styles: Styles = .{},
 
-    /// An item that matches the query.
-    pub const Match = struct {
-        /// Index into `items`.
-        index: usize,
-        score: i32,
-    };
-
-    /// A filter over `items` (borrowed), with an empty query.
-    pub fn init(gpa: Allocator, items: []const []const u8) Allocator.Error!Filter {
-        const chosen = try gpa.alloc(bool, items.len);
-        @memset(chosen, false);
-        var filter: Filter = .{
-            .gpa = gpa,
-            .items = items,
-            .query = .{ .gpa = gpa, .placeholder = "Filter..." },
-            .list = .{ .items = &.{} },
-            .chosen = chosen,
-        };
-        errdefer filter.deinit();
-        try filter.refilter();
-        return filter;
-    }
-
-    /// Frees the query, the matches, and the flags.
-    pub fn deinit(filter: *Filter) void {
-        filter.query.deinit();
-        filter.matches.deinit(filter.gpa);
-        filter.shown.deinit(filter.gpa);
-        filter.gpa.free(filter.chosen);
-        filter.* = undefined;
-    }
-
-    /// Matches every item against the query again and sorts the matches.
-    pub fn refilter(filter: *Filter) Allocator.Error!void {
-        const pattern = filter.query.value();
-        filter.matches.clearRetainingCapacity();
-        for (filter.items, 0..) |item, i| {
-            const points = score(pattern, item, null) orelse continue;
-            try filter.matches.append(filter.gpa, .{ .index = i, .score = points });
-        }
-        std.mem.sort(Match, filter.matches.items, filter.items, better);
-        filter.shown.clearRetainingCapacity();
-        for (filter.matches.items) |match| {
-            try filter.shown.append(filter.gpa, filter.items[match.index]);
-        }
-        filter.list.setItems(filter.shown.items);
-    }
-
-    fn better(items: []const []const u8, a: Match, b: Match) bool {
-        if (a.score != b.score) return a.score > b.score;
-        const a_len = items[a.index].len;
-        const b_len = items[b.index].len;
-        if (a_len != b_len) return a_len < b_len;
-        return a.index < b.index;
-    }
-
-    /// The index in `items` of the highlighted match, or null when nothing matches.
-    pub fn current(filter: *const Filter) ?usize {
-        if (filter.matches.items.len == 0) return null;
-        return filter.matches.items[filter.list.cursor].index;
-    }
-
-    /// Whether item `index` (of `items`) is chosen.
-    pub fn isChosen(filter: *const Filter, index: usize) bool {
-        return filter.chosen[index];
-    }
-
-    /// How many items are chosen.
-    pub fn count(filter: *const Filter) usize {
-        return std.mem.count(bool, filter.chosen, &.{true});
-    }
-
-    fn multiple(filter: *const Filter) bool {
-        const limit = filter.limit orelse return true;
-        return limit > 1;
-    }
-
-    /// Chooses or clears item `index`; choosing past the limit does nothing.
-    pub fn toggle(filter: *Filter, index: usize) void {
-        if (!filter.chosen[index]) {
-            if (filter.limit) |limit| {
-                if (filter.count() >= limit) return;
-            }
-        }
-        filter.chosen[index] = !filter.chosen[index];
-    }
-
-    pub fn update(filter: *Filter, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .key => |key| return filter.handleKey(key),
-            .paste => |text| {
-                filter.query.insert(text) catch {};
-                filter.refilter() catch {};
-            },
-            .resize => _ = filter.list.update(msg),
-            .mouse => |mouse| {
-                // The items start below the header and the query line.
-                const items_top = filter.list.top + @intFromBool(filter.header.len > 0) + 1;
-                _ = filter.list.handleMouse(mouse, items_top);
-            },
-            else => {},
-        }
-        return .none;
-    }
-
-    fn handleKey(filter: *Filter, key: tui.input.Key) tui.Cmd {
-        if (key.matches("enter")) {
-            const index = filter.current() orelse return .none;
-            if (filter.count() == 0) filter.chosen[index] = true;
-            filter.status = .submitted;
-            return .quit;
-        }
-        if (key.matches("esc")) {
-            filter.status = .canceled;
-            return .quit;
-        }
-        if (key.matches("tab") and filter.multiple()) {
-            if (filter.current()) |index| filter.toggle(index);
-            filter.list.moveBy(1);
-        } else if (key.matches("up") or key.matches("ctrl+p")) {
-            filter.list.moveBy(-1);
-        } else if (key.matches("down") or key.matches("ctrl+n")) {
-            filter.list.moveBy(1);
-        } else if (key.matches("pgup")) {
-            filter.list.page(-1);
-        } else if (key.matches("pgdown")) {
-            filter.list.page(1);
-        } else {
-            const before = filter.query.text.items.len;
-            const was = filter.query.cursor;
-            if (!filter.query.handleKey(key)) return .none;
-            // Moving the cursor needs no new matches; anything else might.
-            if (filter.query.text.items.len != before or filter.query.cursor == was) {
-                filter.refilter() catch {};
-            }
-        }
-        return .none;
-    }
-
-    pub fn view(filter: *const Filter, w: *Writer) Writer.Error!void {
-        if (filter.header.len > 0) {
-            try filter.styles.header.paint(w, filter.header);
-            try w.writeByte('\n');
-        }
-        try filter.query.view(w);
-        var row: Writer.Allocating = .init(filter.gpa);
-        defer row.deinit();
-        const shown = filter.list.window();
-        for (shown.start..shown.end) |i| {
-            try w.writeByte('\n');
-            row.clearRetainingCapacity();
-            try filter.writeItem(&row.writer, i);
-            try filter.list.writeRow(w, i, row.written());
-        }
-        try w.writeByte('\n');
-        try filter.styles.count.writeSgr(w);
-        try w.print("{d}/{d}", .{ filter.matches.items.len, filter.items.len });
-        if (filter.limit != 1) try w.print(", {d} chosen", .{filter.count()});
-        if (filter.styles.count.hasSgr()) try w.writeAll(tui.ansi.reset);
-    }
-
-    /// Writes match `row` (an index into `matches`): its mark when several may be chosen,
-    /// then the item with the matched characters highlighted.
-    fn writeItem(filter: *const Filter, w: *Writer, row: usize) Writer.Error!void {
-        const index = filter.matches.items[row].index;
-        const on_cursor = row == filter.list.cursor;
-        // A highlight's reset ends the row's own style; this starts it again.
-        const restyle: tui.Style = if (on_cursor) filter.list.styles.cursor else .{};
-        if (filter.multiple()) {
-            const chosen = filter.chosen[index];
-            const style: tui.Style = if (chosen) filter.styles.chosen else .{};
-            try style.paint(w, if (chosen) filter.chosen_mark else filter.unchosen_mark);
-            if (chosen) try restyle.writeSgr(w);
-        }
-        const text = filter.items[index];
-        var positions: [max_positions]usize = undefined;
-        const matched = matchPositions(filter.query.value(), text, &positions);
-        var it: tui.width.Iterator = .init(text);
-        var start: usize = 0;
-        var next: usize = 0;
-        while (it.next()) |cluster| : (start = it.index) {
-            if (next < matched.len and matched[next] == start) {
-                next += 1;
-                try filter.styles.match.paint(w, cluster.bytes);
-                try restyle.writeSgr(w);
-            } else {
-                try w.writeAll(cluster.bytes);
-            }
-        }
-    }
+pub const Styles = struct {
+    header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
+    /// Matched characters: colored, and underlined so they show under `NO_COLOR`.
+    match: tui.Style = .{ .fg = .{ .indexed = 212 }, .underline = true },
+    chosen: tui.Style = .{ .fg = .{ .indexed = 212 } },
+    count: tui.Style = .{ .fg = .{ .indexed = 240 } },
 };
+
+/// An item that matches the query.
+pub const Match = struct {
+    /// Index into `items`.
+    index: usize,
+    score: i32,
+};
+
+/// A filter over `items` (borrowed), with an empty query.
+pub fn init(gpa: Allocator, items: []const []const u8) Allocator.Error!Filter {
+    const chosen = try gpa.alloc(bool, items.len);
+    @memset(chosen, false);
+    var filter: Filter = .{
+        .gpa = gpa,
+        .items = items,
+        .query = .{ .gpa = gpa, .placeholder = "Filter..." },
+        .list = .{ .items = &.{} },
+        .chosen = chosen,
+    };
+    errdefer filter.deinit();
+    try filter.refilter();
+    return filter;
+}
+
+/// Frees the query, the matches, and the flags.
+pub fn deinit(filter: *Filter) void {
+    filter.query.deinit();
+    filter.matches.deinit(filter.gpa);
+    filter.shown.deinit(filter.gpa);
+    filter.gpa.free(filter.chosen);
+    filter.* = undefined;
+}
+
+/// Matches every item against the query again and sorts the matches.
+pub fn refilter(filter: *Filter) Allocator.Error!void {
+    const pattern = filter.query.value();
+    filter.matches.clearRetainingCapacity();
+    for (filter.items, 0..) |item, i| {
+        const points = score(pattern, item, null) orelse continue;
+        try filter.matches.append(filter.gpa, .{ .index = i, .score = points });
+    }
+    std.mem.sort(Match, filter.matches.items, filter.items, better);
+    filter.shown.clearRetainingCapacity();
+    for (filter.matches.items) |match| {
+        try filter.shown.append(filter.gpa, filter.items[match.index]);
+    }
+    filter.list.setItems(filter.shown.items);
+}
+
+fn better(items: []const []const u8, a: Match, b: Match) bool {
+    if (a.score != b.score) return a.score > b.score;
+    const a_len = items[a.index].len;
+    const b_len = items[b.index].len;
+    if (a_len != b_len) return a_len < b_len;
+    return a.index < b.index;
+}
+
+/// The index in `items` of the highlighted match, or null when nothing matches.
+pub fn current(filter: *const Filter) ?usize {
+    if (filter.matches.items.len == 0) return null;
+    return filter.matches.items[filter.list.cursor].index;
+}
+
+/// Whether item `index` (of `items`) is chosen.
+pub fn isChosen(filter: *const Filter, index: usize) bool {
+    return filter.chosen[index];
+}
+
+/// How many items are chosen.
+pub fn count(filter: *const Filter) usize {
+    return std.mem.count(bool, filter.chosen, &.{true});
+}
+
+fn multiple(filter: *const Filter) bool {
+    const limit = filter.limit orelse return true;
+    return limit > 1;
+}
+
+/// Chooses or clears item `index`; choosing past the limit does nothing.
+pub fn toggle(filter: *Filter, index: usize) void {
+    if (!filter.chosen[index]) {
+        if (filter.limit) |limit| {
+            if (filter.count() >= limit) return;
+        }
+    }
+    filter.chosen[index] = !filter.chosen[index];
+}
+
+pub fn update(filter: *Filter, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .key => |key| return filter.handleKey(key),
+        .paste => |text| {
+            filter.query.insert(text) catch {};
+            filter.refilter() catch {};
+        },
+        .resize => _ = filter.list.update(msg),
+        .mouse => |mouse| {
+            // The items start below the header and the query line.
+            const items_top = filter.list.top + @intFromBool(filter.header.len > 0) + 1;
+            _ = filter.list.handleMouse(mouse, items_top);
+        },
+        else => {},
+    }
+    return .none;
+}
+
+fn handleKey(filter: *Filter, key: tui.input.Key) tui.Cmd {
+    if (key.matches("enter")) {
+        const index = filter.current() orelse return .none;
+        if (filter.count() == 0) filter.chosen[index] = true;
+        filter.status = .submitted;
+        return .quit;
+    }
+    if (key.matches("esc")) {
+        filter.status = .canceled;
+        return .quit;
+    }
+    if (key.matches("tab") and filter.multiple()) {
+        if (filter.current()) |index| filter.toggle(index);
+        filter.list.moveBy(1);
+    } else if (key.matches("up") or key.matches("ctrl+p")) {
+        filter.list.moveBy(-1);
+    } else if (key.matches("down") or key.matches("ctrl+n")) {
+        filter.list.moveBy(1);
+    } else if (key.matches("pgup")) {
+        filter.list.page(-1);
+    } else if (key.matches("pgdown")) {
+        filter.list.page(1);
+    } else {
+        const before = filter.query.text.items.len;
+        const was = filter.query.cursor;
+        if (!filter.query.handleKey(key)) return .none;
+        // Moving the cursor needs no new matches; anything else might.
+        if (filter.query.text.items.len != before or filter.query.cursor == was) {
+            filter.refilter() catch {};
+        }
+    }
+    return .none;
+}
+
+pub fn view(filter: *const Filter, w: *Writer) Writer.Error!void {
+    if (filter.header.len > 0) {
+        try filter.styles.header.paint(w, filter.header);
+        try w.writeByte('\n');
+    }
+    try filter.query.view(w);
+    var row: Writer.Allocating = .init(filter.gpa);
+    defer row.deinit();
+    const shown = filter.list.window();
+    for (shown.start..shown.end) |i| {
+        try w.writeByte('\n');
+        row.clearRetainingCapacity();
+        try filter.writeItem(&row.writer, i);
+        try filter.list.writeRow(w, i, row.written());
+    }
+    try w.writeByte('\n');
+    try filter.styles.count.writeSgr(w);
+    try w.print("{d}/{d}", .{ filter.matches.items.len, filter.items.len });
+    if (filter.limit != 1) try w.print(", {d} chosen", .{filter.count()});
+    if (filter.styles.count.hasSgr()) try w.writeAll(tui.ansi.reset);
+}
+
+/// Writes match `row` (an index into `matches`): its mark when several may be chosen,
+/// then the item with the matched characters highlighted.
+fn writeItem(filter: *const Filter, w: *Writer, row: usize) Writer.Error!void {
+    const index = filter.matches.items[row].index;
+    const on_cursor = row == filter.list.cursor;
+    // A highlight's reset ends the row's own style; this starts it again.
+    const restyle: tui.Style = if (on_cursor) filter.list.styles.cursor else .{};
+    if (filter.multiple()) {
+        const chosen = filter.chosen[index];
+        const style: tui.Style = if (chosen) filter.styles.chosen else .{};
+        try style.paint(w, if (chosen) filter.chosen_mark else filter.unchosen_mark);
+        if (chosen) try restyle.writeSgr(w);
+    }
+    const text = filter.items[index];
+    var positions: [max_positions]usize = undefined;
+    const matched = matchPositions(filter.query.value(), text, &positions);
+    var it: tui.width.Iterator = .init(text);
+    var start: usize = 0;
+    var next: usize = 0;
+    while (it.next()) |cluster| : (start = it.index) {
+        if (next < matched.len and matched[next] == start) {
+            next += 1;
+            try filter.styles.match.paint(w, cluster.bytes);
+            try restyle.writeSgr(w);
+        } else {
+            try w.writeAll(cluster.bytes);
+        }
+    }
+}
 
 /// The most matched characters `matchPositions` reports; the rest are matched but not
 /// highlighted.

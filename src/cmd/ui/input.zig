@@ -6,8 +6,8 @@ const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const plain = @import("plain.zig");
-const Input = @import("../tui/registry/input.zig").Input;
-const Textarea = @import("../tui/registry/textarea.zig").Textarea;
+const Input = @import("../tui/registry/input.zig");
+const Textarea = @import("../tui/registry/textarea.zig");
 
 pub const InputFlags = struct {
     placeholder: []const u8 = "Type something...",

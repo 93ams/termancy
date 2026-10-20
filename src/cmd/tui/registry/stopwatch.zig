@@ -15,66 +15,66 @@ const tui = @import("tui");
 const Writer = std.Io.Writer;
 const Duration = std.Io.Duration;
 
-pub const Stopwatch = struct {
-    /// The time counted so far.
-    elapsed: Duration = .zero,
-    running: bool = false,
-    /// How often it ticks, and so how fine its count is.
-    interval: Duration = .fromSeconds(1),
-    tick_id: u32 = 0x5357_4154, // "SWAT"
-    /// Run alone: space starts and stops, r resets, q quits.
-    keys: bool = true,
-    style: tui.Style = .{},
+const Stopwatch = @This();
 
-    /// Starts counting; returns the first tick.
-    pub fn start(s: *Stopwatch) tui.Cmd {
-        if (s.running) return .none;
-        s.running = true;
-        return .tick(s.interval, s.tick_id);
-    }
+/// The time counted so far.
+elapsed: Duration = .zero,
+running: bool = false,
+/// How often it ticks, and so how fine its count is.
+interval: Duration = .fromSeconds(1),
+tick_id: u32 = 0x5357_4154, // "SWAT"
+/// Run alone: space starts and stops, r resets, q quits.
+keys: bool = true,
+style: tui.Style = .{},
 
-    /// Stops counting; the count stays.
-    pub fn stop(s: *Stopwatch) void {
-        s.running = false;
-    }
+/// Starts counting; returns the first tick.
+pub fn start(s: *Stopwatch) tui.Cmd {
+    if (s.running) return .none;
+    s.running = true;
+    return .tick(s.interval, s.tick_id);
+}
 
-    /// Starts or stops.
-    pub fn toggle(s: *Stopwatch) tui.Cmd {
-        if (s.running) {
-            s.stop();
-            return .none;
-        }
-        return s.start();
-    }
+/// Stops counting; the count stays.
+pub fn stop(s: *Stopwatch) void {
+    s.running = false;
+}
 
-    /// Back to zero, running or not.
-    pub fn reset(s: *Stopwatch) void {
-        s.elapsed = .zero;
-    }
-
-    pub fn update(s: *Stopwatch, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .tick => |id| if (id == s.tick_id and s.running) {
-                s.elapsed = .fromNanoseconds(s.elapsed.nanoseconds + s.interval.nanoseconds);
-                return .tick(s.interval, s.tick_id);
-            },
-            .key => |key| if (s.keys) {
-                if (key.matches("space")) return s.toggle();
-                if (key.matches("r")) s.reset();
-                if (key.matches("q") or key.matches("esc")) return .quit;
-            },
-            else => {},
-        }
+/// Starts or stops.
+pub fn toggle(s: *Stopwatch) tui.Cmd {
+    if (s.running) {
+        s.stop();
         return .none;
     }
+    return s.start();
+}
 
-    pub fn view(s: *const Stopwatch, w: *Writer) Writer.Error!void {
-        var buffer: [32]u8 = undefined;
-        var text: Writer = .fixed(&buffer);
-        writeDuration(&text, s.elapsed) catch {};
-        try s.style.paint(w, text.buffered());
+/// Back to zero, running or not.
+pub fn reset(s: *Stopwatch) void {
+    s.elapsed = .zero;
+}
+
+pub fn update(s: *Stopwatch, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .tick => |id| if (id == s.tick_id and s.running) {
+            s.elapsed = .fromNanoseconds(s.elapsed.nanoseconds + s.interval.nanoseconds);
+            return .tick(s.interval, s.tick_id);
+        },
+        .key => |key| if (s.keys) {
+            if (key.matches("space")) return s.toggle();
+            if (key.matches("r")) s.reset();
+            if (key.matches("q") or key.matches("esc")) return .quit;
+        },
+        else => {},
     }
-};
+    return .none;
+}
+
+pub fn view(s: *const Stopwatch, w: *Writer) Writer.Error!void {
+    var buffer: [32]u8 = undefined;
+    var text: Writer = .fixed(&buffer);
+    writeDuration(&text, s.elapsed) catch {};
+    try s.style.paint(w, text.buffered());
+}
 
 /// Writes `duration` as people read it: `1h02m03s`, `2m05s`, `7s`, `0.25s`.
 pub const writeDuration = tui.term.live.writeElapsed;

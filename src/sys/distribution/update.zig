@@ -29,7 +29,7 @@ const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Ed25519 = std.crypto.sign.Ed25519;
-const Version = @import("version.zig").Version;
+const Version = @import("version.zig");
 
 // 1. Lookup.
 

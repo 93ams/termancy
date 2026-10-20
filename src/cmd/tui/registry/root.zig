@@ -18,22 +18,22 @@ const std = @import("std");
 
 /// The components' declarations, for the apps in `examples/`, which import the registry as
 /// a module where a project would have copied the files in.
-pub const prompts = @import("prompts.zig");
-pub const form = @import("form.zig");
-pub const tabs = @import("tabs.zig");
-pub const table = @import("table.zig");
-pub const spinner = @import("spinner.zig");
-pub const progress = @import("progress.zig");
-pub const list = @import("list.zig");
+pub const Prompts = @import("prompts.zig");
+pub const Form = @import("form.zig");
+pub const Tabs = @import("tabs.zig");
+pub const Table = @import("table.zig");
+pub const Spinner = @import("spinner.zig");
+pub const Progress = @import("progress.zig");
+pub const List = @import("list.zig");
 pub const chart = @import("chart.zig");
-pub const shell = @import("shell.zig");
-pub const paginator = @import("paginator.zig");
-pub const stopwatch = @import("stopwatch.zig");
-pub const input = @import("input.zig");
-pub const timer = @import("timer.zig");
+pub const Shell = @import("shell.zig");
+pub const Paginator = @import("paginator.zig");
+pub const Stopwatch = @import("stopwatch.zig");
+pub const Input = @import("input.zig");
+pub const Timer = @import("timer.zig");
 pub const help = @import("help.zig");
-pub const filter = @import("filter.zig");
-pub const markdown = @import("markdown.zig");
+pub const Filter = @import("filter.zig");
+pub const Markdown = @import("markdown.zig");
 
 /// `registry.zon`, verbatim.
 pub const manifest: []const u8 = @embedFile("registry.zon");

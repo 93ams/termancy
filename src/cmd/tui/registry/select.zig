@@ -16,66 +16,66 @@
 
 const std = @import("std");
 const tui = @import("tui");
-const List = @import("list.zig").List;
+const List = @import("list.zig");
 
 pub const Status = enum { active, submitted, canceled };
 
-pub const Select = struct {
-    list: List,
-    /// A line above the items; none when empty.
-    header: []const u8 = "",
-    status: Status = .active,
-    /// The screen row the header (or the first item) is drawn on, for mouse clicks.
-    top: usize = 0,
-    styles: Styles = .{},
+const Select = @This();
 
-    pub const Styles = struct {
-        header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
-    };
+list: List,
+/// A line above the items; none when empty.
+header: []const u8 = "",
+status: Status = .active,
+/// The screen row the header (or the first item) is drawn on, for mouse clicks.
+top: usize = 0,
+styles: Styles = .{},
 
-    pub fn update(model: *Select, msg: tui.Msg) tui.Cmd {
-        if (msg == .mouse) {
-            const items_top = model.top + @intFromBool(model.header.len > 0);
-            if (model.list.handleMouse(msg.mouse, items_top) != null) {
-                model.status = .submitted;
-                return .quit;
-            }
-            return .none;
-        }
-        if (msg == .key) {
-            const key = msg.key;
-            if (key.matches("enter") and model.list.items.len > 0) {
-                model.status = .submitted;
-                return .quit;
-            }
-            if (key.matches("esc")) {
-                model.status = .canceled;
-                return .quit;
-            }
-        }
-        return model.list.update(msg);
-    }
-
-    /// The chosen (or, while active, highlighted) item; null when there are none.
-    pub fn selected(model: *const Select) ?[]const u8 {
-        return model.list.current();
-    }
-
-    /// Highlights the first item equal to `item`, if any.
-    pub fn highlight(model: *Select, item: []const u8) void {
-        for (model.list.items, 0..) |candidate, i| {
-            if (std.mem.eql(u8, candidate, item)) return model.list.moveTo(i);
-        }
-    }
-
-    pub fn view(model: *const Select, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        if (model.header.len > 0) {
-            try model.styles.header.paint(w, model.header);
-            try w.writeByte('\n');
-        }
-        try model.list.view(w);
-    }
+pub const Styles = struct {
+    header: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
 };
+
+pub fn update(model: *Select, msg: tui.Msg) tui.Cmd {
+    if (msg == .mouse) {
+        const items_top = model.top + @intFromBool(model.header.len > 0);
+        if (model.list.handleMouse(msg.mouse, items_top) != null) {
+            model.status = .submitted;
+            return .quit;
+        }
+        return .none;
+    }
+    if (msg == .key) {
+        const key = msg.key;
+        if (key.matches("enter") and model.list.items.len > 0) {
+            model.status = .submitted;
+            return .quit;
+        }
+        if (key.matches("esc")) {
+            model.status = .canceled;
+            return .quit;
+        }
+    }
+    return model.list.update(msg);
+}
+
+/// The chosen (or, while active, highlighted) item; null when there are none.
+pub fn selected(model: *const Select) ?[]const u8 {
+    return model.list.current();
+}
+
+/// Highlights the first item equal to `item`, if any.
+pub fn highlight(model: *Select, item: []const u8) void {
+    for (model.list.items, 0..) |candidate, i| {
+        if (std.mem.eql(u8, candidate, item)) return model.list.moveTo(i);
+    }
+}
+
+pub fn view(model: *const Select, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    if (model.header.len > 0) {
+        try model.styles.header.paint(w, model.header);
+        try w.writeByte('\n');
+    }
+    try model.list.view(w);
+}
 
 const testing = std.testing;
 const Driver = tui.testing.Driver(Select);

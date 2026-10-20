@@ -83,8 +83,8 @@ const refresh_tick = 1;
 pub const Lobby = struct {
     user: []const u8,
     book: *Guestbook,
-    draft: components.input.Input,
-    here: components.stopwatch.Stopwatch = .{ .keys = false },
+    draft: components.Input,
+    here: components.Stopwatch = .{ .keys = false },
     width: u16 = 60,
     shown: [5]Guestbook.Entry = undefined,
     shown_len: usize = 0,

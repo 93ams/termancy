@@ -6,9 +6,9 @@ const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
 const plain = @import("plain.zig");
-const List = @import("../tui/registry/list.zig").List;
-const Select = @import("../tui/registry/select.zig").Select;
-const MultiSelect = @import("../tui/registry/multiselect.zig").MultiSelect;
+const List = @import("../tui/registry/list.zig");
+const Select = @import("../tui/registry/select.zig");
+const MultiSelect = @import("../tui/registry/multiselect.zig");
 
 pub const Flags = struct {
     limit: usize = 1,

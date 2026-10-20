@@ -5,7 +5,7 @@ const cli = @import("cli");
 const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
-const FilePicker = @import("../tui/registry/filepicker.zig").FilePicker;
+const FilePicker = @import("../tui/registry/filepicker.zig");
 
 pub const Flags = struct {
     all: bool = false,

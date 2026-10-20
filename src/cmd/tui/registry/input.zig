@@ -41,358 +41,358 @@ pub const Status = enum { active, submitted, canceled };
 /// Checks the text on submit: null to accept it, or a message saying what is wrong.
 pub const Validator = *const fn (text: []const u8) ?[]const u8;
 
-pub const Input = struct {
-    gpa: Allocator,
-    text: std.ArrayList(u8) = .empty,
-    /// Byte offset of the cursor in `text`, always at a cluster boundary.
-    cursor: usize = 0,
-    prompt: []const u8 = "> ",
-    /// Shown, dimmed, while the text is empty.
-    placeholder: []const u8 = "",
-    /// Show `mask` for each character instead of the text.
-    password: bool = false,
-    mask: []const u8 = "•",
-    /// The most characters (grapheme clusters) the text may hold.
-    char_limit: ?usize = null,
-    validate: ?Validator = null,
-    /// Whether the cursor is drawn; a model holding several inputs focuses one.
-    focused: bool = true,
-    status: Status = .active,
-    /// What `validate` said about the last submitted text, until the next edit.
-    message: ?[]const u8 = null,
-    /// Completions offered as you type: the first that starts with the text (ignoring
-    /// ASCII case) shows after it.
-    suggestions: []const []const u8 = &.{},
-    /// Which of the matching suggestions is offered.
-    suggestion: usize = 0,
-    /// Show nothing of the text, not even its length.
-    hidden: bool = false,
-    /// The most edits ctrl+z can take back; 0 turns undo off.
-    undo_limit: usize = 100,
-    /// The text and cursor before each edit that can be undone, the oldest first.
-    undo_steps: std.ArrayList(Snapshot) = .empty,
-    /// The states undone, the latest undone last.
-    redo_steps: std.ArrayList(Snapshot) = .empty,
-    /// The last edit and where it left the cursor: another like it there joins its step.
-    last_edit: Edit = .none,
-    edit_end: usize = 0,
-    styles: Styles = .{},
+const Input = @This();
 
-    pub const Snapshot = struct { text: std.ArrayList(u8), cursor: usize };
+gpa: Allocator,
+text: std.ArrayList(u8) = .empty,
+/// Byte offset of the cursor in `text`, always at a cluster boundary.
+cursor: usize = 0,
+prompt: []const u8 = "> ",
+/// Shown, dimmed, while the text is empty.
+placeholder: []const u8 = "",
+/// Show `mask` for each character instead of the text.
+password: bool = false,
+mask: []const u8 = "•",
+/// The most characters (grapheme clusters) the text may hold.
+char_limit: ?usize = null,
+validate: ?Validator = null,
+/// Whether the cursor is drawn; a model holding several inputs focuses one.
+focused: bool = true,
+status: Status = .active,
+/// What `validate` said about the last submitted text, until the next edit.
+message: ?[]const u8 = null,
+/// Completions offered as you type: the first that starts with the text (ignoring
+/// ASCII case) shows after it.
+suggestions: []const []const u8 = &.{},
+/// Which of the matching suggestions is offered.
+suggestion: usize = 0,
+/// Show nothing of the text, not even its length.
+hidden: bool = false,
+/// The most edits ctrl+z can take back; 0 turns undo off.
+undo_limit: usize = 100,
+/// The text and cursor before each edit that can be undone, the oldest first.
+undo_steps: std.ArrayList(Snapshot) = .empty,
+/// The states undone, the latest undone last.
+redo_steps: std.ArrayList(Snapshot) = .empty,
+/// The last edit and where it left the cursor: another like it there joins its step.
+last_edit: Edit = .none,
+edit_end: usize = 0,
+styles: Styles = .{},
 
-    /// What an edit was, for joining edits into one undo step.
-    pub const Edit = enum { none, typing, erasing, other };
+pub const Snapshot = struct { text: std.ArrayList(u8), cursor: usize };
 
-    pub const Styles = struct {
-        prompt: tui.Style = .{ .fg = .{ .indexed = 212 } },
-        text: tui.Style = .{},
-        placeholder: tui.Style = .{ .fg = .{ .indexed = 240 } },
-        cursor: tui.Style = .{ .reverse = true },
-        message: tui.Style = .{ .fg = .{ .indexed = 203 } },
-        suggestion: tui.Style = .{ .fg = .{ .indexed = 240 } },
-    };
+/// What an edit was, for joining edits into one undo step.
+pub const Edit = enum { none, typing, erasing, other };
 
-    /// The suggestion on offer, whole, or null when none matches what was typed.
-    pub fn offered(input: *const Input) ?[]const u8 {
-        var index: usize = 0;
-        var first: ?[]const u8 = null;
-        for (input.suggestions) |candidate| {
-            if (!matchesPrefix(candidate, input.value())) continue;
-            if (first == null) first = candidate;
-            if (index == input.suggestion) return candidate;
-            index += 1;
-        }
-        return first;
-    }
-
-    fn matchCount(input: *const Input) usize {
-        var n: usize = 0;
-        for (input.suggestions) |candidate| {
-            n += @intFromBool(matchesPrefix(candidate, input.value()));
-        }
-        return n;
-    }
-
-    fn matchesPrefix(candidate: []const u8, typed: []const u8) bool {
-        return typed.len > 0 and candidate.len > typed.len and
-            std.ascii.startsWithIgnoreCase(candidate, typed);
-    }
-
-    /// Takes the suggestion on offer as the text; returns whether there was one.
-    pub fn acceptSuggestion(input: *Input) bool {
-        const choice = input.offered() orelse return false;
-        input.setValue(choice) catch return false;
-        input.suggestion = 0;
-        return true;
-    }
-
-    /// The column of the cursor in the view: after the prompt and the text before it.
-    pub fn cursorColumn(input: *const Input) usize {
-        const before = input.value()[0..input.cursor];
-        const typed = if (input.hidden)
-            0
-        else if (input.password)
-            clusterCount(before) * tui.width.of(input.mask)
-        else
-            tui.width.of(before);
-        return tui.width.of(input.prompt) + typed;
-    }
-
-    /// Frees the text and the undo history.
-    pub fn deinit(input: *Input) void {
-        input.text.deinit(input.gpa);
-        for (input.undo_steps.items) |*step| step.text.deinit(input.gpa);
-        for (input.redo_steps.items) |*step| step.text.deinit(input.gpa);
-        input.undo_steps.deinit(input.gpa);
-        input.redo_steps.deinit(input.gpa);
-        input.* = undefined;
-    }
-
-    /// The text typed so far.
-    pub fn value(input: *const Input) []const u8 {
-        return input.text.items;
-    }
-
-    /// Replaces the text (cut to `char_limit`) and puts the cursor at its end, as one
-    /// step ctrl+z takes back.
-    pub fn setValue(input: *Input, text: []const u8) Allocator.Error!void {
-        input.remember(.other);
-        input.text.clearRetainingCapacity();
-        input.cursor = 0;
-        try input.insertAs(text, .none);
-    }
-
-    /// Inserts `text` at the cursor, as much of it as `char_limit` allows. Line breaks and
-    /// tabs become spaces; other control characters and escapes are dropped.
-    pub fn insert(input: *Input, text: []const u8) Allocator.Error!void {
-        return input.insertAs(text, .other);
-    }
-
-    /// `insert`, recorded for undo as `kind` (`.none`: not recorded).
-    fn insertAs(input: *Input, text: []const u8, kind: Edit) Allocator.Error!void {
-        var clean: std.ArrayList(u8) = .empty;
-        defer clean.deinit(input.gpa);
-        var room = if (input.char_limit) |limit| limit -| clusterCount(input.value()) else null;
-        var it: tui.width.Iterator = .init(text);
-        while (it.next()) |cluster| {
-            if (room) |left| {
-                if (left == 0) break;
-            }
-            const bytes = sanitize(cluster) orelse continue;
-            try clean.appendSlice(input.gpa, bytes);
-            if (room) |*left| left.* -= 1;
-        }
-        input.message = null;
-        if (clean.items.len == 0) return;
-        input.remember(kind);
-        try input.text.insertSlice(input.gpa, input.cursor, clean.items);
-        input.cursor += clean.items.len;
-        input.edit_end = input.cursor;
-    }
-
-    /// Records the text before an edit of `kind`, unless it continues the last edit (the
-    /// same kind of typing or erasing, where that one left the cursor). A new step
-    /// forgets what was undone. Without memory for it, the edit goes unrecorded.
-    fn remember(input: *Input, kind: Edit) void {
-        if (kind == .none or input.undo_limit == 0) return;
-        const joins = kind != .other and kind == input.last_edit and
-            input.cursor == input.edit_end;
-        input.last_edit = kind;
-        if (joins) return;
-        for (input.redo_steps.items) |*step| step.text.deinit(input.gpa);
-        input.redo_steps.clearRetainingCapacity();
-        input.undo_steps.ensureUnusedCapacity(input.gpa, 1) catch return;
-        const copy = input.gpa.dupe(u8, input.value()) catch return;
-        if (input.undo_steps.items.len >= input.undo_limit) {
-            var oldest = input.undo_steps.orderedRemove(0);
-            oldest.text.deinit(input.gpa);
-        }
-        const step: Snapshot = .{ .text = .fromOwnedSlice(copy), .cursor = input.cursor };
-        input.undo_steps.appendAssumeCapacity(step);
-    }
-
-    /// Takes back the last edit step; returns whether there was one.
-    pub fn undo(input: *Input) bool {
-        return input.swapStep(&input.undo_steps, &input.redo_steps);
-    }
-
-    /// Makes again the last step undone; returns whether there was one.
-    pub fn redo(input: *Input) bool {
-        return input.swapStep(&input.redo_steps, &input.undo_steps);
-    }
-
-    /// Restores the last state in `from`, keeping the current one in `to`.
-    fn swapStep(input: *Input, from: *std.ArrayList(Snapshot), to: *std.ArrayList(Snapshot)) bool {
-        if (from.items.len == 0) return false;
-        to.ensureUnusedCapacity(input.gpa, 1) catch return false;
-        const step = from.pop().?;
-        to.appendAssumeCapacity(.{ .text = input.text, .cursor = input.cursor });
-        input.text = step.text;
-        input.cursor = step.cursor;
-        input.last_edit = .none;
-        input.message = null;
-        return true;
-    }
-
-    fn sanitize(cluster: tui.width.Cluster) ?[]const u8 {
-        if (cluster.escape) return null;
-        return switch (cluster.bytes[0]) {
-            '\n', '\r', '\t' => " ",
-            0...0x08, 0x0b, 0x0c, 0x0e...0x1f, 0x7f => null,
-            else => cluster.bytes,
-        };
-    }
-
-    pub fn update(input: *Input, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .key => |key| {
-                if (key.matches("enter")) return input.submit();
-                if (key.matches("esc")) {
-                    input.status = .canceled;
-                    return .quit;
-                }
-                _ = input.handleKey(key);
-            },
-            .paste => |text| input.insert(text) catch {},
-            else => {},
-        }
-        return .none;
-    }
-
-    /// Checks the text with `validate`: submits and quits when it passes, shows the
-    /// message otherwise.
-    pub fn submit(input: *Input) tui.Cmd {
-        if (!input.check()) return .none;
-        input.status = .submitted;
-        return .quit;
-    }
-
-    /// Runs `validate`, recording its message; returns whether the text passes.
-    pub fn check(input: *Input) bool {
-        const validate = input.validate orelse return true;
-        input.message = validate(input.value());
-        return input.message == null;
-    }
-
-    /// Applies an editing or movement key; returns whether the key was one. Enter and esc
-    /// are not: the caller decides what they mean.
-    pub fn handleKey(input: *Input, key: tui.input.Key) bool {
-        if (input.suggestions.len > 0) {
-            const at_end = input.cursor == input.text.items.len;
-            if (key.matches("tab") or (at_end and key.matches("right"))) {
-                if (input.acceptSuggestion()) return true;
-            }
-            if (key.matches("ctrl+n") or key.matches("ctrl+p")) {
-                const count = input.matchCount();
-                if (count > 0) {
-                    input.suggestion = if (key.matches("ctrl+n"))
-                        (input.suggestion + 1) % count
-                    else
-                        (input.suggestion + count - 1) % count;
-                }
-                return true;
-            }
-        }
-        defer if (input.suggestion >= @max(input.matchCount(), 1)) {
-            input.suggestion = 0;
-        };
-        if (key.printable()) |c| {
-            var buffer: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(c, &buffer) catch return true;
-            // A word typed after a space is a new undo step.
-            const text = input.value();
-            if (c != ' ' and input.cursor > 0 and text[input.cursor - 1] == ' ') {
-                input.last_edit = .none;
-            }
-            input.insertAs(buffer[0..len], .typing) catch {};
-        } else if (key.matches("ctrl+z")) {
-            _ = input.undo();
-        } else if (key.matches("ctrl+y") or key.matches("ctrl+Z")) {
-            // The decoder reports ctrl+shift+z as ctrl+Z.
-            _ = input.redo();
-        } else if (key.matches("left") or key.matches("ctrl+b")) {
-            input.cursor = previousBoundary(input.value(), input.cursor);
-        } else if (key.matches("right") or key.matches("ctrl+f")) {
-            input.cursor = nextBoundary(input.value(), input.cursor);
-        } else if (key.matches("alt+left") or key.matches("alt+b")) {
-            input.cursor = wordStart(input.value(), input.cursor);
-        } else if (key.matches("alt+right") or key.matches("alt+f")) {
-            input.cursor = wordEnd(input.value(), input.cursor);
-        } else if (key.matches("home") or key.matches("ctrl+a")) {
-            input.cursor = 0;
-        } else if (key.matches("end") or key.matches("ctrl+e")) {
-            input.cursor = input.text.items.len;
-        } else if (key.matches("backspace")) {
-            input.erase(previousBoundary(input.value(), input.cursor), input.cursor, .erasing);
-        } else if (key.matches("delete") or key.matches("ctrl+d")) {
-            input.erase(input.cursor, nextBoundary(input.value(), input.cursor), .erasing);
-        } else if (key.matches("ctrl+w") or key.matches("alt+backspace")) {
-            input.erase(wordStart(input.value(), input.cursor), input.cursor, .other);
-        } else if (key.matches("ctrl+u")) {
-            input.erase(0, input.cursor, .other);
-        } else if (key.matches("ctrl+k")) {
-            input.erase(input.cursor, input.text.items.len, .other);
-        } else return false;
-        return true;
-    }
-
-    /// Removes `text[from..to]` and leaves the cursor at `from`.
-    fn erase(input: *Input, from: usize, to: usize, kind: Edit) void {
-        input.message = null;
-        if (from == to) return;
-        input.remember(kind);
-        input.text.replaceRangeAssumeCapacity(from, to - from, &.{});
-        input.cursor = from;
-        input.edit_end = from;
-    }
-
-    pub fn view(input: *const Input, w: *Writer) Writer.Error!void {
-        try input.styles.prompt.paint(w, input.prompt);
-        if (input.text.items.len == 0) {
-            try input.writePlaceholder(w);
-        } else {
-            try input.writeText(w);
-        }
-        if (input.message) |message| {
-            try w.writeByte('\n');
-            try input.styles.message.paint(w, message);
-        }
-    }
-
-    fn writePlaceholder(input: *const Input, w: *Writer) Writer.Error!void {
-        if (!input.focused) return input.styles.placeholder.paint(w, input.placeholder);
-        const first = nextBoundary(input.placeholder, 0);
-        try input.styles.cursor.paint(w, if (first == 0) " " else input.placeholder[0..first]);
-        try input.styles.placeholder.paint(w, input.placeholder[first..]);
-    }
-
-    fn writeText(input: *const Input, w: *Writer) Writer.Error!void {
-        const text = input.value();
-        if (input.hidden) {
-            if (input.focused) try input.styles.cursor.paint(w, " ");
-            return;
-        }
-        var it: tui.width.Iterator = .init(text);
-        var start: usize = 0;
-        while (it.next()) |cluster| : (start = it.index) {
-            const shown = if (input.password) input.mask else cluster.bytes;
-            const style = if (input.focused and start == input.cursor)
-                input.styles.cursor
-            else
-                input.styles.text;
-            try style.paint(w, shown);
-        }
-        // The rest of the suggestion on offer, its first character under the cursor.
-        const rest = if (input.offered()) |choice| choice[text.len..] else "";
-        if (input.focused and input.cursor == text.len) {
-            const first = nextBoundary(rest, 0);
-            try input.styles.cursor.paint(w, if (first == 0) " " else rest[0..first]);
-            try input.styles.suggestion.paint(w, rest[first..]);
-        } else {
-            try input.styles.suggestion.paint(w, rest);
-        }
-    }
+pub const Styles = struct {
+    prompt: tui.Style = .{ .fg = .{ .indexed = 212 } },
+    text: tui.Style = .{},
+    placeholder: tui.Style = .{ .fg = .{ .indexed = 240 } },
+    cursor: tui.Style = .{ .reverse = true },
+    message: tui.Style = .{ .fg = .{ .indexed = 203 } },
+    suggestion: tui.Style = .{ .fg = .{ .indexed = 240 } },
 };
+
+/// The suggestion on offer, whole, or null when none matches what was typed.
+pub fn offered(input: *const Input) ?[]const u8 {
+    var index: usize = 0;
+    var first: ?[]const u8 = null;
+    for (input.suggestions) |candidate| {
+        if (!matchesPrefix(candidate, input.value())) continue;
+        if (first == null) first = candidate;
+        if (index == input.suggestion) return candidate;
+        index += 1;
+    }
+    return first;
+}
+
+fn matchCount(input: *const Input) usize {
+    var n: usize = 0;
+    for (input.suggestions) |candidate| {
+        n += @intFromBool(matchesPrefix(candidate, input.value()));
+    }
+    return n;
+}
+
+fn matchesPrefix(candidate: []const u8, typed: []const u8) bool {
+    return typed.len > 0 and candidate.len > typed.len and
+        std.ascii.startsWithIgnoreCase(candidate, typed);
+}
+
+/// Takes the suggestion on offer as the text; returns whether there was one.
+pub fn acceptSuggestion(input: *Input) bool {
+    const choice = input.offered() orelse return false;
+    input.setValue(choice) catch return false;
+    input.suggestion = 0;
+    return true;
+}
+
+/// The column of the cursor in the view: after the prompt and the text before it.
+pub fn cursorColumn(input: *const Input) usize {
+    const before = input.value()[0..input.cursor];
+    const typed = if (input.hidden)
+        0
+    else if (input.password)
+        clusterCount(before) * tui.width.of(input.mask)
+    else
+        tui.width.of(before);
+    return tui.width.of(input.prompt) + typed;
+}
+
+/// Frees the text and the undo history.
+pub fn deinit(input: *Input) void {
+    input.text.deinit(input.gpa);
+    for (input.undo_steps.items) |*step| step.text.deinit(input.gpa);
+    for (input.redo_steps.items) |*step| step.text.deinit(input.gpa);
+    input.undo_steps.deinit(input.gpa);
+    input.redo_steps.deinit(input.gpa);
+    input.* = undefined;
+}
+
+/// The text typed so far.
+pub fn value(input: *const Input) []const u8 {
+    return input.text.items;
+}
+
+/// Replaces the text (cut to `char_limit`) and puts the cursor at its end, as one
+/// step ctrl+z takes back.
+pub fn setValue(input: *Input, text: []const u8) Allocator.Error!void {
+    input.remember(.other);
+    input.text.clearRetainingCapacity();
+    input.cursor = 0;
+    try input.insertAs(text, .none);
+}
+
+/// Inserts `text` at the cursor, as much of it as `char_limit` allows. Line breaks and
+/// tabs become spaces; other control characters and escapes are dropped.
+pub fn insert(input: *Input, text: []const u8) Allocator.Error!void {
+    return input.insertAs(text, .other);
+}
+
+/// `insert`, recorded for undo as `kind` (`.none`: not recorded).
+fn insertAs(input: *Input, text: []const u8, kind: Edit) Allocator.Error!void {
+    var clean: std.ArrayList(u8) = .empty;
+    defer clean.deinit(input.gpa);
+    var room = if (input.char_limit) |limit| limit -| clusterCount(input.value()) else null;
+    var it: tui.width.Iterator = .init(text);
+    while (it.next()) |cluster| {
+        if (room) |left| {
+            if (left == 0) break;
+        }
+        const bytes = sanitize(cluster) orelse continue;
+        try clean.appendSlice(input.gpa, bytes);
+        if (room) |*left| left.* -= 1;
+    }
+    input.message = null;
+    if (clean.items.len == 0) return;
+    input.remember(kind);
+    try input.text.insertSlice(input.gpa, input.cursor, clean.items);
+    input.cursor += clean.items.len;
+    input.edit_end = input.cursor;
+}
+
+/// Records the text before an edit of `kind`, unless it continues the last edit (the
+/// same kind of typing or erasing, where that one left the cursor). A new step
+/// forgets what was undone. Without memory for it, the edit goes unrecorded.
+fn remember(input: *Input, kind: Edit) void {
+    if (kind == .none or input.undo_limit == 0) return;
+    const joins = kind != .other and kind == input.last_edit and
+        input.cursor == input.edit_end;
+    input.last_edit = kind;
+    if (joins) return;
+    for (input.redo_steps.items) |*step| step.text.deinit(input.gpa);
+    input.redo_steps.clearRetainingCapacity();
+    input.undo_steps.ensureUnusedCapacity(input.gpa, 1) catch return;
+    const copy = input.gpa.dupe(u8, input.value()) catch return;
+    if (input.undo_steps.items.len >= input.undo_limit) {
+        var oldest = input.undo_steps.orderedRemove(0);
+        oldest.text.deinit(input.gpa);
+    }
+    const step: Snapshot = .{ .text = .fromOwnedSlice(copy), .cursor = input.cursor };
+    input.undo_steps.appendAssumeCapacity(step);
+}
+
+/// Takes back the last edit step; returns whether there was one.
+pub fn undo(input: *Input) bool {
+    return input.swapStep(&input.undo_steps, &input.redo_steps);
+}
+
+/// Makes again the last step undone; returns whether there was one.
+pub fn redo(input: *Input) bool {
+    return input.swapStep(&input.redo_steps, &input.undo_steps);
+}
+
+/// Restores the last state in `from`, keeping the current one in `to`.
+fn swapStep(input: *Input, from: *std.ArrayList(Snapshot), to: *std.ArrayList(Snapshot)) bool {
+    if (from.items.len == 0) return false;
+    to.ensureUnusedCapacity(input.gpa, 1) catch return false;
+    const step = from.pop().?;
+    to.appendAssumeCapacity(.{ .text = input.text, .cursor = input.cursor });
+    input.text = step.text;
+    input.cursor = step.cursor;
+    input.last_edit = .none;
+    input.message = null;
+    return true;
+}
+
+fn sanitize(cluster: tui.width.Cluster) ?[]const u8 {
+    if (cluster.escape) return null;
+    return switch (cluster.bytes[0]) {
+        '\n', '\r', '\t' => " ",
+        0...0x08, 0x0b, 0x0c, 0x0e...0x1f, 0x7f => null,
+        else => cluster.bytes,
+    };
+}
+
+pub fn update(input: *Input, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .key => |key| {
+            if (key.matches("enter")) return input.submit();
+            if (key.matches("esc")) {
+                input.status = .canceled;
+                return .quit;
+            }
+            _ = input.handleKey(key);
+        },
+        .paste => |text| input.insert(text) catch {},
+        else => {},
+    }
+    return .none;
+}
+
+/// Checks the text with `validate`: submits and quits when it passes, shows the
+/// message otherwise.
+pub fn submit(input: *Input) tui.Cmd {
+    if (!input.check()) return .none;
+    input.status = .submitted;
+    return .quit;
+}
+
+/// Runs `validate`, recording its message; returns whether the text passes.
+pub fn check(input: *Input) bool {
+    const validate = input.validate orelse return true;
+    input.message = validate(input.value());
+    return input.message == null;
+}
+
+/// Applies an editing or movement key; returns whether the key was one. Enter and esc
+/// are not: the caller decides what they mean.
+pub fn handleKey(input: *Input, key: tui.input.Key) bool {
+    if (input.suggestions.len > 0) {
+        const at_end = input.cursor == input.text.items.len;
+        if (key.matches("tab") or (at_end and key.matches("right"))) {
+            if (input.acceptSuggestion()) return true;
+        }
+        if (key.matches("ctrl+n") or key.matches("ctrl+p")) {
+            const count = input.matchCount();
+            if (count > 0) {
+                input.suggestion = if (key.matches("ctrl+n"))
+                    (input.suggestion + 1) % count
+                else
+                    (input.suggestion + count - 1) % count;
+            }
+            return true;
+        }
+    }
+    defer if (input.suggestion >= @max(input.matchCount(), 1)) {
+        input.suggestion = 0;
+    };
+    if (key.printable()) |c| {
+        var buffer: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(c, &buffer) catch return true;
+        // A word typed after a space is a new undo step.
+        const text = input.value();
+        if (c != ' ' and input.cursor > 0 and text[input.cursor - 1] == ' ') {
+            input.last_edit = .none;
+        }
+        input.insertAs(buffer[0..len], .typing) catch {};
+    } else if (key.matches("ctrl+z")) {
+        _ = input.undo();
+    } else if (key.matches("ctrl+y") or key.matches("ctrl+Z")) {
+        // The decoder reports ctrl+shift+z as ctrl+Z.
+        _ = input.redo();
+    } else if (key.matches("left") or key.matches("ctrl+b")) {
+        input.cursor = previousBoundary(input.value(), input.cursor);
+    } else if (key.matches("right") or key.matches("ctrl+f")) {
+        input.cursor = nextBoundary(input.value(), input.cursor);
+    } else if (key.matches("alt+left") or key.matches("alt+b")) {
+        input.cursor = wordStart(input.value(), input.cursor);
+    } else if (key.matches("alt+right") or key.matches("alt+f")) {
+        input.cursor = wordEnd(input.value(), input.cursor);
+    } else if (key.matches("home") or key.matches("ctrl+a")) {
+        input.cursor = 0;
+    } else if (key.matches("end") or key.matches("ctrl+e")) {
+        input.cursor = input.text.items.len;
+    } else if (key.matches("backspace")) {
+        input.erase(previousBoundary(input.value(), input.cursor), input.cursor, .erasing);
+    } else if (key.matches("delete") or key.matches("ctrl+d")) {
+        input.erase(input.cursor, nextBoundary(input.value(), input.cursor), .erasing);
+    } else if (key.matches("ctrl+w") or key.matches("alt+backspace")) {
+        input.erase(wordStart(input.value(), input.cursor), input.cursor, .other);
+    } else if (key.matches("ctrl+u")) {
+        input.erase(0, input.cursor, .other);
+    } else if (key.matches("ctrl+k")) {
+        input.erase(input.cursor, input.text.items.len, .other);
+    } else return false;
+    return true;
+}
+
+/// Removes `text[from..to]` and leaves the cursor at `from`.
+fn erase(input: *Input, from: usize, to: usize, kind: Edit) void {
+    input.message = null;
+    if (from == to) return;
+    input.remember(kind);
+    input.text.replaceRangeAssumeCapacity(from, to - from, &.{});
+    input.cursor = from;
+    input.edit_end = from;
+}
+
+pub fn view(input: *const Input, w: *Writer) Writer.Error!void {
+    try input.styles.prompt.paint(w, input.prompt);
+    if (input.text.items.len == 0) {
+        try input.writePlaceholder(w);
+    } else {
+        try input.writeText(w);
+    }
+    if (input.message) |message| {
+        try w.writeByte('\n');
+        try input.styles.message.paint(w, message);
+    }
+}
+
+fn writePlaceholder(input: *const Input, w: *Writer) Writer.Error!void {
+    if (!input.focused) return input.styles.placeholder.paint(w, input.placeholder);
+    const first = nextBoundary(input.placeholder, 0);
+    try input.styles.cursor.paint(w, if (first == 0) " " else input.placeholder[0..first]);
+    try input.styles.placeholder.paint(w, input.placeholder[first..]);
+}
+
+fn writeText(input: *const Input, w: *Writer) Writer.Error!void {
+    const text = input.value();
+    if (input.hidden) {
+        if (input.focused) try input.styles.cursor.paint(w, " ");
+        return;
+    }
+    var it: tui.width.Iterator = .init(text);
+    var start: usize = 0;
+    while (it.next()) |cluster| : (start = it.index) {
+        const shown = if (input.password) input.mask else cluster.bytes;
+        const style = if (input.focused and start == input.cursor)
+            input.styles.cursor
+        else
+            input.styles.text;
+        try style.paint(w, shown);
+    }
+    // The rest of the suggestion on offer, its first character under the cursor.
+    const rest = if (input.offered()) |choice| choice[text.len..] else "";
+    if (input.focused and input.cursor == text.len) {
+        const first = nextBoundary(rest, 0);
+        try input.styles.cursor.paint(w, if (first == 0) " " else rest[0..first]);
+        try input.styles.suggestion.paint(w, rest[first..]);
+    } else {
+        try input.styles.suggestion.paint(w, rest);
+    }
+}
 
 /// The number of grapheme clusters in `text`.
 pub fn clusterCount(text: []const u8) usize {

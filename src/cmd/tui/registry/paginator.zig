@@ -14,82 +14,82 @@ const std = @import("std");
 const tui = @import("tui");
 const Writer = std.Io.Writer;
 
-pub const Paginator = struct {
-    kind: Kind = .dots,
-    /// The page shown, from 0.
-    page: usize = 0,
-    per_page: usize = 10,
-    /// How many pages there are (at least one).
-    pages: usize = 1,
-    active_dot: []const u8 = "●",
-    inactive_dot: []const u8 = "○",
-    /// Turn pages with the keys in `update`.
-    keys: bool = true,
-    styles: Styles = .{},
+const Paginator = @This();
 
-    pub const Kind = enum { dots, arabic };
+kind: Kind = .dots,
+/// The page shown, from 0.
+page: usize = 0,
+per_page: usize = 10,
+/// How many pages there are (at least one).
+pages: usize = 1,
+active_dot: []const u8 = "●",
+inactive_dot: []const u8 = "○",
+/// Turn pages with the keys in `update`.
+keys: bool = true,
+styles: Styles = .{},
 
-    pub const Styles = struct {
-        active: tui.Style = .{},
-        inactive: tui.Style = .{ .dim = true },
-        arabic: tui.Style = .{},
-    };
+pub const Kind = enum { dots, arabic };
 
-    /// Sets `pages` for `items` items, keeping the page on the last one at most.
-    pub fn setTotal(p: *Paginator, items: usize) void {
-        const per = @max(p.per_page, 1);
-        p.pages = @max(1, (items + per - 1) / per);
-        p.page = @min(p.page, p.pages - 1);
-    }
-
-    /// The range of item indices on the page, of `items` in all.
-    pub fn bounds(p: *const Paginator, items: usize) struct { start: usize, end: usize } {
-        const start = @min(p.page * p.per_page, items);
-        return .{ .start = start, .end = @min(start + p.per_page, items) };
-    }
-
-    pub fn onFirstPage(p: *const Paginator) bool {
-        return p.page == 0;
-    }
-
-    pub fn onLastPage(p: *const Paginator) bool {
-        return p.page + 1 >= p.pages;
-    }
-
-    pub fn nextPage(p: *Paginator) void {
-        if (!p.onLastPage()) p.page += 1;
-    }
-
-    pub fn previousPage(p: *Paginator) void {
-        if (!p.onFirstPage()) p.page -= 1;
-    }
-
-    pub fn update(p: *Paginator, msg: tui.Msg) tui.Cmd {
-        if (!p.keys or msg != .key) return .none;
-        const key = msg.key;
-        if (key.matches("right") or key.matches("l") or key.matches("pgdown")) p.nextPage();
-        if (key.matches("left") or key.matches("h") or key.matches("pgup")) p.previousPage();
-        return .none;
-    }
-
-    pub fn view(p: *const Paginator, w: *Writer) Writer.Error!void {
-        switch (p.kind) {
-            .arabic => {
-                var buffer: [48]u8 = undefined;
-                const pages = .{ p.page + 1, p.pages };
-                const text = std.fmt.bufPrint(&buffer, "{d}/{d}", pages) catch "";
-                try p.styles.arabic.paint(w, text);
-            },
-            .dots => for (0..p.pages) |i| {
-                if (i == p.page) {
-                    try p.styles.active.paint(w, p.active_dot);
-                } else {
-                    try p.styles.inactive.paint(w, p.inactive_dot);
-                }
-            },
-        }
-    }
+pub const Styles = struct {
+    active: tui.Style = .{},
+    inactive: tui.Style = .{ .dim = true },
+    arabic: tui.Style = .{},
 };
+
+/// Sets `pages` for `items` items, keeping the page on the last one at most.
+pub fn setTotal(p: *Paginator, items: usize) void {
+    const per = @max(p.per_page, 1);
+    p.pages = @max(1, (items + per - 1) / per);
+    p.page = @min(p.page, p.pages - 1);
+}
+
+/// The range of item indices on the page, of `items` in all.
+pub fn bounds(p: *const Paginator, items: usize) struct { start: usize, end: usize } {
+    const start = @min(p.page * p.per_page, items);
+    return .{ .start = start, .end = @min(start + p.per_page, items) };
+}
+
+pub fn onFirstPage(p: *const Paginator) bool {
+    return p.page == 0;
+}
+
+pub fn onLastPage(p: *const Paginator) bool {
+    return p.page + 1 >= p.pages;
+}
+
+pub fn nextPage(p: *Paginator) void {
+    if (!p.onLastPage()) p.page += 1;
+}
+
+pub fn previousPage(p: *Paginator) void {
+    if (!p.onFirstPage()) p.page -= 1;
+}
+
+pub fn update(p: *Paginator, msg: tui.Msg) tui.Cmd {
+    if (!p.keys or msg != .key) return .none;
+    const key = msg.key;
+    if (key.matches("right") or key.matches("l") or key.matches("pgdown")) p.nextPage();
+    if (key.matches("left") or key.matches("h") or key.matches("pgup")) p.previousPage();
+    return .none;
+}
+
+pub fn view(p: *const Paginator, w: *Writer) Writer.Error!void {
+    switch (p.kind) {
+        .arabic => {
+            var buffer: [48]u8 = undefined;
+            const pages = .{ p.page + 1, p.pages };
+            const text = std.fmt.bufPrint(&buffer, "{d}/{d}", pages) catch "";
+            try p.styles.arabic.paint(w, text);
+        },
+        .dots => for (0..p.pages) |i| {
+            if (i == p.page) {
+                try p.styles.active.paint(w, p.active_dot);
+            } else {
+                try p.styles.inactive.paint(w, p.inactive_dot);
+            }
+        },
+    }
+}
 
 const testing = std.testing;
 

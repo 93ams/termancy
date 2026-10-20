@@ -20,153 +20,153 @@
 const std = @import("std");
 const tui = @import("tui");
 
-pub const List = struct {
-    items: []const []const u8,
-    /// The index of the highlighted item.
-    cursor: usize = 0,
-    /// The index of the first item shown.
-    offset: usize = 0,
-    /// The most items shown at once.
-    height: usize = 10,
-    /// The terminal's width, from the last resize; rows are cut to fit.
-    width: ?usize = null,
-    /// Written before the highlighted item.
-    cursor_prefix: []const u8 = "> ",
-    /// Written before every other item; as wide as `cursor_prefix`.
-    item_prefix: []const u8 = "  ",
-    /// The screen row the first item is drawn on, for mouse clicks.
-    top: usize = 0,
-    styles: Styles = .{},
+const List = @This();
 
-    pub const Styles = struct {
-        cursor: tui.Style = .{ .fg = .{ .indexed = 212 } },
-        item: tui.Style = .{},
-    };
+items: []const []const u8,
+/// The index of the highlighted item.
+cursor: usize = 0,
+/// The index of the first item shown.
+offset: usize = 0,
+/// The most items shown at once.
+height: usize = 10,
+/// The terminal's width, from the last resize; rows are cut to fit.
+width: ?usize = null,
+/// Written before the highlighted item.
+cursor_prefix: []const u8 = "> ",
+/// Written before every other item; as wide as `cursor_prefix`.
+item_prefix: []const u8 = "  ",
+/// The screen row the first item is drawn on, for mouse clicks.
+top: usize = 0,
+styles: Styles = .{},
 
-    /// The first and one-past-the-last index of the items on screen.
-    pub const Window = struct { start: usize, end: usize };
-
-    /// Moves on navigation keys and records the terminal width. Never quits.
-    pub fn update(list: *List, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .key => |key| _ = list.handleKey(key),
-            .mouse => |mouse| _ = list.handleMouse(mouse, list.top),
-            .resize => |size| list.width = size.width,
-            else => {},
-        }
-        return .none;
-    }
-
-    /// Applies a navigation key; returns whether the key was one.
-    pub fn handleKey(list: *List, key: tui.input.Key) bool {
-        if (key.matches("up") or key.matches("k") or key.matches("ctrl+p")) {
-            list.moveBy(-1);
-        } else if (key.matches("down") or key.matches("j") or key.matches("ctrl+n")) {
-            list.moveBy(1);
-        } else if (key.matches("pgup") or key.matches("ctrl+b")) {
-            list.page(-1);
-        } else if (key.matches("pgdown") or key.matches("ctrl+f")) {
-            list.page(1);
-        } else if (key.matches("home") or key.matches("g")) {
-            list.moveTo(0);
-        } else if (key.matches("end") or key.matches("G")) {
-            list.moveTo(list.items.len -| 1);
-        } else return false;
-        return true;
-    }
-
-    /// Applies a mouse event, the first item being on screen row `top`: the wheel moves the
-    /// cursor; a left click puts it on the item clicked and returns that item's index.
-    pub fn handleMouse(list: *List, mouse: tui.input.Mouse, top: usize) ?usize {
-        switch (mouse.button) {
-            .wheel_up => list.moveBy(-1),
-            .wheel_down => list.moveBy(1),
-            .left => if (mouse.action == .press and mouse.y >= top) {
-                const index = list.window().start + (mouse.y - top);
-                if (index < list.window().end) {
-                    list.moveTo(index);
-                    return index;
-                }
-            },
-            else => {},
-        }
-        return null;
-    }
-
-    /// Moves the cursor by `delta` items, stopping at either end.
-    pub fn moveBy(list: *List, delta: isize) void {
-        const target = @as(isize, @intCast(list.cursor)) + delta;
-        list.moveTo(@intCast(@max(0, target)));
-    }
-
-    /// Moves the cursor a screenful up (`direction` < 0) or down.
-    pub fn page(list: *List, direction: isize) void {
-        list.moveBy(direction * @as(isize, @intCast(@max(list.height, 1))));
-    }
-
-    /// Puts the cursor on `index` (clamped to the items) and scrolls it into view.
-    pub fn moveTo(list: *List, index: usize) void {
-        list.cursor = @min(index, list.items.len -| 1);
-        list.scroll();
-    }
-
-    /// Replaces the items, keeping the cursor in range and on screen.
-    pub fn setItems(list: *List, items: []const []const u8) void {
-        list.items = items;
-        list.moveTo(list.cursor);
-    }
-
-    /// Adjusts `offset` so the cursor is inside the window.
-    fn scroll(list: *List) void {
-        const height = @max(list.height, 1);
-        if (list.cursor < list.offset) list.offset = list.cursor;
-        if (list.cursor >= list.offset + height) list.offset = list.cursor + 1 - height;
-        list.offset = @min(list.offset, list.items.len -| height);
-    }
-
-    /// The items on screen.
-    pub fn window(list: *const List) Window {
-        const start = @min(list.offset, list.items.len);
-        return .{ .start = start, .end = @min(start + list.height, list.items.len) };
-    }
-
-    /// The highlighted item, or null when the list is empty.
-    pub fn current(list: *const List) ?[]const u8 {
-        if (list.items.len == 0) return null;
-        return list.items[list.cursor];
-    }
-
-    /// One row per item on screen; nothing for an empty list.
-    pub fn view(list: *const List, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        const shown = list.window();
-        for (shown.start..shown.end) |i| {
-            if (i > shown.start) try w.writeByte('\n');
-            try list.writeRow(w, i, list.items[i]);
-        }
-    }
-
-    /// Writes item `index` as the list shows it, with `text` in place of the item, so
-    /// models built on the list can decorate items (marks, highlights) and keep its look.
-    pub fn writeRow(
-        list: *const List,
-        w: *std.Io.Writer,
-        index: usize,
-        text: []const u8,
-    ) std.Io.Writer.Error!void {
-        const is_cursor = index == list.cursor;
-        const prefix = if (is_cursor) list.cursor_prefix else list.item_prefix;
-        const style = if (is_cursor) list.styles.cursor else list.styles.item;
-        try style.paint(w, prefix);
-        try style.writeSgr(w);
-        const room = if (list.width) |width| width -| tui.width.of(prefix) else null;
-        if (room) |columns| {
-            try tui.width.truncate(w, text, columns, "…");
-        } else {
-            try w.writeAll(text);
-        }
-        if (style.hasSgr()) try w.writeAll(tui.ansi.reset);
-    }
+pub const Styles = struct {
+    cursor: tui.Style = .{ .fg = .{ .indexed = 212 } },
+    item: tui.Style = .{},
 };
+
+/// The first and one-past-the-last index of the items on screen.
+pub const Window = struct { start: usize, end: usize };
+
+/// Moves on navigation keys and records the terminal width. Never quits.
+pub fn update(list: *List, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .key => |key| _ = list.handleKey(key),
+        .mouse => |mouse| _ = list.handleMouse(mouse, list.top),
+        .resize => |size| list.width = size.width,
+        else => {},
+    }
+    return .none;
+}
+
+/// Applies a navigation key; returns whether the key was one.
+pub fn handleKey(list: *List, key: tui.input.Key) bool {
+    if (key.matches("up") or key.matches("k") or key.matches("ctrl+p")) {
+        list.moveBy(-1);
+    } else if (key.matches("down") or key.matches("j") or key.matches("ctrl+n")) {
+        list.moveBy(1);
+    } else if (key.matches("pgup") or key.matches("ctrl+b")) {
+        list.page(-1);
+    } else if (key.matches("pgdown") or key.matches("ctrl+f")) {
+        list.page(1);
+    } else if (key.matches("home") or key.matches("g")) {
+        list.moveTo(0);
+    } else if (key.matches("end") or key.matches("G")) {
+        list.moveTo(list.items.len -| 1);
+    } else return false;
+    return true;
+}
+
+/// Applies a mouse event, the first item being on screen row `top`: the wheel moves the
+/// cursor; a left click puts it on the item clicked and returns that item's index.
+pub fn handleMouse(list: *List, mouse: tui.input.Mouse, top: usize) ?usize {
+    switch (mouse.button) {
+        .wheel_up => list.moveBy(-1),
+        .wheel_down => list.moveBy(1),
+        .left => if (mouse.action == .press and mouse.y >= top) {
+            const index = list.window().start + (mouse.y - top);
+            if (index < list.window().end) {
+                list.moveTo(index);
+                return index;
+            }
+        },
+        else => {},
+    }
+    return null;
+}
+
+/// Moves the cursor by `delta` items, stopping at either end.
+pub fn moveBy(list: *List, delta: isize) void {
+    const target = @as(isize, @intCast(list.cursor)) + delta;
+    list.moveTo(@intCast(@max(0, target)));
+}
+
+/// Moves the cursor a screenful up (`direction` < 0) or down.
+pub fn page(list: *List, direction: isize) void {
+    list.moveBy(direction * @as(isize, @intCast(@max(list.height, 1))));
+}
+
+/// Puts the cursor on `index` (clamped to the items) and scrolls it into view.
+pub fn moveTo(list: *List, index: usize) void {
+    list.cursor = @min(index, list.items.len -| 1);
+    list.scroll();
+}
+
+/// Replaces the items, keeping the cursor in range and on screen.
+pub fn setItems(list: *List, items: []const []const u8) void {
+    list.items = items;
+    list.moveTo(list.cursor);
+}
+
+/// Adjusts `offset` so the cursor is inside the window.
+fn scroll(list: *List) void {
+    const height = @max(list.height, 1);
+    if (list.cursor < list.offset) list.offset = list.cursor;
+    if (list.cursor >= list.offset + height) list.offset = list.cursor + 1 - height;
+    list.offset = @min(list.offset, list.items.len -| height);
+}
+
+/// The items on screen.
+pub fn window(list: *const List) Window {
+    const start = @min(list.offset, list.items.len);
+    return .{ .start = start, .end = @min(start + list.height, list.items.len) };
+}
+
+/// The highlighted item, or null when the list is empty.
+pub fn current(list: *const List) ?[]const u8 {
+    if (list.items.len == 0) return null;
+    return list.items[list.cursor];
+}
+
+/// One row per item on screen; nothing for an empty list.
+pub fn view(list: *const List, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    const shown = list.window();
+    for (shown.start..shown.end) |i| {
+        if (i > shown.start) try w.writeByte('\n');
+        try list.writeRow(w, i, list.items[i]);
+    }
+}
+
+/// Writes item `index` as the list shows it, with `text` in place of the item, so
+/// models built on the list can decorate items (marks, highlights) and keep its look.
+pub fn writeRow(
+    list: *const List,
+    w: *std.Io.Writer,
+    index: usize,
+    text: []const u8,
+) std.Io.Writer.Error!void {
+    const is_cursor = index == list.cursor;
+    const prefix = if (is_cursor) list.cursor_prefix else list.item_prefix;
+    const style = if (is_cursor) list.styles.cursor else list.styles.item;
+    try style.paint(w, prefix);
+    try style.writeSgr(w);
+    const room = if (list.width) |width| width -| tui.width.of(prefix) else null;
+    if (room) |columns| {
+        try tui.width.truncate(w, text, columns, "…");
+    } else {
+        try w.writeAll(text);
+    }
+    if (style.hasSgr()) try w.writeAll(tui.ansi.reset);
+}
 
 const testing = std.testing;
 const fruits = [_][]const u8{ "apple", "banana", "cherry", "damson", "elder", "fig", "grape" };

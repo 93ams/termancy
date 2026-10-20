@@ -5,7 +5,7 @@ const cli = @import("cli");
 const field = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
-const Filter = @import("../tui/registry/filter.zig").Filter;
+const Filter = @import("../tui/registry/filter.zig");
 
 pub const Flags = struct {
     limit: usize = 1,

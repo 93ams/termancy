@@ -199,7 +199,7 @@ fn exitStatus(err: anyerror) ?u8 {
 pub fn main(init: std.process.Init) u8 {
     // At a terminal, the questions are drawn by the `prompts` component (copied into a
     // project with `termancy tui add prompts`); elsewhere they are never asked.
-    var prompts: components.prompts.Prompts = .{
+    var prompts: components.Prompts = .{
         .gpa = init.gpa,
         .io = init.io,
         .environ = init.environ_map,

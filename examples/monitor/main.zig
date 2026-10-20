@@ -21,10 +21,10 @@ const field = @import("field");
 const tui = @import("tui");
 const components = @import("components");
 
-const Tabs = components.tabs.Tabs;
-const Table = components.table.Table;
-const Spinner = components.spinner.Spinner;
-const Progress = components.progress.Progress;
+const Tabs = components.Tabs;
+const Table = components.Table;
+const Spinner = components.Spinner;
+const Progress = components.Progress;
 const chart = components.chart;
 
 const services = [_][]const []const u8{

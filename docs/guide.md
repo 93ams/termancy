@@ -37,7 +37,7 @@ const field = @import("field");
 const cfg = @import("cfg");
 const tui = @import("tui");
 // `termancy tui add select` copied select.zig, and list.zig which it requires, into src/ui.
-const Select = @import("ui/select.zig").Select;
+const Select = @import("ui/select.zig");
 ```
 
 ## 2. A config file

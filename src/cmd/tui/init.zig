@@ -7,7 +7,7 @@ const field = @import("field");
 const project = @import("../cli/project.zig");
 const cli_init = @import("../cli/init.zig");
 const manifest = @import("project/manifest.zig");
-const Workspace = @import("project/workspace.zig").Workspace;
+const Workspace = @import("project/workspace.zig");
 
 const InitFlags = struct {
     dir: []const u8 = manifest.default_dir,

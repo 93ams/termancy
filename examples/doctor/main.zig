@@ -100,7 +100,7 @@ fn showEnv(ctx: *cli.Context) !void {
 const NewerArgs = struct { current: []const u8, latest: []const u8 };
 
 fn newer(ctx: *cli.Context, args: NewerArgs) !void {
-    const Version = sys.version.Version;
+    const Version = sys.Version;
     const current = Version.parse(args.current) catch
         return ctx.usageError("\"{s}\" is not a version", .{args.current});
     const latest = Version.parse(args.latest) catch

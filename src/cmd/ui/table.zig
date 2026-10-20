@@ -5,7 +5,7 @@ const cli = @import("cli");
 const field_ = @import("field");
 const tui = @import("tui");
 const term = @import("term.zig");
-const Table = @import("../tui/registry/table.zig").Table;
+const Table = @import("../tui/registry/table.zig");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 

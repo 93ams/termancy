@@ -5,7 +5,7 @@ const cli = @import("cli");
 const tui = @import("tui");
 const sys = @import("sys");
 const term = @import("term.zig");
-const Pager = @import("../tui/registry/pager.zig").Pager;
+const Pager = @import("../tui/registry/pager.zig");
 
 pub const command = cli.command(.{
     .name = "pager",

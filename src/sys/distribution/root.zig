@@ -8,7 +8,7 @@
 const std = @import("std");
 
 /// Semantic version parse, format, and precedence (SemVer 2.0.0).
-pub const version = @import("version.zig");
+pub const Version = @import("version.zig");
 /// Self-update: release lookup, checksum and signature verification, atomic install.
 pub const update = @import("update.zig");
 /// Homebrew, Scoop, PKGBUILD, and Debian control files from one package description.
@@ -20,7 +20,7 @@ test {
     // `refAllDecls` is shallow, so every file is named here; a file missing from this list
     // would have its tests silently skipped.
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(version);
+    std.testing.refAllDecls(Version);
     std.testing.refAllDecls(update);
     std.testing.refAllDecls(manifests);
     std.testing.refAllDecls(remote);

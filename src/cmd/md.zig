@@ -336,7 +336,7 @@ const Reader = struct {
     document: Document,
     /// The source as read last; owned when reloaded.
     owned: ?[]u8 = null,
-    doc: registry.markdown.Markdown,
+    doc: registry.Markdown,
     /// Back to the list on esc (opened from one), or quit.
     from_list: bool,
     /// Asked to go back to the list.
@@ -445,12 +445,12 @@ const Reader = struct {
 
 /// The list of files to read, filtered as you type, and the reader for the chosen one.
 fn browse(ctx: *cli.Context, paths: []const []const u8, options: markdown.Options) !void {
-    var filter: registry.filter.Filter = try .init(ctx.gpa, paths);
+    var filter: registry.Filter = try .init(ctx.gpa, paths);
     defer filter.deinit();
     filter.header = "Markdown files";
     while (true) {
         filter.status = .active;
-        if (try term.run(ctx, registry.filter.Filter, &filter, .{ .alt_screen = true })) {
+        if (try term.run(ctx, registry.Filter, &filter, .{ .alt_screen = true })) {
             return term.exitInterrupted(ctx);
         }
         if (filter.status != .submitted) return;

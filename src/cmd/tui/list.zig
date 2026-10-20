@@ -6,8 +6,7 @@ const field = @import("field");
 const catalog = @import("project/catalog.zig");
 const manifest = @import("project/manifest.zig");
 const status = @import("project/status.zig");
-const workspace = @import("project/workspace.zig");
-const Workspace = workspace.Workspace;
+const Workspace = @import("project/workspace.zig");
 const group = @import("init.zig").group;
 
 const ListFlags = struct {
@@ -65,7 +64,7 @@ fn run(ctx: *cli.Context, flags: ListFlags) !void {
     var ws: Workspace = try .open(ctx, flags.project, false);
     defer ws.close(ctx.io);
     const m = try ws.loadManifest(ctx);
-    const components = try workspace.components(ctx);
+    const components = try Workspace.components(ctx);
     const rows = try ctx.arena.alloc(Row, components.len);
     for (components, rows) |*component, *row| {
         var state: status.Status = .{};
@@ -96,7 +95,7 @@ pub fn componentStatus(
     var state: status.Status = .{ .installed = true };
     for (component.files) |name| {
         const disk = try ws.read(ctx, try manifest.filePath(ctx.arena, m, name));
-        const registry = try workspace.source(ctx, name);
+        const registry = try Workspace.source(ctx, name);
         status.addFile(&state, disk, m.recorded(component.name, name), registry);
     }
     return state;

@@ -150,7 +150,7 @@ const Editor = struct {
 
     fn readLine(repl: *cli.repl.Repl) anyerror!?[]const u8 {
         const editor: *Editor = @ptrCast(@alignCast(repl.app.data.?));
-        var editing: components.shell.Shell = .{
+        var editing: components.Shell = .{
             .input = .{ .gpa = editor.gpa, .prompt = "kv> " },
             .history = repl.history.items,
             .completer = .{ .context = repl, .function = complete },
@@ -158,7 +158,7 @@ const Editor = struct {
         const capability = editor.terminal.capabilityIn(editor.environ);
         const options: tui.Options = .{ .capability = capability };
         defer editing.deinit();
-        var program: tui.Program(components.shell.Shell) =
+        var program: tui.Program(components.Shell) =
             .init(editor.gpa, &editing, editor.terminal.writer(), options);
         defer program.deinit();
         const outcome = try program.run(&editor.terminal);

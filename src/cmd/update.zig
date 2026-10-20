@@ -79,7 +79,7 @@ fn run(ctx: *cli.Context, flags: UpdateFlags) !void {
 fn defaultOptions() update.Options {
     return .{
         .source = source,
-        .current = comptime sys.version.parse(version) catch unreachable,
+        .current = comptime sys.Version.parse(version) catch unreachable,
         // Releases publish archives: termancy-<os>-<cpu>.tar.gz, and .zip for Windows.
         .naming = .{ .suffix = if (builtin.os.tag == .windows) ".zip" else ".tar.gz" },
         .executable_name = "termancy",
@@ -245,7 +245,7 @@ fn runningExecutable(ctx: *cli.Context) !Destination {
 }
 
 /// What `runsVersion` needs: the release's version, which the new termancy must report.
-const Accept = struct { gpa: std.mem.Allocator, expected: sys.version.Version };
+const Accept = struct { gpa: std.mem.Allocator, expected: sys.Version };
 
 /// The install check: the new executable must run `--version` successfully and report the
 /// release's version, so an older signed archive published under a newer tag (the signature
@@ -270,7 +270,7 @@ fn runsVersion(
 
 /// Whether `stdout` of `termancy --version` names `expected`: `termancy <version>`, then a space,
 /// a line end, or nothing.
-fn reports(stdout: []const u8, expected: sys.version.Version) bool {
+fn reports(stdout: []const u8, expected: sys.Version) bool {
     var buffer: [128]u8 = undefined;
     const want = std.fmt.bufPrint(&buffer, "termancy {f}", .{expected}) catch return false;
     if (!std.mem.startsWith(u8, stdout, want)) return false;
@@ -279,7 +279,7 @@ fn reports(stdout: []const u8, expected: sys.version.Version) bool {
 }
 
 test reports {
-    const v = try sys.version.parse("1.2.0");
+    const v = try sys.Version.parse("1.2.0");
     try testing.expect(reports("termancy 1.2.0\n", v));
     try testing.expect(reports("termancy 1.2.0 (abc1234, 2026-10-17)\n", v));
     try testing.expect(!reports("termancy 1.1.0\n", v)); // An older release, re-tagged.

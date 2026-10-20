@@ -31,349 +31,349 @@ const Writer = std.Io.Writer;
 
 pub const Status = enum { active, submitted, canceled };
 
-pub const Textarea = struct {
-    gpa: Allocator,
-    text: std.ArrayList(u8) = .empty,
-    /// Byte offset of the cursor in `text`, always at a cluster boundary.
-    cursor: usize = 0,
-    /// Written before every line.
-    prompt: []const u8 = "┃ ",
-    /// Shown, dimmed, while the text is empty.
-    placeholder: []const u8 = "",
-    /// The most characters (grapheme clusters, line breaks included) the text may hold.
-    char_limit: ?usize = null,
-    /// The most lines shown; null shows them all.
-    height: ?usize = null,
-    /// The first line shown.
-    offset: usize = 0,
-    /// The column up and down aim for: where the cursor was before it met a shorter line.
-    goal: ?usize = null,
-    /// Whether the cursor is drawn.
-    focused: bool = true,
-    /// Number the lines, after the prompt.
-    line_numbers: bool = false,
-    status: Status = .active,
-    /// The most edits ctrl+z can take back; 0 turns undo off.
-    // shortcut: each step copies the whole text, so memory is undo_limit times its size;
-    // store the edits instead if texts grow to megabytes.
-    undo_limit: usize = 100,
-    /// The text and cursor before each edit that can be undone, the oldest first.
-    undo_steps: std.ArrayList(Snapshot) = .empty,
-    /// The states undone, the latest undone last.
-    redo_steps: std.ArrayList(Snapshot) = .empty,
-    /// The last edit and where it left the cursor: another like it there joins its step.
-    last_edit: Edit = .none,
-    edit_end: usize = 0,
-    styles: Styles = .{},
+const Textarea = @This();
 
-    pub const Snapshot = struct { text: std.ArrayList(u8), cursor: usize };
+gpa: Allocator,
+text: std.ArrayList(u8) = .empty,
+/// Byte offset of the cursor in `text`, always at a cluster boundary.
+cursor: usize = 0,
+/// Written before every line.
+prompt: []const u8 = "┃ ",
+/// Shown, dimmed, while the text is empty.
+placeholder: []const u8 = "",
+/// The most characters (grapheme clusters, line breaks included) the text may hold.
+char_limit: ?usize = null,
+/// The most lines shown; null shows them all.
+height: ?usize = null,
+/// The first line shown.
+offset: usize = 0,
+/// The column up and down aim for: where the cursor was before it met a shorter line.
+goal: ?usize = null,
+/// Whether the cursor is drawn.
+focused: bool = true,
+/// Number the lines, after the prompt.
+line_numbers: bool = false,
+status: Status = .active,
+/// The most edits ctrl+z can take back; 0 turns undo off.
+// shortcut: each step copies the whole text, so memory is undo_limit times its size;
+// store the edits instead if texts grow to megabytes.
+undo_limit: usize = 100,
+/// The text and cursor before each edit that can be undone, the oldest first.
+undo_steps: std.ArrayList(Snapshot) = .empty,
+/// The states undone, the latest undone last.
+redo_steps: std.ArrayList(Snapshot) = .empty,
+/// The last edit and where it left the cursor: another like it there joins its step.
+last_edit: Edit = .none,
+edit_end: usize = 0,
+styles: Styles = .{},
 
-    /// What an edit was, for joining edits into one undo step.
-    pub const Edit = enum { none, typing, erasing, other };
+pub const Snapshot = struct { text: std.ArrayList(u8), cursor: usize };
 
-    pub const Styles = struct {
-        prompt: tui.Style = .{ .fg = .{ .indexed = 238 } },
-        text: tui.Style = .{},
-        placeholder: tui.Style = .{ .fg = .{ .indexed = 240 } },
-        cursor: tui.Style = .{ .reverse = true },
-        line_number: tui.Style = .{ .fg = .{ .indexed = 240 } },
-    };
+/// What an edit was, for joining edits into one undo step.
+pub const Edit = enum { none, typing, erasing, other };
 
-    /// Frees the text and the undo history.
-    pub fn deinit(area: *Textarea) void {
-        area.text.deinit(area.gpa);
-        for (area.undo_steps.items) |*step| step.text.deinit(area.gpa);
-        for (area.redo_steps.items) |*step| step.text.deinit(area.gpa);
-        area.undo_steps.deinit(area.gpa);
-        area.redo_steps.deinit(area.gpa);
-        area.* = undefined;
-    }
-
-    /// The text typed so far.
-    pub fn value(area: *const Textarea) []const u8 {
-        return area.text.items;
-    }
-
-    /// Replaces the text (cut to `char_limit`) and puts the cursor at its end, as one
-    /// step ctrl+z takes back.
-    pub fn setValue(area: *Textarea, text: []const u8) Allocator.Error!void {
-        area.remember(.other);
-        area.text.clearRetainingCapacity();
-        area.cursor = 0;
-        area.offset = 0;
-        try area.insertAs(text, .none);
-    }
-
-    /// Inserts `text` at the cursor, as much as `char_limit` allows. `\r\n` and `\r` become
-    /// line breaks, a tab four spaces; other control characters and escapes are dropped.
-    pub fn insert(area: *Textarea, text: []const u8) Allocator.Error!void {
-        return area.insertAs(text, .other);
-    }
-
-    /// `insert`, recorded for undo as `kind` (`.none`: not recorded).
-    fn insertAs(area: *Textarea, text: []const u8, kind: Edit) Allocator.Error!void {
-        var clean: std.ArrayList(u8) = .empty;
-        defer clean.deinit(area.gpa);
-        var room = if (area.char_limit) |limit| limit -| clusterCount(area.value()) else null;
-        var it: tui.width.Iterator = .init(text);
-        while (it.next()) |cluster| {
-            if (room) |left| {
-                if (left == 0) break;
-            }
-            // The `\r` of a `\r\n`: the `\n` that follows is the line break.
-            if (cluster.bytes[0] == '\r' and std.mem.startsWith(u8, text[it.index..], "\n")) {
-                continue;
-            }
-            const bytes = sanitize(cluster) orelse continue;
-            try clean.appendSlice(area.gpa, bytes);
-            if (room) |*left| left.* -= 1;
-        }
-        if (clean.items.len > 0) {
-            area.remember(kind);
-            try area.text.insertSlice(area.gpa, area.cursor, clean.items);
-            area.cursor += clean.items.len;
-            area.edit_end = area.cursor;
-        }
-        area.goal = null;
-        area.scroll();
-    }
-
-    /// Records the text before an edit of `kind`, unless it continues the last edit (the
-    /// same kind of typing or erasing, where that one left the cursor). A new step
-    /// forgets what was undone. Without memory for it, the edit goes unrecorded.
-    fn remember(area: *Textarea, kind: Edit) void {
-        if (kind == .none or area.undo_limit == 0) return;
-        const joins = kind != .other and kind == area.last_edit and
-            area.cursor == area.edit_end;
-        area.last_edit = kind;
-        if (joins) return;
-        for (area.redo_steps.items) |*step| step.text.deinit(area.gpa);
-        area.redo_steps.clearRetainingCapacity();
-        area.undo_steps.ensureUnusedCapacity(area.gpa, 1) catch return;
-        const copy = area.gpa.dupe(u8, area.value()) catch return;
-        if (area.undo_steps.items.len >= area.undo_limit) {
-            var oldest = area.undo_steps.orderedRemove(0);
-            oldest.text.deinit(area.gpa);
-        }
-        const step: Snapshot = .{ .text = .fromOwnedSlice(copy), .cursor = area.cursor };
-        area.undo_steps.appendAssumeCapacity(step);
-    }
-
-    /// Takes back the last edit step; returns whether there was one.
-    pub fn undo(area: *Textarea) bool {
-        return area.swapStep(&area.undo_steps, &area.redo_steps);
-    }
-
-    /// Makes again the last step undone; returns whether there was one.
-    pub fn redo(area: *Textarea) bool {
-        return area.swapStep(&area.redo_steps, &area.undo_steps);
-    }
-
-    /// Restores the last state in `from`, keeping the current one in `to`.
-    fn swapStep(
-        area: *Textarea,
-        from: *std.ArrayList(Snapshot),
-        to: *std.ArrayList(Snapshot),
-    ) bool {
-        if (from.items.len == 0) return false;
-        to.ensureUnusedCapacity(area.gpa, 1) catch return false;
-        const step = from.pop().?;
-        to.appendAssumeCapacity(.{ .text = area.text, .cursor = area.cursor });
-        area.text = step.text;
-        area.cursor = step.cursor;
-        area.last_edit = .none;
-        area.goal = null;
-        area.scroll();
-        return true;
-    }
-
-    fn sanitize(cluster: tui.width.Cluster) ?[]const u8 {
-        if (cluster.escape) return null;
-        return switch (cluster.bytes[0]) {
-            '\n', '\r' => "\n",
-            '\t' => "    ",
-            0...0x08, 0x0b, 0x0c, 0x0e...0x1f, 0x7f => null,
-            else => cluster.bytes,
-        };
-    }
-
-    pub fn update(area: *Textarea, msg: tui.Msg) tui.Cmd {
-        switch (msg) {
-            .key => |key| {
-                if (key.matches("ctrl+d")) {
-                    area.status = .submitted;
-                    return .quit;
-                }
-                if (key.matches("esc")) {
-                    area.status = .canceled;
-                    return .quit;
-                }
-                _ = area.handleKey(key);
-            },
-            .paste => |text| area.insert(text) catch {},
-            else => {},
-        }
-        return .none;
-    }
-
-    /// Applies an editing or movement key; returns whether the key was one. Ctrl+d and esc
-    /// are not: the caller decides what they mean.
-    pub fn handleKey(area: *Textarea, key: tui.input.Key) bool {
-        if (key.matches("up")) {
-            area.moveLine(.up);
-        } else if (key.matches("down")) {
-            area.moveLine(.down);
-        } else if (area.edit(key)) {
-            area.goal = null;
-        } else return false;
-        area.scroll();
-        return true;
-    }
-
-    /// Every key but up and down: they forget the goal column.
-    fn edit(area: *Textarea, key: tui.input.Key) bool {
-        const text = area.value();
-        const line = lineOf(text, area.cursor);
-        if (key.printable()) |c| {
-            var buffer: [4]u8 = undefined;
-            const len = std.unicode.utf8Encode(c, &buffer) catch return true;
-            // A word typed after a space or a line break is a new undo step.
-            if (c != ' ' and area.cursor > 0 and isSpace(text[area.cursor - 1])) {
-                area.last_edit = .none;
-            }
-            area.insertAs(buffer[0..len], .typing) catch {};
-        } else if (key.matches("enter")) {
-            area.insertAs("\n", .typing) catch {};
-        } else if (key.matches("ctrl+z")) {
-            _ = area.undo();
-        } else if (key.matches("ctrl+y") or key.matches("ctrl+Z")) {
-            // The decoder reports ctrl+shift+z as ctrl+Z.
-            _ = area.redo();
-        } else if (key.matches("left") or key.matches("ctrl+b")) {
-            area.cursor = previousBoundary(text, area.cursor);
-        } else if (key.matches("right") or key.matches("ctrl+f")) {
-            area.cursor = nextBoundary(text, area.cursor);
-        } else if (key.matches("alt+left") or key.matches("alt+b")) {
-            area.cursor = wordStart(text, area.cursor);
-        } else if (key.matches("alt+right") or key.matches("alt+f")) {
-            area.cursor = wordEnd(text, area.cursor);
-        } else if (key.matches("home") or key.matches("ctrl+a")) {
-            area.cursor = line.start;
-        } else if (key.matches("end") or key.matches("ctrl+e")) {
-            area.cursor = line.end;
-        } else if (key.matches("backspace")) {
-            area.erase(previousBoundary(text, area.cursor), area.cursor, .erasing);
-        } else if (key.matches("delete")) {
-            area.erase(area.cursor, nextBoundary(text, area.cursor), .erasing);
-        } else if (key.matches("ctrl+w") or key.matches("alt+backspace")) {
-            area.erase(wordStart(text, area.cursor), area.cursor, .other);
-        } else if (key.matches("ctrl+u")) {
-            area.erase(line.start, area.cursor, .other);
-        } else if (key.matches("ctrl+k")) {
-            area.erase(area.cursor, line.end, .other);
-        } else return false;
-        return true;
-    }
-
-    fn erase(area: *Textarea, from: usize, to: usize, kind: Edit) void {
-        if (from == to) return;
-        area.remember(kind);
-        area.text.replaceRangeAssumeCapacity(from, to - from, &.{});
-        area.cursor = from;
-        area.edit_end = from;
-    }
-
-    const Direction = enum { up, down };
-
-    /// Moves to the line above or below, as near the goal column as that line allows. On
-    /// the first (last) line, up (down) goes to its start (end).
-    fn moveLine(area: *Textarea, direction: Direction) void {
-        const text = area.value();
-        const here = lineOf(text, area.cursor);
-        const column = area.goal orelse tui.width.of(text[here.start..area.cursor]);
-        area.goal = column;
-        const target = switch (direction) {
-            .up => if (here.start == 0) {
-                area.cursor = 0;
-                return;
-            } else lineOf(text, here.start - 1),
-            .down => if (here.end == text.len) {
-                area.cursor = text.len;
-                return;
-            } else lineOf(text, here.end + 1),
-        };
-        area.cursor = target.start + offsetAtColumn(text[target.start..target.end], column);
-    }
-
-    /// Scrolls so the cursor's line is shown.
-    fn scroll(area: *Textarea) void {
-        const height = area.height orelse return;
-        const row = std.mem.count(u8, area.value()[0..area.cursor], "\n");
-        if (row < area.offset) area.offset = row;
-        if (row >= area.offset + height) area.offset = row + 1 - @max(height, 1);
-    }
-
-    pub fn view(area: *const Textarea, w: *Writer) Writer.Error!void {
-        try area.styles.prompt.paint(w, area.prompt);
-        if (area.text.items.len == 0) {
-            try area.writeNumber(w, 0);
-            return area.writePlaceholder(w);
-        }
-        const text = area.value();
-        const last = if (area.height) |height| area.offset + height else std.math.maxInt(usize);
-        var start: usize = 0;
-        var row: usize = 0;
-        while (row < last) : (row += 1) {
-            const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
-            if (row >= area.offset) {
-                if (row > area.offset) try area.styles.prompt.paint(w, area.prompt);
-                try area.writeNumber(w, row);
-                try area.writeLine(w, text, start, end);
-                if (end < text.len and row + 1 < last) try w.writeByte('\n');
-            }
-            if (end == text.len) break;
-            start = end + 1;
-        }
-    }
-
-    /// The number of line `row` (from 0), right-aligned to the widest, when
-    /// `line_numbers` is on.
-    fn writeNumber(area: *const Textarea, w: *Writer, row: usize) Writer.Error!void {
-        if (!area.line_numbers) return;
-        const lines = std.mem.count(u8, area.value(), "\n") + 1;
-        var widest: usize = 1;
-        var n = lines;
-        while (n >= 10) : (n /= 10) widest += 1;
-        var buffer: [24]u8 = undefined;
-        const number = std.fmt.bufPrint(&buffer, "{d: >[1]} ", .{ row + 1, widest }) catch "";
-        try area.styles.line_number.paint(w, number);
-    }
-
-    fn writePlaceholder(area: *const Textarea, w: *Writer) Writer.Error!void {
-        if (!area.focused) return area.styles.placeholder.paint(w, area.placeholder);
-        const first = nextBoundary(area.placeholder, 0);
-        try area.styles.cursor.paint(w, if (first == 0) " " else area.placeholder[0..first]);
-        try area.styles.placeholder.paint(w, area.placeholder[first..]);
-    }
-
-    /// Writes `text[start..end]`, with the cursor if it is on this line.
-    fn writeLine(
-        area: *const Textarea,
-        w: *Writer,
-        text: []const u8,
-        start: usize,
-        end: usize,
-    ) Writer.Error!void {
-        var it: tui.width.Iterator = .{ .bytes = text[0..end], .index = start };
-        var at = start;
-        while (it.next()) |cluster| : (at = it.index) {
-            const on_cursor = area.focused and at == area.cursor;
-            const style = if (on_cursor) area.styles.cursor else area.styles.text;
-            try style.paint(w, cluster.bytes);
-        }
-        if (area.focused and area.cursor == end) try area.styles.cursor.paint(w, " ");
-    }
+pub const Styles = struct {
+    prompt: tui.Style = .{ .fg = .{ .indexed = 238 } },
+    text: tui.Style = .{},
+    placeholder: tui.Style = .{ .fg = .{ .indexed = 240 } },
+    cursor: tui.Style = .{ .reverse = true },
+    line_number: tui.Style = .{ .fg = .{ .indexed = 240 } },
 };
+
+/// Frees the text and the undo history.
+pub fn deinit(area: *Textarea) void {
+    area.text.deinit(area.gpa);
+    for (area.undo_steps.items) |*step| step.text.deinit(area.gpa);
+    for (area.redo_steps.items) |*step| step.text.deinit(area.gpa);
+    area.undo_steps.deinit(area.gpa);
+    area.redo_steps.deinit(area.gpa);
+    area.* = undefined;
+}
+
+/// The text typed so far.
+pub fn value(area: *const Textarea) []const u8 {
+    return area.text.items;
+}
+
+/// Replaces the text (cut to `char_limit`) and puts the cursor at its end, as one
+/// step ctrl+z takes back.
+pub fn setValue(area: *Textarea, text: []const u8) Allocator.Error!void {
+    area.remember(.other);
+    area.text.clearRetainingCapacity();
+    area.cursor = 0;
+    area.offset = 0;
+    try area.insertAs(text, .none);
+}
+
+/// Inserts `text` at the cursor, as much as `char_limit` allows. `\r\n` and `\r` become
+/// line breaks, a tab four spaces; other control characters and escapes are dropped.
+pub fn insert(area: *Textarea, text: []const u8) Allocator.Error!void {
+    return area.insertAs(text, .other);
+}
+
+/// `insert`, recorded for undo as `kind` (`.none`: not recorded).
+fn insertAs(area: *Textarea, text: []const u8, kind: Edit) Allocator.Error!void {
+    var clean: std.ArrayList(u8) = .empty;
+    defer clean.deinit(area.gpa);
+    var room = if (area.char_limit) |limit| limit -| clusterCount(area.value()) else null;
+    var it: tui.width.Iterator = .init(text);
+    while (it.next()) |cluster| {
+        if (room) |left| {
+            if (left == 0) break;
+        }
+        // The `\r` of a `\r\n`: the `\n` that follows is the line break.
+        if (cluster.bytes[0] == '\r' and std.mem.startsWith(u8, text[it.index..], "\n")) {
+            continue;
+        }
+        const bytes = sanitize(cluster) orelse continue;
+        try clean.appendSlice(area.gpa, bytes);
+        if (room) |*left| left.* -= 1;
+    }
+    if (clean.items.len > 0) {
+        area.remember(kind);
+        try area.text.insertSlice(area.gpa, area.cursor, clean.items);
+        area.cursor += clean.items.len;
+        area.edit_end = area.cursor;
+    }
+    area.goal = null;
+    area.scroll();
+}
+
+/// Records the text before an edit of `kind`, unless it continues the last edit (the
+/// same kind of typing or erasing, where that one left the cursor). A new step
+/// forgets what was undone. Without memory for it, the edit goes unrecorded.
+fn remember(area: *Textarea, kind: Edit) void {
+    if (kind == .none or area.undo_limit == 0) return;
+    const joins = kind != .other and kind == area.last_edit and
+        area.cursor == area.edit_end;
+    area.last_edit = kind;
+    if (joins) return;
+    for (area.redo_steps.items) |*step| step.text.deinit(area.gpa);
+    area.redo_steps.clearRetainingCapacity();
+    area.undo_steps.ensureUnusedCapacity(area.gpa, 1) catch return;
+    const copy = area.gpa.dupe(u8, area.value()) catch return;
+    if (area.undo_steps.items.len >= area.undo_limit) {
+        var oldest = area.undo_steps.orderedRemove(0);
+        oldest.text.deinit(area.gpa);
+    }
+    const step: Snapshot = .{ .text = .fromOwnedSlice(copy), .cursor = area.cursor };
+    area.undo_steps.appendAssumeCapacity(step);
+}
+
+/// Takes back the last edit step; returns whether there was one.
+pub fn undo(area: *Textarea) bool {
+    return area.swapStep(&area.undo_steps, &area.redo_steps);
+}
+
+/// Makes again the last step undone; returns whether there was one.
+pub fn redo(area: *Textarea) bool {
+    return area.swapStep(&area.redo_steps, &area.undo_steps);
+}
+
+/// Restores the last state in `from`, keeping the current one in `to`.
+fn swapStep(
+    area: *Textarea,
+    from: *std.ArrayList(Snapshot),
+    to: *std.ArrayList(Snapshot),
+) bool {
+    if (from.items.len == 0) return false;
+    to.ensureUnusedCapacity(area.gpa, 1) catch return false;
+    const step = from.pop().?;
+    to.appendAssumeCapacity(.{ .text = area.text, .cursor = area.cursor });
+    area.text = step.text;
+    area.cursor = step.cursor;
+    area.last_edit = .none;
+    area.goal = null;
+    area.scroll();
+    return true;
+}
+
+fn sanitize(cluster: tui.width.Cluster) ?[]const u8 {
+    if (cluster.escape) return null;
+    return switch (cluster.bytes[0]) {
+        '\n', '\r' => "\n",
+        '\t' => "    ",
+        0...0x08, 0x0b, 0x0c, 0x0e...0x1f, 0x7f => null,
+        else => cluster.bytes,
+    };
+}
+
+pub fn update(area: *Textarea, msg: tui.Msg) tui.Cmd {
+    switch (msg) {
+        .key => |key| {
+            if (key.matches("ctrl+d")) {
+                area.status = .submitted;
+                return .quit;
+            }
+            if (key.matches("esc")) {
+                area.status = .canceled;
+                return .quit;
+            }
+            _ = area.handleKey(key);
+        },
+        .paste => |text| area.insert(text) catch {},
+        else => {},
+    }
+    return .none;
+}
+
+/// Applies an editing or movement key; returns whether the key was one. Ctrl+d and esc
+/// are not: the caller decides what they mean.
+pub fn handleKey(area: *Textarea, key: tui.input.Key) bool {
+    if (key.matches("up")) {
+        area.moveLine(.up);
+    } else if (key.matches("down")) {
+        area.moveLine(.down);
+    } else if (area.edit(key)) {
+        area.goal = null;
+    } else return false;
+    area.scroll();
+    return true;
+}
+
+/// Every key but up and down: they forget the goal column.
+fn edit(area: *Textarea, key: tui.input.Key) bool {
+    const text = area.value();
+    const line = lineOf(text, area.cursor);
+    if (key.printable()) |c| {
+        var buffer: [4]u8 = undefined;
+        const len = std.unicode.utf8Encode(c, &buffer) catch return true;
+        // A word typed after a space or a line break is a new undo step.
+        if (c != ' ' and area.cursor > 0 and isSpace(text[area.cursor - 1])) {
+            area.last_edit = .none;
+        }
+        area.insertAs(buffer[0..len], .typing) catch {};
+    } else if (key.matches("enter")) {
+        area.insertAs("\n", .typing) catch {};
+    } else if (key.matches("ctrl+z")) {
+        _ = area.undo();
+    } else if (key.matches("ctrl+y") or key.matches("ctrl+Z")) {
+        // The decoder reports ctrl+shift+z as ctrl+Z.
+        _ = area.redo();
+    } else if (key.matches("left") or key.matches("ctrl+b")) {
+        area.cursor = previousBoundary(text, area.cursor);
+    } else if (key.matches("right") or key.matches("ctrl+f")) {
+        area.cursor = nextBoundary(text, area.cursor);
+    } else if (key.matches("alt+left") or key.matches("alt+b")) {
+        area.cursor = wordStart(text, area.cursor);
+    } else if (key.matches("alt+right") or key.matches("alt+f")) {
+        area.cursor = wordEnd(text, area.cursor);
+    } else if (key.matches("home") or key.matches("ctrl+a")) {
+        area.cursor = line.start;
+    } else if (key.matches("end") or key.matches("ctrl+e")) {
+        area.cursor = line.end;
+    } else if (key.matches("backspace")) {
+        area.erase(previousBoundary(text, area.cursor), area.cursor, .erasing);
+    } else if (key.matches("delete")) {
+        area.erase(area.cursor, nextBoundary(text, area.cursor), .erasing);
+    } else if (key.matches("ctrl+w") or key.matches("alt+backspace")) {
+        area.erase(wordStart(text, area.cursor), area.cursor, .other);
+    } else if (key.matches("ctrl+u")) {
+        area.erase(line.start, area.cursor, .other);
+    } else if (key.matches("ctrl+k")) {
+        area.erase(area.cursor, line.end, .other);
+    } else return false;
+    return true;
+}
+
+fn erase(area: *Textarea, from: usize, to: usize, kind: Edit) void {
+    if (from == to) return;
+    area.remember(kind);
+    area.text.replaceRangeAssumeCapacity(from, to - from, &.{});
+    area.cursor = from;
+    area.edit_end = from;
+}
+
+const Direction = enum { up, down };
+
+/// Moves to the line above or below, as near the goal column as that line allows. On
+/// the first (last) line, up (down) goes to its start (end).
+fn moveLine(area: *Textarea, direction: Direction) void {
+    const text = area.value();
+    const here = lineOf(text, area.cursor);
+    const column = area.goal orelse tui.width.of(text[here.start..area.cursor]);
+    area.goal = column;
+    const target = switch (direction) {
+        .up => if (here.start == 0) {
+            area.cursor = 0;
+            return;
+        } else lineOf(text, here.start - 1),
+        .down => if (here.end == text.len) {
+            area.cursor = text.len;
+            return;
+        } else lineOf(text, here.end + 1),
+    };
+    area.cursor = target.start + offsetAtColumn(text[target.start..target.end], column);
+}
+
+/// Scrolls so the cursor's line is shown.
+fn scroll(area: *Textarea) void {
+    const height = area.height orelse return;
+    const row = std.mem.count(u8, area.value()[0..area.cursor], "\n");
+    if (row < area.offset) area.offset = row;
+    if (row >= area.offset + height) area.offset = row + 1 - @max(height, 1);
+}
+
+pub fn view(area: *const Textarea, w: *Writer) Writer.Error!void {
+    try area.styles.prompt.paint(w, area.prompt);
+    if (area.text.items.len == 0) {
+        try area.writeNumber(w, 0);
+        return area.writePlaceholder(w);
+    }
+    const text = area.value();
+    const last = if (area.height) |height| area.offset + height else std.math.maxInt(usize);
+    var start: usize = 0;
+    var row: usize = 0;
+    while (row < last) : (row += 1) {
+        const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
+        if (row >= area.offset) {
+            if (row > area.offset) try area.styles.prompt.paint(w, area.prompt);
+            try area.writeNumber(w, row);
+            try area.writeLine(w, text, start, end);
+            if (end < text.len and row + 1 < last) try w.writeByte('\n');
+        }
+        if (end == text.len) break;
+        start = end + 1;
+    }
+}
+
+/// The number of line `row` (from 0), right-aligned to the widest, when
+/// `line_numbers` is on.
+fn writeNumber(area: *const Textarea, w: *Writer, row: usize) Writer.Error!void {
+    if (!area.line_numbers) return;
+    const lines = std.mem.count(u8, area.value(), "\n") + 1;
+    var widest: usize = 1;
+    var n = lines;
+    while (n >= 10) : (n /= 10) widest += 1;
+    var buffer: [24]u8 = undefined;
+    const number = std.fmt.bufPrint(&buffer, "{d: >[1]} ", .{ row + 1, widest }) catch "";
+    try area.styles.line_number.paint(w, number);
+}
+
+fn writePlaceholder(area: *const Textarea, w: *Writer) Writer.Error!void {
+    if (!area.focused) return area.styles.placeholder.paint(w, area.placeholder);
+    const first = nextBoundary(area.placeholder, 0);
+    try area.styles.cursor.paint(w, if (first == 0) " " else area.placeholder[0..first]);
+    try area.styles.placeholder.paint(w, area.placeholder[first..]);
+}
+
+/// Writes `text[start..end]`, with the cursor if it is on this line.
+fn writeLine(
+    area: *const Textarea,
+    w: *Writer,
+    text: []const u8,
+    start: usize,
+    end: usize,
+) Writer.Error!void {
+    var it: tui.width.Iterator = .{ .bytes = text[0..end], .index = start };
+    var at = start;
+    while (it.next()) |cluster| : (at = it.index) {
+        const on_cursor = area.focused and at == area.cursor;
+        const style = if (on_cursor) area.styles.cursor else area.styles.text;
+        try style.paint(w, cluster.bytes);
+    }
+    if (area.focused and area.cursor == end) try area.styles.cursor.paint(w, " ");
+}
 
 /// The bounds of the line holding `index`: its first byte and its `\n` (or the end).
 pub const Line = struct { start: usize, end: usize };
