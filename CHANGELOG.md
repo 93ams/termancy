@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `webauthn.PublicKey.fromCose` refuses a COSE key that repeats a label (the last `x` won,
+  where another parser may take the first) or has no `alg`, which WebAuthn requires.
 - `ctap.Channel.transact` refuses a reply longer than CTAPHID's 7609 bytes whatever the size
   of `out`: with a larger buffer, a key announcing 65535 bytes overflowed the sequence
   number at its 256th continuation packet.

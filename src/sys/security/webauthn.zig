@@ -423,6 +423,16 @@ pub const PublicKey = union(enum) {
                 continue;
             }
             const label = reader.int() catch return error.InvalidPublicKey;
+            // A repeated label is not CBOR, and parsers differ on which value counts.
+            const repeated = switch (label) {
+                1 => kty != null,
+                3 => alg != null,
+                -1 => crv != null,
+                -2 => x != null,
+                -3 => y != null,
+                else => false,
+            };
+            if (repeated) return error.InvalidPublicKey;
             switch (label) {
                 1 => kty = reader.int() catch return error.InvalidPublicKey,
                 3 => alg = reader.int() catch return error.InvalidPublicKey,
@@ -440,7 +450,8 @@ pub const PublicKey = union(enum) {
         const p256 = 1;
         const ed25519 = 6;
         const x_bytes = x orelse return error.InvalidPublicKey;
-        if (kty == ec2 and alg orelse es256 == es256 and crv == p256) {
+        // WebAuthn requires `alg`.
+        if (kty == ec2 and alg == es256 and crv == p256) {
             const y_bytes = y orelse return error.InvalidPublicKey;
             if (x_bytes.len != 32 or y_bytes.len != 32) return error.InvalidPublicKey;
             var point: [65]u8 = undefined;
@@ -450,7 +461,7 @@ pub const PublicKey = union(enum) {
             _ = EcdsaP256.PublicKey.fromSec1(&point) catch return error.InvalidPublicKey;
             return .{ .es256 = point };
         }
-        if (kty == okp and alg orelse eddsa == eddsa and crv == ed25519) {
+        if (kty == okp and alg == eddsa and crv == ed25519) {
             if (x_bytes.len != Ed25519.PublicKey.encoded_length) return error.InvalidPublicKey;
             return .{ .ed25519 = x_bytes[0..Ed25519.PublicKey.encoded_length].* };
         }
@@ -1143,4 +1154,12 @@ test "PublicKey.fromCose refusals" {
     // Trailing bytes after the map.
     const ed_cose = testCoseEd25519(@splat(0)) ++ [_]u8{0};
     try e(error.InvalidPublicKey, PublicKey.fromCose(&ed_cose));
+    // {1: 1, 3: -8, -1: 6, -2: x, -2: x'}: which x a parser takes differs.
+    const x2 = [_]u8{ 0x21, 0x58, 0x20 } ++ @as([32]u8, @splat(2));
+    var twice = testCoseEd25519(@splat(1)) ++ x2;
+    twice[0] = 0xa6;
+    try e(error.InvalidPublicKey, PublicKey.fromCose(&twice));
+    // {1: 1, -1: 6, -2: x}: no `alg`.
+    const no_alg = [_]u8{ 0xa3, 0x01, 0x01, 0x20, 0x06, 0x21, 0x58, 0x20 } ++ x2[3..].*;
+    try e(error.UnsupportedAlgorithm, PublicKey.fromCose(&no_alg));
 }
