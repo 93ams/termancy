@@ -730,14 +730,29 @@ fn hostIsLiteral(request: *const http.Server.Request) bool {
         if (Io.net.IpAddress.parse(host, 0)) |_| true else |_| false;
 }
 
-/// Serves every connection `server` accepts, each on its own task, until canceled.
+/// How long `serve` waits before accepting again after running out of descriptors.
+const accept_backoff_ms = 100;
+
+/// Serves every connection `server` accepts, each on its own task, until canceled. A
+/// failed accept that only concerns one connection, or a passing shortage of descriptors,
+/// does not end it.
 pub fn serve(gpa: Allocator, io: Io, server: *Io.net.Server, config: *const Config) !void {
     var sessions: std.atomic.Value(u32) = .init(0);
     const local = isLoopback(server.socket.address);
     var group: Io.Group = .init;
     defer group.cancel(io);
     while (true) {
-        const stream = try server.accept(io);
+        const stream = server.accept(io) catch |err| switch (err) {
+            // A peer that hung up before the accept: nothing to serve.
+            error.ConnectionAborted => continue,
+            // Out of descriptors or buffers, often because of many idle connections: the
+            // sessions already open keep running, and accepting resumes once some close.
+            error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded, error.SystemResources => {
+                try io.sleep(.fromMilliseconds(accept_backoff_ms), .awake);
+                continue;
+            },
+            else => |e| return e,
+        };
         group.concurrent(io, serveConnection, .{
             gpa,
             io,

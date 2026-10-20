@@ -469,6 +469,10 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `sys.ssh.Server.serve` and `sys.web.Server.serve` (and so `termancy serve`) keep serving
+  when an accept fails for one connection (the peer hung up first) or for want of file
+  descriptors (they wait 100 ms and accept again), instead of returning and ending every
+  open session. A peer opening many idle connections could stop the server.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up
