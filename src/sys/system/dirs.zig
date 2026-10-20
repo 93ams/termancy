@@ -179,6 +179,23 @@ pub fn separator(os: Os) u8 {
     return if (os == .windows) '\\' else '/';
 }
 
+/// Whether Windows reads the path component `name` as something other than the file it
+/// names: a device (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, ignoring case,
+/// also with an extension, as `nul.txt`), or a name ending in a dot or a space, which
+/// Windows drops. Callers handle `.` and `..` themselves.
+pub fn isWindowsReserved(name: []const u8) bool {
+    if (name.len == 0) return false;
+    const last = name[name.len - 1];
+    if (last == '.' or last == ' ') return true;
+    const stem_end = std.mem.indexOfScalar(u8, name, '.') orelse name.len;
+    const stem = std.mem.trimEnd(u8, name[0..stem_end], " ");
+    for ([_][]const u8{ "CON", "PRN", "AUX", "NUL" }) |device| {
+        if (std.ascii.eqlIgnoreCase(stem, device)) return true;
+    }
+    if (stem.len != 4 or stem[3] < '1' or stem[3] > '9') return false;
+    return std.ascii.eqlIgnoreCase(stem[0..3], "COM") or std.ascii.eqlIgnoreCase(stem[0..3], "LPT");
+}
+
 /// Whether `p` is absolute under the rules of `os`: a leading `/` on POSIX; a drive
 /// (`C:\`) or UNC prefix (`\\server`) on Windows.
 pub fn isAbsolute(os: Os, p: []const u8) bool {
@@ -556,6 +573,15 @@ test "temp directory per OS" {
     const fallback = try tempDir(gpa, &empty, .freebsd);
     defer gpa.free(fallback);
     try testing.expectEqualStrings("/tmp", fallback);
+}
+
+test isWindowsReserved {
+    for ([_][]const u8{ "CON", "nul", "Aux.txt", "com1", "LPT9.log", "nul .txt", "a.", "a " }) |name| {
+        try std.testing.expect(isWindowsReserved(name));
+    }
+    for ([_][]const u8{ "console", "nullable.txt", "com0", "COM10", "lpt", "a.b", "session.json", "" }) |name| {
+        try std.testing.expect(!isWindowsReserved(name));
+    }
 }
 
 test "join and isAbsolute" {

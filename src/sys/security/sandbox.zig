@@ -22,7 +22,8 @@
 //! case, `C:\` and `\\server\share\` are absolute prefixes. Paths Windows would read
 //! differently from how they are written are refused: drive-relative (`C:x`), rooted
 //! without a drive (`\x`), device paths (`\\?\`, `\\.\`), alternate data streams (`a:b`),
-//! reserved characters, and components ending in a dot or a space.
+//! reserved characters, device names (`CON`, `nul.txt`, ...), and components ending in a
+//! dot or a space.
 //!
 //! The check and the write are separate system calls, so a link created between them is
 //! not seen; this policy guards against mistakes and hostile input, not against a hostile
@@ -32,6 +33,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Io = std.Io;
+const dirs = @import("../system/dirs.zig");
 
 /// The longest path this module handles, in bytes. Longer paths are refused.
 pub const max_path_bytes = 4096;
@@ -55,7 +57,7 @@ pub const LexicalError = error{
     /// in a dot or a space.
     InvalidCharacter,
     /// A Windows form whose meaning depends on process state or bypasses normalization:
-    /// `C:x`, `\x`, `\\?\...`, `\\.\...`.
+    /// `C:x`, `\x`, `\\?\...`, `\\.\...`, or a device name (`CON`, `nul.txt`).
     UnsupportedPath,
     /// `..` leads outside every root (or above the root of an absolute path).
     Traversal,
@@ -209,8 +211,9 @@ fn checkWindowsComponent(component: []const u8) LexicalError!void {
             return error.InvalidCharacter;
         }
     }
+    if (!dirs.isWindowsReserved(component)) return;
     const last = component[component.len - 1];
-    if (last == '.' or last == ' ') return error.InvalidCharacter;
+    return if (last == '.' or last == ' ') error.InvalidCharacter else error.UnsupportedPath;
 }
 
 fn isWindowsSeparator(c: u8) bool {
@@ -323,6 +326,9 @@ test "normalize refuses what it cannot read safely" {
     try e(error.InvalidCharacter, normalize(.windows, "dir./x", &buf));
     try e(error.InvalidCharacter, normalize(.windows, "dir /x", &buf));
     try e(error.InvalidCharacter, normalize(.windows, "a?b", &buf));
+    try e(error.UnsupportedPath, normalize(.windows, "src/nul", &buf));
+    try e(error.UnsupportedPath, normalize(.windows, "src/Aux.zig", &buf));
+    try e(error.UnsupportedPath, normalize(.windows, "COM1/x", &buf));
     var small: [2]u8 = undefined;
     try e(error.NameTooLong, normalize(.posix, "abc", &small));
 }

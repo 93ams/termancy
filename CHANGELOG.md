@@ -469,6 +469,11 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `sys.files.Store` refuses blob names Windows reads as something else: device names
+  (`CON`, `NUL`, `nul.txt`, `COM1`, ...) and names ending in a dot or a space. Writing
+  `nul` reported success and kept nothing; `con` wrote the blob to the console.
+  `sys.sandbox` refuses device names in Windows paths too (`error.UnsupportedPath`). Both use
+  the new `sys.dirs.isWindowsReserved`.
 - `sys.update.install` (and so `termancy update`) syncs the new executable to disk before
   renaming it into place, so a crash or power loss right after an update cannot leave an
   empty executable with the rollback copy already removed.
