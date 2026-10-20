@@ -463,6 +463,11 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `term.live`: after the terminal narrows, the next frame starts above the rows the old
+  lines rewrapped into, instead of leaving copies of them on the screen.
+- macOS: bash completion with more than one word before the cursor (bash 3.2 joined them
+  into one), and a lone Esc in a program reading keys from `/dev/tty` (stdin piped), which
+  waited for the next key.
 - **Windows:** `snek platform update` replaces the running `snek.exe` (it failed renaming
   it aside), and snek deletes the `snek.exe.old` left behind on its next start. The web
   server's request timeout and the SSH server's login timeout fire (a `shutdown` did not

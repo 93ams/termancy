@@ -599,6 +599,10 @@ pub const Live = struct {
 
     /// Rows on the screen now; the cursor is on the last.
     drawn: usize = 0,
+    /// The columns each drawn row takes, for `toTop` once the terminal narrows and rewraps
+    /// them. shortcut: rows past the first 256 count as one each; enough while `rows`
+    /// keeps a frame to the terminal's height.
+    widths: [256]u16 = undefined,
     last: ?Timestamp = null,
     cursor_hidden: bool = false,
     /// This `Live` armed the signal restore (see the top of the file).
@@ -648,12 +652,7 @@ pub const Live = struct {
             for (l.items) |item| try item.log(l.out, f);
             return l.out.flush();
         }
-        if (l.file) |file| {
-            if (Terminal.sizeOf(l.io.?, file)) |size| {
-                l.columns = size.width;
-                l.rows = size.height;
-            } else |_| {}
-        }
+        l.measure();
         const w = l.out;
         try ansi.setMode(w, .synchronized_output, true);
         if (!l.cursor_hidden) {
@@ -681,7 +680,11 @@ pub const Live = struct {
             // shortcut: a line past `line_max` bytes is cut there, maybe mid-sequence.
             item.writeLine(&line, f, i) catch {};
             // One column short: a full row would leave the cursor waiting to wrap.
-            try width.truncate(w, line.buffered(), l.columns -| 1, if (l.ascii) "~" else "…");
+            const room_columns = l.columns -| 1;
+            try width.truncate(w, line.buffered(), room_columns, if (l.ascii) "~" else "…");
+            if (row < l.widths.len) {
+                l.widths[row] = @intCast(@min(width.of(line.buffered()), room_columns));
+            }
             row += 1;
         };
         try ansi.eraseScreen(w, .to_end);
@@ -696,6 +699,7 @@ pub const Live = struct {
         defer if (l.task != null) l.mutex.unlock(l.io.?);
         if (l.animate and l.drawn > 0) {
             try ansi.setMode(l.out, .synchronized_output, true);
+            l.measure();
             try l.toTop();
             try ansi.eraseScreen(l.out, .to_end);
             l.drawn = 0;
@@ -722,6 +726,7 @@ pub const Live = struct {
     pub fn clear(l: *Live) Writer.Error!void {
         l.stop();
         if (!l.animate) return;
+        l.measure();
         try l.toTop();
         try ansi.eraseScreen(l.out, .to_end);
         l.drawn = 0;
@@ -790,10 +795,26 @@ pub const Live = struct {
         };
     }
 
-    /// To the start of the first live row.
+    /// Reads the terminal's size, when there is a terminal to ask.
+    fn measure(l: *Live) void {
+        const file = l.file orelse return;
+        const size = Terminal.sizeOf(l.io.?, file) catch return;
+        l.columns = size.width;
+        l.rows = size.height;
+    }
+
+    /// To the start of the first live row: up as many rows as the drawn ones take at the
+    /// width now, which is more once the terminal narrowed and rewrapped them.
     fn toTop(l: *Live) Writer.Error!void {
         try l.out.writeByte('\r');
-        if (l.drawn > 1) try ansi.cursorUp(l.out, l.drawn - 1);
+        var above: usize = 0;
+        for (0..l.drawn) |row| {
+            const columns: usize = if (row < l.widths.len) l.widths[row] else 1;
+            const rows = if (columns == 0 or l.columns == 0) 1 else (columns + l.columns - 1) / l.columns;
+            // The cursor is on the last row of the last line.
+            above += if (row + 1 < l.drawn) rows else rows - 1;
+        }
+        if (above > 0) try ansi.cursorUp(l.out, above);
     }
 
     fn showCursor(l: *Live) Writer.Error!void {
@@ -1102,6 +1123,27 @@ test "a shorter frame erases the rows it no longer uses; clear erases all" {
     try expectScreen("· a", bytes.written(), 10);
     try live.clear();
     try expectScreen("", bytes.written(), 10);
+}
+
+test "after the terminal narrows, the next frame starts above the rewrapped rows" {
+    var bytes: Writer.Allocating = .init(testing.allocator);
+    defer bytes.deinit();
+    var a: Text = .{ .text = "aaaaaaaaaaaaaaaaaaaa" };
+    var b: Text = .{ .text = "bbbbbbbbbbbbbbbbbbbb" };
+    const items = [_]Item{ .{ .text = &a }, .{ .text = &b } };
+    var live: Live = .init(&bytes.writer, .{ .color = .none, .escapes = true }, &items);
+    live.columns = 30;
+    try live.draw(ms(0));
+    const first = bytes.written().len;
+    // Each 20-column line now takes two rows: three above the cursor, not one.
+    live.columns = 10;
+    try live.draw(ms(100));
+    try testing.expect(std.mem.indexOf(u8, bytes.written()[first..], "\r\x1b[3A") != null);
+    // Wider again (and rejoined): a row each.
+    live.columns = 40;
+    const second = bytes.written().len;
+    try live.draw(ms(200));
+    try testing.expect(std.mem.indexOf(u8, bytes.written()[second..], "\r\x1b[1A") != null);
 }
 
 test "lines are cut to the terminal's width, wide graphemes whole" {
