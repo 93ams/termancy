@@ -155,6 +155,9 @@ const Decoder = struct {
             .int => |i| return std.math.cast(T, i) orelse d.fail(key, error.InvalidValue, range),
             .float => |f| {
                 if (@floor(f) != f) return d.fail(key, error.InvalidValue, message);
+                // Past 2^53 a float is not every integer: JSON's 10000000000000000001 reads
+                // as 1e19, which would decode as another number.
+                if (@abs(f) > 9007199254740992) return d.fail(key, error.InvalidValue, range);
                 // `maxInt(T)` may round up to a power of two as an f64 (`2^63` for `i64`),
                 // so the upper bound is exclusive: `max + 1` is that power of two either way.
                 const max: f64 = @floatFromInt(std.math.maxInt(T));
@@ -1031,15 +1034,21 @@ test "integers from floats at the edges of their range" {
         error.InvalidValue,
         decode(u64, a, .{ .float = 2 * two_63 }, .{}, null),
     );
-    try testing.expectEqual(1 << 62, try decode(i64, a, .{ .float = two_63 / 2 }, .{}, null));
-    try testing.expectEqual(
-        std.math.minInt(i64),
-        try decode(i64, a, .{ .float = -two_63 }, .{}, null),
+    // Past 2^53 a float is not every integer, so it is out of range for any integer type.
+    const two_53: f64 = 9007199254740992.0;
+    try testing.expectEqual(1 << 53, try decode(i64, a, .{ .float = two_53 }, .{}, null));
+    try testing.expectEqual(-(1 << 53), try decode(i64, a, .{ .float = -two_53 }, .{}, null));
+    try testing.expectError(error.InvalidValue, decode(i64, a, .{ .float = two_53 + 2 }, .{}, null));
+    try testing.expectError(error.InvalidValue, decode(i64, a, .{ .float = -two_63 }, .{}, null));
+    try testing.expectError(error.InvalidValue, decode(u64, a, .{ .float = two_63 }, .{}, null));
+    // JSON reads an integer past `i64` as the nearest float: 1e19 here.
+    var diag: Diagnostic = .{};
+    const S = struct { id: u64 };
+    try testing.expectError(
+        error.InvalidValue,
+        decodeWith(S, a, "{\"id\": 10000000000000000001}", .{}, &diag),
     );
-    try testing.expectEqual(
-        @as(u64, 1) << 63,
-        try decode(u64, a, .{ .float = two_63 }, .{}, null),
-    );
+    try testing.expectEqualStrings("integer out of range for u64", diag.message);
     try testing.expectEqual(255, try decode(u8, a, .{ .float = 255 }, .{}, null));
     try testing.expectError(error.InvalidValue, decode(u8, a, .{ .float = 256 }, .{}, null));
     try testing.expectError(error.InvalidValue, decode(u8, a, .{ .float = -1 }, .{}, null));

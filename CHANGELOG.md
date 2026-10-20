@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: an integer setting given a number past 2^53 that was read as a float (JSON, YAML,
+  or ZON past the `i64` range: `"id": 10000000000000000001`) is "integer out of range",
+  instead of decoding as the nearest float, another number.
 - `cfg`: reformatting, sorting, or setting a TOML value keeps a quoted string that reads
   like a date (`released = "2024-01-01"`) quoted, instead of turning it into a TOML date
   for every other reader of the file (`termancy cfg fmt`, `cfg set`).
