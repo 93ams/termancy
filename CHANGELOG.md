@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: every format reads a file that starts with a UTF-8 byte order mark, as Windows
+  editors write, and in-place edits keep it. INI used to read the mark into the first key's
+  name, so that key was silently missing; TOML, JSON, JSONC, and dotenv rejected the file.
 - `cfg`: an include cycle through another spelling of the same path (`include = "./a.toml"`
   or `"../conf/a.toml"`) is `error.IncludeCycle`, instead of reading the file again until
   the path is too long.

@@ -26,6 +26,7 @@ const Table = @import("value.zig").Table;
 const Array = @import("value.zig").Array;
 const writeFloat = @import("value.zig").writeFloat;
 const Diagnostic = @import("Diagnostic.zig");
+const bomLength = @import("format.zig").bomLength;
 
 /// What parsing can fail with; the diagnostic says where.
 pub const Error = error{SyntaxError} || Allocator.Error;
@@ -270,7 +271,7 @@ const Parser = struct {
 
     fn init(arena: Allocator, source: []const u8, diag: ?*Diagnostic) Allocator.Error!Parser {
         var lines: std.ArrayList(Line) = .empty;
-        var start: usize = if (std.mem.startsWith(u8, source, "\xEF\xBB\xBF")) 3 else 0;
+        var start: usize = bomLength(source);
         // A final line break ends the last line rather than starting an empty one.
         while (true) {
             const newline = std.mem.findScalarPos(u8, source, start, '\n') orelse source.len;

@@ -10,6 +10,7 @@ const Table = @import("value.zig").Table;
 const Array = @import("value.zig").Array;
 const writeFloat = @import("value.zig").writeFloat;
 const Diagnostic = @import("Diagnostic.zig");
+const bomLength = @import("format.zig").bomLength;
 
 /// What parsing can fail with; the diagnostic says where.
 pub const Error = error{SyntaxError} || Allocator.Error;
@@ -18,7 +19,8 @@ pub const Error = error{SyntaxError} || Allocator.Error;
 pub const max_depth = 256;
 
 /// Parses one JSON document. All memory comes from `arena`.
-pub fn parse(arena: Allocator, source: []const u8, diag: ?*Diagnostic) Error!Value {
+pub fn parse(arena: Allocator, source_with_bom: []const u8, diag: ?*Diagnostic) Error!Value {
+    const source = source_with_bom[bomLength(source_with_bom)..];
     var scanner: std.json.Scanner = .initCompleteInput(arena, source);
     const value = parseValue(arena, &scanner, 0) catch |err| {
         return fail(&scanner, source, diag, err);
@@ -126,6 +128,7 @@ pub fn spans(arena: Allocator, source: []const u8, comments: bool) Error![]const
         .source = source,
         .comments = comments,
         .list = &list,
+        .i = bomLength(source),
     };
     walker.skip();
     try walker.value(&.{});
@@ -323,6 +326,12 @@ pub fn parseReader(
     reader: *std.Io.Reader,
     diag: ?*Diagnostic,
 ) (Error || error{ReadFailed})!Value {
+    if (reader.peek(3)) |head| {
+        if (bomLength(head) > 0) reader.toss(3);
+    } else |err| switch (err) {
+        error.ReadFailed => return error.ReadFailed,
+        error.EndOfStream => {},
+    }
     var scanner: std.json.Reader = .init(arena, reader);
     var position: std.json.Diagnostics = .{};
     scanner.enableDiagnostics(&position);

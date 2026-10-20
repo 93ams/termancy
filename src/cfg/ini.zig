@@ -18,6 +18,7 @@ const Value = @import("value.zig").Value;
 const Table = @import("value.zig").Table;
 const Diagnostic = @import("Diagnostic.zig");
 const path = @import("path.zig");
+const bomLength = @import("format.zig").bomLength;
 
 /// What parsing can fail with; the diagnostic says where.
 pub const Error = error{SyntaxError} || Allocator.Error;
@@ -60,8 +61,8 @@ fn parseInto(
 ) Error!Value {
     var root: Value = .empty_table;
     var section: []const []const u8 = &.{};
-    var offset: usize = 0;
-    var lines = std.mem.splitScalar(u8, source, '\n');
+    var offset: usize = bomLength(source);
+    var lines = std.mem.splitScalar(u8, source[offset..], '\n');
     while (lines.next()) |raw_line| : (offset += raw_line.len + 1) {
         const line = std.mem.trim(u8, raw_line, " \t\r");
         if (line.len == 0 or line[0] == ';' or line[0] == '#') continue;

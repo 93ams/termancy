@@ -12,6 +12,7 @@ const Array = @import("value.zig").Array;
 const writeFloat = @import("value.zig").writeFloat;
 const Diagnostic = @import("Diagnostic.zig");
 const path = @import("path.zig");
+const bomLength = @import("format.zig").bomLength;
 
 /// What parsing can fail with; the diagnostic says where.
 pub const Error = error{SyntaxError} || Allocator.Error;
@@ -23,7 +24,7 @@ pub const max_depth = 256;
 /// Parses one TOML document into a `.table`. All memory comes from `arena`; the result
 /// shares nothing with `source`.
 pub fn parse(arena: Allocator, source: []const u8, diag: ?*Diagnostic) Error!Value {
-    var parser: Parser = .{ .arena = arena, .source = source, .diag = diag };
+    var parser: Parser = .{ .arena = arena, .source = source, .diag = diag, .pos = bomLength(source) };
     if (invalidUtf8(source)) |offset| return parser.fail(offset, "invalid UTF-8");
     const root = try parser.newTable(.header, 0);
     try parser.document(root);
@@ -52,7 +53,13 @@ pub const Span = struct {
 /// does.
 pub fn spans(arena: Allocator, source: []const u8) Error![]const Span {
     var list: std.ArrayList(Span) = .empty;
-    var parser: Parser = .{ .arena = arena, .source = source, .diag = null, .spans = &list };
+    var parser: Parser = .{
+        .arena = arena,
+        .source = source,
+        .diag = null,
+        .pos = bomLength(source),
+        .spans = &list,
+    };
     if (invalidUtf8(source)) |offset| return parser.fail(offset, "invalid UTF-8");
     const root = try parser.newTable(.header, 0);
     try parser.document(root);

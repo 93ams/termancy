@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
 const Format = @import("format.zig").Format;
+const bomLength = @import("format.zig").bomLength;
 const path = @import("path.zig");
 const toml = @import("toml.zig");
 const dotenv = @import("dotenv.zig");
@@ -808,7 +809,7 @@ fn insertToml(
     const at = best.insert_at;
     const nl = lineBreak(source);
     write: {
-        if (at > 0 and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
+        if (at > bomLength(source) and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
         for (key[best.path.len..], 0..) |segment, i| {
             if (i > 0) w.writeByte('.') catch break :write;
             toml.writeKey(w, segment) catch |err| switch (err) {
@@ -1161,7 +1162,7 @@ fn editIni(arena: Allocator, source: []const u8, change: Change) EditError![]con
         for (sections) |candidate| {
             if (!segmentsEql(candidate.path, section)) continue;
             at = candidate.insert_at;
-            if (at > 0 and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
+            if (at > bomLength(source) and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
             w.print("{s} = {s}{s}", .{ name, value.written(), nl }) catch break :write;
             // A key added to the root just before the first header (or the comment above
             // it): keep a blank line.
@@ -1170,7 +1171,7 @@ fn editIni(arena: Allocator, source: []const u8, change: Change) EditError![]con
             if (before_header) w.writeAll(nl) catch break :write;
             return splice(arena, source, at, at, line.written());
         }
-        if (source.len > 0 and source[source.len - 1] != '\n') w.writeAll(nl) catch break :write;
+        if (source.len > bomLength(source) and source[source.len - 1] != '\n') w.writeAll(nl) catch break :write;
         if (source.len > 0) w.writeAll(nl) catch break :write;
         w.writeByte('[') catch break :write;
         for (section, 0..) |segment, n| {
@@ -1259,7 +1260,7 @@ fn insertYaml(
     const w = &text.writer;
     const nl = lineBreak(source);
     write: {
-        if (at > 0 and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
+        if (at > bomLength(source) and source[at - 1] != '\n') w.writeAll(nl) catch break :write;
         for (key[base..], 0..) |segment, i| {
             w.splatByteAll(' ', indent + 2 * i) catch break :write;
             yaml.writeString(w, segment) catch break :write;
@@ -1435,7 +1436,7 @@ fn editDotenv(arena: Allocator, source: []const u8, change: Change) EditError![]
             const w = &line.writer;
             write: {
                 const nl = lineBreak(source);
-                if (source.len > 0 and source[source.len - 1] != '\n') {
+                if (source.len > bomLength(source) and source[source.len - 1] != '\n') {
                     w.writeAll(nl) catch break :write;
                 }
                 for (key, 0..) |segment, n| {
@@ -1629,6 +1630,26 @@ fn expectEdit(format: Format, source: []const u8, change: Change, expected: ?[]c
         try testing.expectEqualStrings(text, edited orelse return error.TestExpectedEdit);
     } else {
         try testing.expectEqual(null, edited);
+    }
+}
+
+test "edits keep a byte order mark" {
+    const bom = "\xEF\xBB\xBF";
+    try expectEdit(.toml, bom ++ "# c\na = 1\n", setTo("b", .{ .int = 2 }), bom ++ "# c\na = 1\nb = 2\n");
+    try expectEdit(.toml, bom ++ "a = 1\n", setTo("a", .{ .int = 2 }), bom ++ "a = 2\n");
+    try expectEdit(.json, bom ++ "{\"a\": 1}", setTo("a", .{ .int = 2 }), bom ++ "{\"a\": 2}");
+    try expectEdit(.dotenv, bom ++ "A=1\n", setTo("a", .{ .string = "2" }), bom ++ "A=2\n");
+    try expectEdit(.ini, bom ++ "a=1\n", setTo("a", .{ .int = 2 }), bom ++ "a=2\n");
+    try expectEdit(.yaml, bom ++ "a: 1\n", setTo("b", .{ .int = 2 }), bom ++ "a: 1\nb: 2\n");
+    try expectEdit(.toml, bom ++ "[s]\nx = 1\n", setTo("a", .{ .int = 2 }), bom ++ "a = 2\n\n[s]\nx = 1\n");
+    try expectEdit(.dotenv, bom, setTo("a", .{ .string = "1" }), bom ++ "A=1\n");
+    try expectEdit(.zon, bom ++ ".{ .a = 1 }", setTo("a", .{ .int = 2 }), bom ++ ".{ .a = 2 }");
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    for ([_]Format{ .toml, .dotenv }) |format| {
+        const source = if (format == .toml) bom ++ "a   =   1\n" else bom ++ "A=1\n";
+        const formatted = (try reformat(arena.allocator(), format, source)).?;
+        try testing.expect(std.mem.startsWith(u8, formatted, bom));
     }
 }
 

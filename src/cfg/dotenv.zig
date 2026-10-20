@@ -17,6 +17,7 @@ const Value = @import("value.zig").Value;
 const Table = @import("value.zig").Table;
 const Diagnostic = @import("Diagnostic.zig");
 const path = @import("path.zig");
+const bomLength = @import("format.zig").bomLength;
 
 /// What parsing can fail with; the diagnostic says where.
 pub const Error = error{SyntaxError} || Allocator.Error;
@@ -45,7 +46,13 @@ pub fn parseWith(
     diag: ?*Diagnostic,
     options: ParseOptions,
 ) Error!Value {
-    var parser: Parser = .{ .arena = arena, .source = source, .diag = diag, .options = options };
+    var parser: Parser = .{
+        .arena = arena,
+        .source = source,
+        .diag = diag,
+        .options = options,
+        .index = bomLength(source),
+    };
     try parser.run();
     if (!options.nest) return .{ .table = parser.flat };
     var root: Value = .empty_table;
@@ -93,6 +100,7 @@ pub fn spans(arena: Allocator, source: []const u8) Error![]const Span {
         .source = source,
         .diag = null,
         .options = .{},
+        .index = bomLength(source),
         .spans = &list,
     };
     try parser.run();
