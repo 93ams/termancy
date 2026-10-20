@@ -34,6 +34,7 @@ const Array = @import("value.zig").Array;
 const Diagnostic = @import("Diagnostic.zig");
 const path = @import("path.zig");
 const settings_ = @import("settings.zig");
+const toml = @import("toml.zig");
 
 /// The message of a required key that nothing set; `Config.decode` adds how to set it.
 pub const missing_message = "required key is missing";
@@ -203,7 +204,7 @@ const Decoder = struct {
 
     fn string(d: *Decoder, value: Value, key: []const u8) Error![]const u8 {
         return switch (value) {
-            .string => |s| s,
+            .string, .datetime => |s| s,
             .int, .float, .bool => std.fmt.allocPrint(d.arena, "{f}", .{value}),
             else => d.fail(key, error.InvalidValue, "expected a string"),
         };
@@ -212,7 +213,7 @@ const Decoder = struct {
     fn parsed(d: *Decoder, comptime T: type, value: Value, key: []const u8) Error!T {
         const message = "invalid value for " ++ @typeName(T);
         const text = switch (value) {
-            .string => |s| s,
+            .string, .datetime => |s| s,
             .int, .float => try std.fmt.allocPrint(d.arena, "{f}", .{value}),
             else => return d.fail(key, error.InvalidValue, message),
         };
@@ -249,7 +250,7 @@ const Decoder = struct {
             .table => |t| if (t.count() == 0) return &.{} else {
                 return d.fail(key, error.InvalidValue, "expected an array");
             },
-            .string => |s| {
+            .string, .datetime => |s| {
                 // Text from the environment or a flag: a comma-separated list.
                 if (std.mem.trim(u8, s, " ").len == 0) return &.{};
                 const count = std.mem.countScalar(u8, s, ',') + 1;
@@ -650,7 +651,8 @@ pub fn parseBool(text: []const u8) ?bool {
 
 /// Encodes a Zig value as a tree in `arena`, each field under its own name. Optional
 /// fields that are `null` are left out of tables, since most formats cannot spell null.
-/// Types with a `format` method and a `parse` function encode as their text.
+/// Types with a `format` method and a `parse` function encode as their text; a `DateTime`, as
+/// a `.datetime`.
 pub fn encode(arena: Allocator, value: anytype) EncodeError!Value {
     return encodeAt(settings_.Of(@TypeOf(value)).root, arena, value);
 }
@@ -712,7 +714,10 @@ fn encodeAt(comptime place: anytype, arena: Allocator, value: anytype) EncodeErr
     const T = @TypeOf(value);
     if (T == Value) return value.clone(arena);
     if (comptime hasParse(T) and std.meta.hasMethod(T, "format")) {
-        return .{ .string = try std.fmt.allocPrint(arena, "{f}", .{value}) };
+        const text = try std.fmt.allocPrint(arena, "{f}", .{value});
+        // A `DateTime` is a TOML date-time, which TOML writes bare.
+        if (T == scalar.DateTime and toml.isDateTime(text)) return .{ .datetime = text };
+        return .{ .string = text };
     }
     if (comptime settings_.isChoice(T)) return encodeChoice(place, arena, value);
     return switch (@typeInfo(T)) {
@@ -1591,7 +1596,6 @@ test "a TOML date-time decodes into DateTime and writes back bare" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const toml = @import("toml.zig");
     const DateTime = @import("scalar.zig").DateTime;
     const tree = try toml.parse(a, "at = 1979-05-27T07:32:00Z\nday = 1979-05-27\n", null);
     const Settings = struct { at: DateTime, day: DateTime };
@@ -1603,6 +1607,21 @@ test "a TOML date-time decodes into DateTime and writes back bare" {
     defer out.deinit();
     try toml.write(&out.writer, tree, .{});
     try testing.expectEqualStrings("at = 1979-05-27T07:32:00Z\nday = 1979-05-27\n", out.written());
+}
+
+test "a TOML date-time decodes as text, and a DateTime encodes as a date-time" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const tree = try toml.parse(a, "day = 1979-05-27\ndays = 07:32:00\n", null);
+    const Settings = struct { day: []const u8, days: []const []const u8 };
+    var diag: Diagnostic = .{};
+    const settings = try decode(Settings, a, tree, .{}, &diag);
+    try testing.expectEqualStrings("1979-05-27", settings.day);
+    // As a string from a flag would be: a list of one.
+    try testing.expectEqualStrings("07:32:00", settings.days[0]);
+    const at = try scalar.DateTime.parse("1979-05-27T07:32:00Z");
+    try testing.expectEqualStrings("1979-05-27T07:32:00Z", (try encode(a, at)).datetime);
 }
 
 const Storage = union(enum) {

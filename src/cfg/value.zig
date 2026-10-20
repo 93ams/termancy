@@ -22,6 +22,11 @@ pub const Value = union(enum) {
     int: i64,
     float: f64,
     string: []const u8,
+    /// A TOML date and/or time, as its text: one variant for all four kinds, an offset
+    /// date-time, a local date-time, a local date, or a local time. `toml.parse` makes one
+    /// only from text `toml.isDateTime` accepts, and TOML's writer refuses any other text.
+    /// `cfg.DateTime` decodes it, and a `[]const u8` takes its text.
+    datetime: []const u8,
     array: Array,
     table: Table,
 
@@ -38,6 +43,7 @@ pub const Value = union(enum) {
             .int => "an integer",
             .float => "a float",
             .string => "a string",
+            .datetime => "a date-time",
             .array => "an array",
             .table => "a table",
         };
@@ -54,6 +60,7 @@ pub const Value = union(enum) {
         return switch (value) {
             .null, .bool, .int, .float => value,
             .string => |s| .{ .string = try arena.dupe(u8, s) },
+            .datetime => |s| .{ .datetime = try arena.dupe(u8, s) },
             .array => |a| blk: {
                 var copy: Array = try .initCapacity(arena, a.items.len);
                 for (a.items) |item| copy.appendAssumeCapacity(try item.clone(arena));
@@ -73,7 +80,8 @@ pub const Value = union(enum) {
     }
 
     /// Structural equality. Tables compare as unordered maps; floats compare by value, so
-    /// `nan` is never equal to itself.
+    /// `nan` is never equal to itself; date-times compare by text, so `07:32:00` and
+    /// `07:32:00.000` differ, and a date-time never equals a string.
     pub fn eql(a: Value, b: Value) bool {
         if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
         return switch (a) {
@@ -82,6 +90,7 @@ pub const Value = union(enum) {
             .int => |x| x == b.int,
             .float => |x| x == b.float,
             .string => |x| std.mem.eql(u8, x, b.string),
+            .datetime => |x| std.mem.eql(u8, x, b.datetime),
             .array => |x| blk: {
                 if (x.items.len != b.array.items.len) break :blk false;
                 for (x.items, b.array.items) |l, r| {
@@ -295,7 +304,7 @@ pub const Value = union(enum) {
             .bool => |b| try writer.writeAll(if (b) "true" else "false"),
             .int => |i| try writer.print("{d}", .{i}),
             .float => |f| try writeFloat(writer, f),
-            .string => |s| try writer.writeAll(s),
+            .string, .datetime => |s| try writer.writeAll(s),
             .array => |a| {
                 try writer.writeByte('[');
                 for (a.items, 0..) |item, i| {
@@ -624,6 +633,20 @@ test "clone shares no strings" {
     text[0] = 'X';
     try testing.expectEqualStrings("abc", copy.lookup("s").?.string);
     try testing.expectEqualStrings("abc", copy.lookup("l.0").?.string);
+}
+
+test "a date-time compares by text, is copied, and is never a string" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var text = "2024-01-01".*;
+    const day: Value = .{ .datetime = &text };
+    const copy = try day.clone(arena.allocator());
+    text[0] = '1';
+    try testing.expectEqualStrings("2024-01-01", copy.datetime);
+    try testing.expect(copy.eql(.{ .datetime = "2024-01-01" }));
+    try testing.expect(!copy.eql(.{ .datetime = "2024-01-01T00:00:00" }));
+    try testing.expect(!copy.eql(.{ .string = "2024-01-01" }));
+    try testing.expectEqualStrings("a date-time", Value.describe(.datetime));
 }
 
 test "describe and isLeaf" {

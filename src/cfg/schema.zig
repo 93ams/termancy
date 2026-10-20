@@ -333,7 +333,7 @@ fn typeName(value: Value) []const u8 {
         .bool => "boolean",
         .int => "integer",
         .float => "number",
-        .string => "string",
+        .string, .datetime => "string",
         .array => "array",
         .table => "object",
     };
@@ -471,7 +471,10 @@ const Validator = struct {
             }
         }
         if (v.number(value)) |n| try v.bounds(s, n, key);
-        if (value == .string) try v.text(s, value.string, key);
+        switch (value) {
+            .string, .datetime => |string| try v.text(s, string, key),
+            else => {},
+        }
         if (value == .array) try v.array(s, value.array.items, key);
         if (value == .table) try v.object(s, value.table, key);
         try v.combinations(s, value, key);
@@ -492,7 +495,8 @@ const Validator = struct {
 
     fn isType(v: *const Validator, name: []const u8, value: Value) bool {
         const coerce = v.options.coerce and value == .string;
-        if (std.mem.eql(u8, name, "string")) return value == .string;
+        // JSON Schema has no date type; a date-time is text.
+        if (std.mem.eql(u8, name, "string")) return value == .string or value == .datetime;
         if (std.mem.eql(u8, name, "object")) return value == .table;
         if (std.mem.eql(u8, name, "array")) return value == .array;
         if (std.mem.eql(u8, name, "null")) return value == .null;
@@ -636,6 +640,10 @@ const Validator = struct {
 /// Equality for `enum` and `const`, coercing text to the other side's scalar type.
 fn sameValue(expected: Value, value: Value, options: ValidateOptions) bool {
     if (expected.eql(value)) return true;
+    // A schema's `"2024-01-01"` names the date-time `2024-01-01`.
+    if (expected == .string and value == .datetime) {
+        return std.mem.eql(u8, expected.string, value.datetime);
+    }
     if (!options.coerce or value != .string) return false;
     return switch (expected) {
         .int => |i| (std.fmt.parseInt(i64, value.string, 0) catch return false) == i,
@@ -652,6 +660,7 @@ fn kindOf(value: Value) []const u8 {
         .int => "an integer",
         .float => "a number",
         .string => "a string",
+        .datetime => "a date-time",
         .array => "an array",
         .table => "an object",
     };
@@ -960,6 +969,26 @@ test "validate: missing keys, anyOf, oneOf" {
     try testing.expectEqualStrings(none, problems.items[1].message);
     const two = "matches 2 of the oneOf alternatives, not one";
     try testing.expectEqualStrings(two, problems.items[2].message);
+}
+
+test "validate: a date-time is a string" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const schema = try json.parse(a,
+        \\{"properties": {"day": {"type": "string", "minLength": 11},
+        \\ "start": {"enum": ["2024-01-01"]}}}
+    , null);
+    var doc: Value = .empty_table;
+    try doc.put(a, "day", .{ .datetime = "2024-01-01" });
+    try doc.put(a, "start", .{ .datetime = "2024-01-01" });
+    var problems: std.ArrayList(Diagnostic) = .empty;
+    try testing.expect(!try validate(a, schema, doc, .{ .coerce = false }, &problems));
+    // Only the length: a date-time has the type `string`, and its text names the choice.
+    try testing.expectEqual(1, problems.items.len);
+    try testing.expectEqualStrings("must be at least 11 characters", problems.items[0].message);
+    const inferred = try infer(a, doc);
+    try testing.expectEqualStrings("string", inferred.lookup("properties.day.type").?.string);
 }
 
 test "a schema built from a struct validates what decode accepts" {

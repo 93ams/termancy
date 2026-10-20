@@ -1,5 +1,6 @@
 //! TOML <-> `Value`. Reads TOML 1.0. Date and time values are validated and kept as
-//! `.string` with their exact text, since `Value` has no date type. Writing puts a table's
+//! `.datetime` with their exact text, and written back bare; a string is always written
+//! quoted, so text that reads like a date stays a string. Writing puts a table's
 //! plain keys first, then its sub-tables as `[header]` sections and its arrays of tables as
 //! `[[header]]` sections, so the output reads back to an equal tree.
 
@@ -673,7 +674,7 @@ fn scalarValue(arena: Allocator, text: []const u8) ScalarError!Value {
     if (std.mem.eql(u8, unsigned, "nan")) return .{ .float = std.math.nan(f64) };
     if (looksLikeDateTime(text)) {
         if (!isDateTime(text)) return error.InvalidDateTime;
-        return .{ .string = try arena.dupe(u8, text) };
+        return .{ .datetime = try arena.dupe(u8, text) };
     }
     if (unsigned.len == 0 or !std.ascii.isDigit(unsigned[0])) return error.InvalidValue;
     if (text.len > 2 and text[0] == '0') switch (text[1]) {
@@ -842,7 +843,8 @@ pub fn inlineTables(arena: Allocator, source: []const u8) Allocator.Error![]cons
 pub const WriteError = std.Io.Writer.Error || error{Unrepresentable};
 
 /// Writes `value`, which must be a table, as a TOML document. `null` has no TOML spelling,
-/// and strings must be valid UTF-8; anything else is `error.Unrepresentable`.
+/// strings must be valid UTF-8, and date-times text `isDateTime` accepts; anything else is
+/// `error.Unrepresentable`.
 pub fn write(writer: *std.Io.Writer, value: Value, options: WriteOptions) WriteError!void {
     if (value != .table) return error.Unrepresentable;
     var sections: SectionWriter = .{ .writer = writer, .options = options };
@@ -952,11 +954,11 @@ fn writeInline(writer: *std.Io.Writer, value: Value, depth: usize) WriteError!vo
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .int => |i| try writer.print("{d}", .{i}),
         .float => |f| try writeTomlFloat(writer, f),
-        // A date-time reads back as its text; writing it bare keeps it a date-time.
-        .string => |s| if (looksLikeDateTime(s) and isDateTime(s))
-            try writer.writeAll(s)
-        else
-            try writeString(writer, s),
+        .string => |s| try writeString(writer, s),
+        .datetime => |s| {
+            if (!isDateTime(s)) return error.Unrepresentable;
+            try writer.writeAll(s);
+        },
         .array => |a| {
             try writer.writeByte('[');
             for (a.items, 0..) |item, i| {
@@ -1232,13 +1234,13 @@ test "dates and times are kept as text" {
         \\lt = 00:32:00.5
         \\list = [1979-05-27, 07:32:00]
     , null);
-    try testing.expectEqualStrings("1979-05-27T07:32:00Z", v.lookup("odt1").?.string);
-    try testing.expectEqualStrings("1979-05-27T00:32:00.999999-07:00", v.lookup("odt2").?.string);
-    try testing.expectEqualStrings("1979-05-27 07:32:00+01:30", v.lookup("odt3").?.string);
-    try testing.expectEqualStrings("1979-05-27t07:32:00", v.lookup("ldt").?.string);
-    try testing.expectEqualStrings("2024-02-29", v.lookup("ld").?.string);
-    try testing.expectEqualStrings("00:32:00.5", v.lookup("lt").?.string);
-    try testing.expectEqualStrings("07:32:00", v.lookup("list.1").?.string);
+    try testing.expectEqualStrings("1979-05-27T07:32:00Z", v.lookup("odt1").?.datetime);
+    try testing.expectEqualStrings("1979-05-27T00:32:00.999999-07:00", v.lookup("odt2").?.datetime);
+    try testing.expectEqualStrings("1979-05-27 07:32:00+01:30", v.lookup("odt3").?.datetime);
+    try testing.expectEqualStrings("1979-05-27t07:32:00", v.lookup("ldt").?.datetime);
+    try testing.expectEqualStrings("2024-02-29", v.lookup("ld").?.datetime);
+    try testing.expectEqualStrings("00:32:00.5", v.lookup("lt").?.datetime);
+    try testing.expectEqualStrings("07:32:00", v.lookup("list.1").?.datetime);
 }
 
 test "arrays" {

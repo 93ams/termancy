@@ -81,7 +81,7 @@ pub const sourcesOf = settings_.sourcesOf;
 pub const DecodeOptions = decoding.Options;
 /// What `decode` can fail with.
 pub const DecodeError = decoding.Error;
-/// Infers the type of untyped text: `true`, `42`, `1.5`, or a string.
+/// Infers the type of untyped text: `true`, `42`, `1.5`, `2024-01-01`, or a string.
 pub const infer = internal.scalar.infer;
 /// Whether text matches a pattern where `*` matches any run of bytes and `?` one byte, as
 /// `.glob` checks and ignore lists use: `glob(".*", ".cache")`.

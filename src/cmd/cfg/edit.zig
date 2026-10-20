@@ -28,8 +28,8 @@ pub const set = cli.command(.{
     .description =
     \\Set a key in the file named by the first --config, or the discovered termancy.* file.
     \\The value's type is inferred: true/false, integers, and decimals are typed, null is
-    \\null, anything else is a string. --string keeps it a string. A missing file is
-    \\created.
+    \\null, a TOML date or time (2024-01-01, 07:32:00) is a date-time, anything else is a
+    \\string. --string keeps it a string. A missing file is created.
     ,
     .group = group,
     .flags = set_flags,

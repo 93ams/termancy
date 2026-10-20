@@ -404,7 +404,7 @@ fn writeValue(
             if (std.math.isNan(f) or std.math.isInf(f)) return error.Unrepresentable;
             try writeFloat(writer, f);
         },
-        .string => |s| try writeString(writer, s),
+        .string, .datetime => |s| try writeString(writer, s),
         .array => |a| {
             if (a.items.len == 0) return writer.writeAll("[]");
             try writer.writeByte('[');
