@@ -473,8 +473,12 @@ fn readId(r: *cbor.Reader) cbor.Error![]const u8 {
     var id: ?[]const u8 = null;
     const entries = try r.map();
     for (0..entries) |_| {
-        const is_id = try r.peek() == .text and std.mem.eql(u8, try r.textString(), "id");
-        if (is_id) id = try r.byteString() else try r.skip();
+        if (try r.peek() != .text) {
+            try r.skip();
+            try r.skip();
+        } else if (std.mem.eql(u8, try r.textString(), "id")) {
+            id = try r.byteString();
+        } else try r.skip();
     }
     return id orelse error.InvalidCbor;
 }
@@ -1292,6 +1296,16 @@ test "PIN protocol one encrypts with AES-256-CBC (NIST SP 800-38A, F.2.5)" {
     var back: [32]u8 = undefined;
     cbcDecrypt(key, iv, &got, &back);
     try testing.expectEqualSlices(u8, &plain, &back);
+}
+
+test "readId skips whole entries, whatever their key" {
+    // {1: "id", h'bb': 0}: a key that is not text skipped alone made its value the next key.
+    var r: cbor.Reader = .{ .bytes = &.{ 0xa2, 0x01, 0x62, 'i', 'd', 0x41, 0xbb, 0x00 } };
+    try testing.expectError(error.InvalidCbor, readId(&r));
+    // {1: 2, "id": h'aa'}
+    r = .{ .bytes = &.{ 0xa2, 0x01, 0x02, 0x62, 'i', 'd', 0x41, 0xaa } };
+    try testing.expectEqualSlices(u8, &.{0xaa}, try readId(&r));
+    try testing.expect(r.atEnd());
 }
 
 test statusError {

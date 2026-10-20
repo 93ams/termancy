@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `ctap.getAssertion` reads a credential or user map whose keys are not all text whole: a
+  key that was not text was skipped without its value, so a key (`h'bb'` in
+  `{1: "id", h'bb': 0}`) could be taken for the ID and the rest of the response misread.
 - `webauthn.attestedCredential` no longer panics on a credential ID length of 65518 or more
   (the key's offset overflowed 16 bits); it refuses IDs over WebAuthn's 1023 bytes, and
   bytes after the key that the ED flag does not announce as an extensions map.
