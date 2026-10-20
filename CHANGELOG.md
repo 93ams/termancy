@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `webauthn.attestedCredential` no longer panics on a credential ID length of 65518 or more
+  (the key's offset overflowed 16 bits); it refuses IDs over WebAuthn's 1023 bytes, and
+  bytes after the key that the ED flag does not announce as an extensions map.
 - `cbor.Reader.boolean` takes only `false` and `true` (`0xf4`, `0xf5`): a float whose bits
   matched them (`f9 00 15`), or a simple value in two bytes (`f8 14`), read as a boolean.
 - A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new

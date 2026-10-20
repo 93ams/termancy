@@ -594,18 +594,27 @@ pub const AttestedCredential = struct {
     public_key: []const u8,
 };
 
-/// Reads the attested credential data that follows the fixed part of `bytes`.
+/// Reads the attested credential data that follows the fixed part of `bytes`, and checks
+/// that nothing follows it but the extensions the ED flag announces.
 pub fn attestedCredential(bytes: []const u8) error{InvalidAuthenticatorData}!AttestedCredential {
     const data: AuthenticatorData = try .parse(bytes);
     if (!data.flags.attested_credential_data) return error.InvalidAuthenticatorData;
     const rest = bytes[AuthenticatorData.min_len..];
     if (rest.len < 18) return error.InvalidAuthenticatorData;
     const id_len = std.mem.readInt(u16, rest[16..18], .big);
-    if (rest.len - 18 < id_len) return error.InvalidAuthenticatorData;
-    const key = rest[18 + id_len ..];
+    const from_id = rest[18..];
+    // 1023: WebAuthn's longest credential ID.
+    if (id_len > 1023 or from_id.len < id_len) return error.InvalidAuthenticatorData;
+    const key = from_id[id_len..];
     var reader: cbor.Reader = .{ .bytes = key };
     reader.skip() catch return error.InvalidAuthenticatorData;
-    return .{ .aaguid = rest[0..16].*, .id = rest[18..][0..id_len], .public_key = key[0..reader.pos] };
+    const key_len = reader.pos;
+    if (data.flags.extension_data) {
+        if ((reader.peek() catch null) != .map) return error.InvalidAuthenticatorData;
+        reader.skip() catch return error.InvalidAuthenticatorData;
+    }
+    if (!reader.atEnd()) return error.InvalidAuthenticatorData;
+    return .{ .aaguid = rest[0..16].*, .id = from_id[0..id_len], .public_key = key[0..key_len] };
 }
 
 /// A `PublicKeyCredential` carrying an `AuthenticatorAttestationResponse`.
@@ -882,14 +891,14 @@ test "a registration's credential: ID, COSE key, and first count" {
     const point = EcdsaP256.KeyPair.generate(std.testing.io).public_key.toUncompressedSec1();
     const cose = testCoseEs256(point);
     const id = "credential-7";
-    var bytes: [AuthenticatorData.min_len + 18 + id.len + cose.len + 2]u8 = @splat(0);
-    bytes[32] = 0x45; // user present and verified, attested credential data
+    var bytes: [AuthenticatorData.min_len + 18 + id.len + cose.len + 1]u8 = @splat(0);
+    bytes[32] = 0xc5; // user present and verified, attested credential and extension data
     std.mem.writeInt(u32, bytes[33..37], 3, .big);
     bytes[37] = 0xaa; // first byte of the AAGUID
     std.mem.writeInt(u16, bytes[53..55], id.len, .big);
     @memcpy(bytes[55..][0..id.len], id);
     @memcpy(bytes[55 + id.len ..][0..cose.len], &cose);
-    bytes[bytes.len - 2] = 0xa0; // an extensions map after the key: not part of it
+    bytes[bytes.len - 1] = 0xa0; // an extensions map after the key: not part of it
     const attested = try attestedCredential(&bytes);
     try std.testing.expectEqual(0xaa, attested.aaguid[0]);
     try std.testing.expectEqualStrings(id, attested.id);
@@ -912,6 +921,37 @@ test "a registration's credential: ID, COSE key, and first count" {
     try std.testing.expectError(error.InvalidAuthenticatorData, attestedCredential(&bytes));
     bytes[32] = 0x45;
     try std.testing.expectError(error.InvalidAuthenticatorData, attestedCredential(bytes[0..60]));
+}
+
+test "attestedCredential refuses what the flags do not announce, and long IDs" {
+    const e = std.testing.expectError;
+    const cose = testCoseEd25519(@splat(9));
+    var bytes: [AuthenticatorData.min_len + 18 + cose.len + 1]u8 = @splat(0);
+    @memcpy(bytes[55..][0..cose.len], &cose);
+    bytes[bytes.len - 1] = 0xa0;
+    bytes[32] = 0x41; // attested credential data, then an extensions map ED does not announce
+    try e(error.InvalidAuthenticatorData, attestedCredential(&bytes));
+    const plain = try attestedCredential(bytes[0 .. bytes.len - 1]);
+    try std.testing.expectEqual(cose.len, plain.public_key.len);
+    bytes[32] = 0xc1; // ED, and no extensions after the key
+    try e(error.InvalidAuthenticatorData, attestedCredential(bytes[0 .. bytes.len - 1]));
+    bytes[bytes.len - 1] = 0x80; // extensions that are not a map
+    try e(error.InvalidAuthenticatorData, attestedCredential(&bytes));
+
+    // A 65535-byte ID overflowed the offset of the key (in 16 bits) after it.
+    const gpa = std.testing.allocator;
+    const long = try gpa.alloc(u8, AuthenticatorData.min_len + 18 + 0xffff + 1);
+    defer gpa.free(long);
+    @memset(long, 0);
+    long[32] = 0x41;
+    long[long.len - 1] = 0xa0;
+    for ([_]u16{ 0xffff, 1024 }) |id_len| {
+        std.mem.writeInt(u16, long[53..55], id_len, .big);
+        const end = 55 + @as(usize, id_len) + 1;
+        try e(error.InvalidAuthenticatorData, attestedCredential(long[0..end]));
+    }
+    std.mem.writeInt(u16, long[53..55], 1023, .big);
+    try std.testing.expectEqual(1023, (try attestedCredential(long[0 .. 55 + 1023 + 1])).id.len);
 }
 
 test "CreationOptions.parseJson: what a relying party sends" {
