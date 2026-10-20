@@ -131,6 +131,9 @@ unexpanded: ?Value = null,
 /// With references: for each key a reference names, the keys whose values name it, so a
 /// `set` re-expands only what depends on the key it changes. In the cache arena.
 dependents: std.StringHashMapUnmanaged(std.ArrayList([]const u8)) = .empty,
+/// With references: keys whose expanded value took text from a secret, so `write` redacts
+/// them too. In the cache arena.
+derived_secrets: std.StringArrayHashMapUnmanaged(void) = .empty,
 /// Where `${secret:<scheme>:<name>}` looks secrets up, by scheme, beside `env` and `file`.
 secret_providers: std.StringArrayHashMapUnmanaged(SecretProvider) = .empty,
 /// `${name:argument}` resolvers that are not secrets (`addResolver`).
@@ -1428,6 +1431,18 @@ pub fn markSecret(config: *Config, key_path: []const u8) Allocator.Error!void {
     try config.secrets.put(a, try a.dupe(u8, key_path), {});
 }
 
+/// Whether the value at `key` is or holds a secret: the key or a table above it is secret,
+/// or a reference copied a secret into it.
+fn holdsSecret(config: *const Config, key: []const u8) bool {
+    if (config.isSecret(key) or config.derived_secrets.contains(key)) return true;
+    for (config.secrets.keys()) |secret| {
+        if (key.len > secret.len and key[secret.len] == '.' and
+            (std.mem.startsWith(u8, key, secret) or
+                (config.case_insensitive and std.ascii.startsWithIgnoreCase(key, secret)))) return true;
+    }
+    return false;
+}
+
 /// Whether `key_path` was marked secret, by `markSecret` or a settings type's specs.
 pub fn isSecret(config: *const Config, key_path: []const u8) bool {
     if (config.secrets.contains(key_path)) return true;
@@ -1483,6 +1498,7 @@ pub fn resolve(config: *Config) Allocator.Error!Value {
     config.reference_problem = null;
     config.unexpanded = null;
     config.dependents = .empty;
+    config.derived_secrets = .empty;
     if (config.references) {
         config.unexpanded = try result.clone(a);
         try config.expandReferences(&result);
@@ -1754,6 +1770,7 @@ const Expander = struct {
         }
         // References inside the target are expanded first, by key, so `lookup` again.
         if (!try e.expand(target)) return null;
+        if (e.config.holdsSecret(target)) try e.config.derived_secrets.put(e.arena, from, {});
         const value = e.root.lookup(target).?;
         return switch (value) {
             .string => |s| s,
@@ -2325,6 +2342,14 @@ pub fn snapshot(config: *Config, options: WriteOptions) Allocator.Error!Value {
                 error.InvalidPath, error.NotATable, error.IndexOutOfRange => unreachable,
             };
         }
+        // Expanded references live only in the effective tree.
+        if (options.layer == null) for (config.derived_secrets.keys()) |key| {
+            if (value.lookup(key) == null) continue;
+            value.put(a, key, .{ .string = redacted }) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidPath, error.NotATable, error.IndexOutOfRange => unreachable,
+            };
+        };
     }
     return value;
 }
@@ -3095,6 +3120,33 @@ test "secrets nested and in arrays are redacted" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "not") == null);
     try testing.expect(config.isSecret("db.url"));
     try testing.expect(!config.isSecret("db"));
+}
+
+test "a reference to a secret is redacted where it expands" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    config.useReferences();
+    try config.loadSource("a.toml",
+        \\[db]
+        \\password = "hunter2"
+        \\url = "pg://u:${db.password}@h"
+        \\again = "${db.url}"
+        \\[vault]
+        \\token = "tok3n"
+        \\[app]
+        \\auth = "Bearer ${vault.token}"
+        \\host = "h"
+    , .toml, null);
+    try config.markSecret("db.password");
+    try config.markSecret("vault");
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try config.write(&out.writer, .toml, .{});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "hunter2") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "tok3n") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "host = \"h\"") != null);
+    // Only what is written is redacted; the value itself still expands.
+    try testing.expectEqualStrings("pg://u:hunter2@h", (try config.get("db.url")).?.string);
 }
 
 test "a scalar or empty document is handled per format" {

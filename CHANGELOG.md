@@ -469,6 +469,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: with references on, a value that takes text from a secret through `${key}`
+  (`url = "pg://u:${db.password}@h"`) is redacted by `write` and `snapshot` too, instead of
+  printing the secret.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up
