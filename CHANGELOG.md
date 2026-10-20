@@ -469,6 +469,10 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `sys.log`: strings inside a struct, list, or optional field value are written as text,
+  with known secret values replaced by `[REDACTED]`, in every format. They were written as
+  lists of byte values, which the secret scrubbing could not see, so a secret inside one
+  (an argument list, a request struct) reached the log readable.
 - `sys.dirs` on macOS: a relative `$TMPDIR` no longer makes the runtime directory relative
   to the working directory; `/tmp` is used instead, as `tempDir` already did.
 - `sys.files.Store` refuses blob names Windows reads as something else: device names
