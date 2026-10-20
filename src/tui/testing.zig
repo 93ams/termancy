@@ -434,6 +434,7 @@ const Menu = struct {
     started: bool = false,
     background: ?ansi.Color.Rgb = null,
     replies_done: bool = false,
+    cursor_reports: u32 = 0,
 
     pub const Message = u8;
 
@@ -447,6 +448,7 @@ const Menu = struct {
             .report => |report| switch (report) {
                 .background => |rgb| m.background = rgb,
                 .device_attributes => m.replies_done = true,
+                .cursor => m.cursor_reports += 1,
                 else => {},
             },
             .key => |key| {
@@ -758,7 +760,7 @@ test "Driver: paste, focus, mouse, and application messages" {
     try d.stop();
     try testing.expect(d.done());
     try testing.expect(
-        std.mem.endsWith(u8, d.outputBytes(), "\x1b[?1006l\x1b[?1002l\x1b[?1000l" ++
+        std.mem.endsWith(u8, d.outputBytes(), "\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l" ++
             "\x1b[?1004l\x1b[?2004l\x1b[?25h"),
     );
 }
@@ -839,6 +841,47 @@ test "Driver: a terminal that does not answer keeps the guess, after a moment" {
     const again = d.outputBytes().len;
     try d.program.resize(.{ .width = 4, .height = 10 });
     try testing.expect(std.mem.indexOf(u8, d.outputBytes()[again..], "\x1b[?6n") == null);
+}
+
+test "Driver: an answer about the cursor after another resize is not learned from" {
+    // At 6 wide the cursor (column 8) goes to 2 if the lines rewrap; at 3 wide a terminal
+    // that cuts them also leaves it on 2. Which width the answer is for cannot be told.
+    var d: MenuDriver = undefined;
+    try startMenu(&d, .{ .program = .{ .size = .{ .width = 20, .height = 10 } } });
+    defer d.deinit();
+    try d.program.resize(.{ .width = 6, .height = 10 });
+    try d.program.resize(.{ .width = 3, .height = 10 });
+    try d.feed("\x1b[?3;3R");
+    try testing.expect(!d.program.reflow_learned);
+    try testing.expectEqual(0, d.model().cursor_reports);
+    // Not learned: the next narrowing asks again.
+    const again = d.outputBytes().len;
+    try d.program.resize(.{ .width = 2, .height = 10 });
+    try testing.expect(std.mem.indexOf(u8, d.outputBytes()[again..], "\x1b[?6n") != null);
+}
+
+test "Driver: an answer about the cursor that comes too late is not the model's" {
+    var d: MenuDriver = undefined;
+    try startMenu(&d, .{ .program = .{ .size = .{ .width = 20, .height = 10 } } });
+    defer d.deinit();
+    try d.program.resize(.{ .width = 6, .height = 10 });
+    try d.advance(.fromMilliseconds(100));
+    try d.feed("\x1b[?5;3R");
+    try testing.expectEqual(0, d.model().cursor_reports);
+    // Only that one: the next is the model's.
+    try d.feed("\x1b[?5;3R");
+    try testing.expectEqual(1, d.model().cursor_reports);
+}
+
+test "Driver: what other threads posted is drawn in one frame" {
+    var d: MenuDriver = undefined;
+    try startMenu(&d, .{ .program = .{ .size = .{ .width = 20, .height = 10 } } });
+    defer d.deinit();
+    for ([_]u8{ 1, 2, 3 }) |extra| try d.program.post(.{ .app = extra });
+    const before = d.outputBytes().len;
+    try d.program.deliverPosted();
+    try testing.expectEqual(3, d.model().extra_lines);
+    try testing.expectEqual(1, std.mem.count(u8, d.outputBytes()[before..], "\x1b[?2026h"));
 }
 
 test "Driver: without escapes, only the final frame is written, as plain text" {

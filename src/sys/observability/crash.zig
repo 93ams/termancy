@@ -20,9 +20,9 @@
 //! The report holds the message, app, version, OS, architecture, Zig version, and time. It
 //! never holds argv or the environment, which carry paths, user names, and secrets.
 //!
-//! Hooks (`addHook`) run first, before anything is printed: the terminal module registers
-//! one that leaves raw mode and the alternate screen, so the trace lands on a usable
-//! terminal. Register and remove hooks from one thread; the handler reads them as they are.
+//! Hooks (`addHook`) run first, before anything is printed: an application with a terminal
+//! UI registers `term.Terminal.restoreOnPanic`, which leaves raw mode and the alternate
+//! screen, so the trace lands on a usable terminal. Register and remove hooks from one thread; the handler reads them as they are.
 
 const std = @import("std");
 const builtin = @import("builtin");
