@@ -182,7 +182,9 @@ const TextWriter = struct {
         if (cluster_width == 2) clearHalves(b, tw.r, tw.c + 1);
         const cell = b.at(tw.r, tw.c);
         cell.* = .{ .pen = tw.pen, .link = tw.link, .wide = cluster_width == 2 };
-        const len = @min(bytes.len, Cell.max_cluster);
+        // A cluster too long to keep is cut where a codepoint starts, never inside one.
+        var len = @min(bytes.len, Cell.max_cluster);
+        while (len < bytes.len and bytes[len] & 0xc0 == 0x80) len -= 1;
         @memcpy(cell.text[0..len], bytes[0..len]);
         cell.len = @intCast(len);
         if (cluster_width == 2) b.at(tw.r, tw.c + 1).* = .{
@@ -381,6 +383,15 @@ test "layout keeps styles and links per cell" {
         "\x1b[1;31mab\x1b[0mc\x1b]8;;http://x\x1b\\d\x1b]8;;\x1b\\",
         out.written(),
     );
+}
+
+test "a cluster longer than a cell keeps whole codepoints" {
+    var b: Buffer = .init(testing.allocator);
+    defer b.deinit();
+    // 25 bytes: a family emoji, four people joined by ZWJs.
+    try b.layout("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}x", .{ .width = 10 });
+    try testing.expect(std.unicode.utf8ValidateSlice(b.at(0, 0).bytes()));
+    try testing.expectEqualStrings("x", b.at(0, 2).bytes());
 }
 
 test "draw puts a block over what is there, cut at the edges" {

@@ -469,6 +469,20 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `term.vt`: a cursor position query (`CSI 6n`) in origin mode with the cursor restored
+  above the scroll region no longer crashes `freeze -x`, `explain`, and `record`.
+- `term.markdown` and `termancy md`: control characters in a document are dropped, so a
+  fetched README can no longer send its own escapes (OSC 52 clipboard writes, titles) to
+  the terminal.
+- `term.Buffer`: a grapheme cluster longer than a cell holds (a 25-byte family emoji) is
+  cut between codepoints, not inside one, so the rest of the row is no longer drawn a
+  column off.
+- `term.input`: a bracketed paste arriving in many reads is searched for its end marker
+  once, not again on every read (an 8 MB paste took seconds to decode).
+- Windows: `Terminal.enterRaw` puts the console modes back when a later step fails,
+  instead of leaving the console without echo.
+- `term.Pty.deinit` sends `SIGKILL` to the program's process group when it ignores
+  `SIGHUP` for a second, instead of waiting for it forever.
 - `term.live`: after the terminal narrows, the next frame starts above the rows the old
   lines rewrapped into, instead of leaving copies of them on the screen. Both it and tui
   programs count one row a line on terminals that cut lines instead, rather than moving up

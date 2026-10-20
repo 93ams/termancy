@@ -347,6 +347,9 @@ fn enterRawWindows(t: *Terminal) RawError!Saved {
         .input_code_page = try getCodePage(t.io, .Input),
         .output_code_page = try getCodePage(t.io, .Output),
     };
+    // A later step failing puts back what earlier ones changed: with no `saved` recorded,
+    // `restore` would leave the console without echo.
+    errdefer restoreSaved(t.io, t.input, t.output, saved);
     const input_mode = (saved.input_mode &
         ~@as(u32, console.processed_input | console.line_input | console.echo_input)) |
         console.virtual_terminal_input;

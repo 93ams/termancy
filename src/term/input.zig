@@ -249,6 +249,8 @@ pub const Decoder = struct {
     start: usize = 0,
     /// Inside a bracketed paste: the bytes up to the end marker are its content.
     pasting: bool = false,
+    /// Bytes of the paste, from `start`, already searched for the end marker.
+    paste_scanned: usize = 0,
 
     /// An empty decoder; buffers grow with `gpa`.
     pub fn init(gpa: Allocator) Decoder {
@@ -295,8 +297,15 @@ pub const Decoder = struct {
         while (d.start < d.buffer.items.len) {
             const rest = d.buffer.items[d.start..];
             if (d.pasting) {
-                const end = std.mem.indexOf(u8, rest, paste_end) orelse return null;
+                // From where the last search stopped, less a marker split across reads:
+                // a paste arriving in many reads is searched once, not once per read.
+                const from = d.paste_scanned -| (paste_end.len - 1);
+                const end = std.mem.indexOfPos(u8, rest, from, paste_end) orelse {
+                    d.paste_scanned = rest.len;
+                    return null;
+                };
                 d.pasting = false;
+                d.paste_scanned = 0;
                 d.start += end + paste_end.len;
                 return .{ .paste = rest[0..end] };
             }
@@ -976,6 +985,27 @@ test "Decoder: a paste arriving in pieces, and an unfinished paste survives flus
     try decoder.feed("1~");
     try testing.expectEqualStrings("abcdef", decoder.next().?.paste);
     try testing.expectEqual(null, decoder.next());
+}
+
+test "Decoder: a paste is searched once for its end, wherever the reads split it" {
+    const whole = "\x1b[200~hello world\x1b[201~x";
+    for (1..whole.len) |split| {
+        var decoder: Decoder = .init(testing.allocator);
+        defer decoder.deinit();
+        try decoder.feed(whole[0..split]);
+        if (decoder.next()) |event| {
+            try testing.expectEqualStrings("hello world", event.paste);
+            try decoder.feed(whole[split..]);
+        } else {
+            // What was searched is not searched again on the next read.
+            if (decoder.pasting) {
+                try testing.expectEqual(decoder.buffer.items.len - decoder.start, decoder.paste_scanned);
+            }
+            try decoder.feed(whole[split..]);
+            try testing.expectEqualStrings("hello world", decoder.next().?.paste);
+        }
+        try testing.expect(decoder.next().?.key.matches("x"));
+    }
 }
 
 test "Decoder: an overlong sequence is garbage, not a wait" {

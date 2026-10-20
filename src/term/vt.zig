@@ -712,7 +712,7 @@ pub const Screen = struct {
             'n' => switch (seq.param(0, 0)) {
                 5 => s.respond("\x1b[0n", .{}),
                 6 => {
-                    const row = if (s.origin) s.row - s.top else s.row;
+                    const row = if (s.origin) s.row -| s.top else s.row;
                     s.respond("\x1b[{d};{d}R", .{ row + 1, s.column + 1 });
                 },
                 else => {},
@@ -1532,6 +1532,15 @@ test "queries are answered in responses" {
             "\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\\x1b[?0u",
         answers,
     );
+}
+
+test "a cursor restored above the region in origin mode reports row 1" {
+    // Origin on, saved at row 0, then a region from row 5: the restore lands above it.
+    var s = try screenOf(10, 12, "\x1b[?6h\x1b7\x1b[5;10r\x1b8\x1b[6n");
+    defer s.deinit();
+    const answers = try s.takeResponses();
+    defer testing.allocator.free(answers);
+    try testing.expectEqualStrings("\x1b[1;1R", answers);
 }
 
 test "titles, hyperlinks, the clipboard, and cursor shapes" {

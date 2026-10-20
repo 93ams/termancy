@@ -358,7 +358,9 @@ pub fn renderAlloc(
     return out.toOwnedSlice();
 }
 
-/// Tabs to four spaces and CR LF to LF, so the parser sees one kind of line.
+/// Tabs to four spaces and CR LF to LF, so the parser sees one kind of line. Other control
+/// characters are dropped: a document's own escapes (an OSC 52 setting the clipboard, a
+/// title) must not reach the terminal.
 fn normalize(arena: Allocator, source: []const u8) Allocator.Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(arena, source.len);
@@ -368,6 +370,7 @@ fn normalize(arena: Allocator, source: []const u8) Allocator.Error![]const u8 {
             const crlf = i + 1 < source.len and source[i + 1] == '\n';
             if (!crlf) try out.append(arena, '\n');
         },
+        0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f, 0x7f => {},
         else => try out.append(arena, c),
     };
     return out.items;
@@ -1615,6 +1618,18 @@ test "emphasis, code, links, images, escapes, entities, emoji" {
     try expectPlain("\n  ref https://x.org\n", "[ref][r]\n\n[r]: https://x.org", plain_options);
     try expectPlain("\n  see https://a.b/c.\n", "see https://a.b/c.", plain_options);
     try expectPlain("\n  snake_case_word stays\n", "snake_case_word stays", plain_options);
+}
+
+test "a document's own escapes and control characters never reach the output" {
+    const out = try renderAlloc(
+        testing.allocator,
+        "x\x1b]52;c;cHdu\x07y [l](http://a\x1b]2;T\x07b)",
+        .{ .style = .ascii, .width = 40, .hyperlinks = true },
+    );
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "\x1b]52;") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "\x1b]2;") == null);
+    try testing.expect(std.mem.indexOfScalar(u8, out, 0x07) == null);
 }
 
 test "lists, nested, tasks, and quotes" {

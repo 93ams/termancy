@@ -175,9 +175,11 @@ pub fn kill(p: *Pty) void {
     }
 }
 
-/// Ends the program if it still runs, and closes the terminal.
+/// Ends the program if it still runs, and closes the terminal. A program that ignores
+/// `kill`'s `SIGHUP` for a second gets `SIGKILL`, with its whole process group.
 pub fn deinit(p: *Pty) void {
     p.kill();
+    if (comptime supported and native_os != .windows) p.escalate();
     _ = p.wait() catch {};
     switch (native_os) {
         .windows => {
@@ -190,6 +192,21 @@ pub fn deinit(p: *Pty) void {
         else => p.output.close(p.io),
     }
     p.* = undefined;
+}
+
+/// Waits up to a second for the program to end, then kills its process group (the
+/// program leads its own session, so the group's id is its pid), so `wait` cannot block
+/// forever on a program that ignores `SIGHUP`.
+fn escalate(p: *Pty) void {
+    if (p.exited != null) return;
+    for (0..20) |_| {
+        if (sys.poll(p.process.pid)) |e| {
+            p.exited = e;
+            return;
+        }
+        p.io.sleep(.fromMilliseconds(50), .awake) catch break;
+    }
+    _ = sys.kill(-p.process.pid, posix.SIG.KILL);
 }
 
 // POSIX: a new session on the pty's slave side, set up between fork and exec.
@@ -389,6 +406,14 @@ const sys = switch (native_os) {
             return decodeStatus(@bitCast(status));
         }
 
+        /// How the program ended, without waiting; null while it runs.
+        fn poll(pid: posix.pid_t) ?Exit {
+            var status: i32 = 0;
+            const rc = linux.wait4(pid, &status, linux.W.NOHANG, null);
+            if (!ok(rc) or rc == 0) return null;
+            return decodeStatus(@bitCast(status));
+        }
+
         fn kill(pid: posix.pid_t, signal: posix.SIG) c_int {
             return if (ok(linux.kill(pid, signal))) 0 else -1;
         }
@@ -476,6 +501,13 @@ const sys = switch (native_os) {
                 if (rc >= 0) break;
                 if (posix.errno(rc) != .INTR) return error.WaitFailed;
             }
+            return decodeStatus(@bitCast(status));
+        }
+
+        /// How the program ended, without waiting; null while it runs.
+        fn poll(pid: posix.pid_t) ?Exit {
+            var status: c_int = 0;
+            if (c.waitpid(pid, &status, c.W.NOHANG) <= 0) return null;
             return decodeStatus(@bitCast(status));
         }
 
@@ -822,4 +854,31 @@ test "a program that does not exist fails to spawn" {
         .argv = &.{"no-such-program"},
         .environ = &environ,
     }));
+}
+
+test "deinit kills a program that ignores SIGHUP, with its children" {
+    if (native_os != .linux and !native_os.isDarwin()) return error.SkipZigTest;
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    try environ.put("PATH", "/usr/bin:/bin");
+    var pty = spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "sh", "-c", "trap '' HUP; echo ready; while :; do sleep 1; done" },
+        .environ = &environ,
+    }) catch |err| switch (err) {
+        error.PtyUnavailable => return error.SkipZigTest,
+        else => return err,
+    };
+    defer pty.deinit();
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(testing.allocator);
+    var buffer: [256]u8 = undefined;
+    while (std.mem.indexOf(u8, output.items, "ready") == null) {
+        const n = try pty.read(&buffer);
+        if (n == 0) return error.TestUnexpectedResult;
+        try output.appendSlice(testing.allocator, buffer[0..n]);
+    }
+    pty.kill();
+    pty.escalate();
+    const exit = try pty.wait();
+    try testing.expectEqual(Exit{ .signaled = @backingInt(posix.SIG.KILL) }, exit);
 }
