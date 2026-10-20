@@ -398,6 +398,12 @@ fn verify(ctx: *cli.Context, flags: VerifyFlags) !void {
         for (allowed) |a| if (a.key.eql(key)) {
             // An allowed_signers line names its principals before the key.
             const who = if (a.comment.len > 0) a.comment else a.options;
+            // namespaces=, valid-before=, cert-authority... narrow what the key may sign;
+            // unchecked, they would let through what ssh-keygen -Y verify refuses.
+            if (hasOptions(a.options)) return ctx.fail(
+                "{s}: {s} lists {s} with options ({s}), which this does not check",
+                .{ path, signers_path, key.fingerprint(&fp), a.options },
+            );
             try ctx.out.print("good signature by {s} ({s})\n", .{ who, key.fingerprint(&fp) });
             return;
         };
@@ -411,6 +417,25 @@ fn verify(ctx: *cli.Context, flags: VerifyFlags) !void {
         "good signature by {s} (not checked against a list of signers)\n",
         .{key.fingerprint(&fp)},
     );
+}
+
+/// Whether the text before a key in an authorized_keys or allowed_signers line holds an
+/// option (`name=value`, or `cert-authority`), not only principals.
+fn hasOptions(before_key: []const u8) bool {
+    if (std.mem.indexOfScalar(u8, before_key, '=') != null) return true;
+    var words = std.mem.tokenizeAny(u8, before_key, " \t,");
+    while (words.next()) |word| {
+        if (std.ascii.eqlIgnoreCase(word, "cert-authority")) return true;
+    }
+    return false;
+}
+
+test hasOptions {
+    try std.testing.expect(!hasOptions(""));
+    try std.testing.expect(!hasOptions("alice@example.com,bob@example.com"));
+    try std.testing.expect(hasOptions("alice namespaces=\"git\""));
+    try std.testing.expect(hasOptions("alice valid-before=20300101"));
+    try std.testing.expect(hasOptions("*@example.com cert-authority"));
 }
 
 fn runRemote(ctx: *cli.Context, flags: RunFlags) !void {
@@ -525,4 +550,50 @@ fn runRemote(ctx: *cli.Context, flags: RunFlags) !void {
     };
     const status = session.exitStatus() orelse 255;
     if (status != 0) return ctx.exit(@truncate(@min(status, 255)));
+}
+
+test "verify --signers refuses a signer whose line has options it does not check" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(dir);
+    const join = struct {
+        fn f(d: []const u8, name: []const u8) ![]u8 {
+            return std.fs.path.join(testing.allocator, &.{ d, name });
+        }
+    }.f;
+    const key = try join(dir, "k");
+    defer gpa.free(key);
+    const file = try join(dir, "f");
+    defer gpa.free(file);
+    const signers = try join(dir, "signers");
+    defer gpa.free(signers);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f", .data = "data" });
+    const app: cli.App = .{ .root = &@import("../main.zig").root, .completion_command = false };
+
+    const made = try cli.testing.run(app, &.{ "ssh", "keygen", "-f", key, "-C", "a" }, .{});
+    defer made.deinit();
+    try testing.expectEqual(0, made.status);
+    const signed = try cli.testing.run(app, &.{ "ssh", "sign", "-k", key, file }, .{});
+    defer signed.deinit();
+    try testing.expectEqual(0, signed.status);
+    const public = try tmp.dir.readFileAlloc(testing.io, "k.pub", gpa, .unlimited);
+    defer gpa.free(public);
+
+    const args = [_][]const u8{ "ssh", "verify", "--signers", signers, file };
+    const plain = try std.fmt.allocPrint(gpa, "alice {s}", .{public});
+    defer gpa.free(plain);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "signers", .data = plain });
+    const good = try cli.testing.run(app, &args, .{});
+    defer good.deinit();
+    try testing.expectEqual(0, good.status);
+
+    const git_only = try std.fmt.allocPrint(gpa, "alice namespaces=\"git\" {s}", .{public});
+    defer gpa.free(git_only);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "signers", .data = git_only });
+    const refused = try cli.testing.run(app, &args, .{});
+    defer refused.deinit();
+    try testing.expectEqual(1, refused.status);
 }
