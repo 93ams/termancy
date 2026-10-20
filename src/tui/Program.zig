@@ -1414,38 +1414,52 @@ const winch = struct {
     const stop_byte = 's';
     const signals = [_]posix.SIG{ .WINCH, .TERM, .HUP };
 
-    /// The pipe's write end for the handler; -1 when no program listens.
+    /// A program listens.
+    var listening: std.atomic.Value(bool) = .init(false);
+    /// The pipe, made by the first `listen` and never closed: a handler or `wake` that
+    /// writes after `stop` reaches the pipe, never a file that took its descriptor number.
     var write_end: std.atomic.Value(i32) = .init(-1);
     var read_end: posix.fd_t = -1;
     var previous: [signals.len]posix.Sigaction = undefined;
 
-    /// The pipe's read end, with the handler installed; null when another program
-    /// listens or there is no pipe.
+    /// The pipe's read end, emptied, with the handlers installed; null when another
+    /// program listens or there is no pipe.
     fn listen() ?posix.fd_t {
         if (comptime builtin.os.tag == .windows or builtin.os.tag == .wasi) return null;
-        var fds: [2]posix.fd_t = undefined;
-        if (!pipe(&fds)) return null;
-        if (write_end.cmpxchgStrong(-1, fds[1], .acq_rel, .acquire) != null) {
-            close(fds[0]);
-            close(fds[1]);
-            return null;
+        if (listening.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return null;
+        if (read_end < 0) {
+            var fds: [2]posix.fd_t = undefined;
+            if (!pipe(&fds)) {
+                listening.store(false, .release);
+                return null;
+            }
+            read_end = fds[0];
+            write_end.store(fds[1], .release);
         }
-        read_end = fds[0];
+        drain();
         const action: posix.Sigaction = .{
             .handler = .{ .handler = handle },
             .mask = posix.sigemptyset(),
             .flags = posix.SA.RESTART,
         };
         for (signals, &previous) |sig, *old| posix.sigaction(sig, &action, old);
-        return fds[0];
+        return read_end;
     }
 
-    /// Puts the previous handlers back and closes the pipe.
+    /// Puts the previous handlers back; the pipe stays for the next listener.
     fn stop() void {
         for (signals, &previous) |sig, *old| posix.sigaction(sig, old, null);
-        close(write_end.swap(-1, .acq_rel));
-        close(read_end);
-        read_end = -1;
+        listening.store(false, .release);
+    }
+
+    /// Drops what an earlier listener left unread, such as a SIGTERM that came too late
+    /// for it, which would otherwise stop the next program at once.
+    fn drain() void {
+        var bytes: [64]u8 = undefined;
+        var fds = [1]posix.pollfd{.{ .fd = read_end, .events = posix.POLL.IN, .revents = 0 }};
+        while ((posix.poll(&fds, 0) catch 0) > 0) {
+            if ((posix.read(read_end, &bytes) catch 0) == 0) break;
+        }
     }
 
     fn handle(sig: posix.SIG) callconv(.c) void {
@@ -1474,16 +1488,12 @@ const winch = struct {
     /// Wakes the listening program, from any thread: a message was posted (`post`).
     fn wake() void {
         const fd = write_end.load(.acquire);
-        if (fd >= 0) write(fd, 'p');
+        if (fd >= 0 and listening.load(.acquire)) write(fd, 'p');
     }
 
     fn write(fd: posix.fd_t, b: u8) void {
         const byte = [1]u8{b};
         if (builtin.os.tag == .linux) _ = linux.write(fd, &byte, 1) else _ = std.c.write(fd, &byte, 1);
-    }
-
-    fn close(fd: posix.fd_t) void {
-        if (builtin.os.tag == .linux) _ = linux.close(fd) else _ = std.c.close(fd);
     }
 };
 
@@ -1565,6 +1575,20 @@ test "winch: a resize signal is a byte on the pipe; one listener at a time" {
     try std.posix.raise(.TERM);
     try std.testing.expectEqual(1, try std.posix.read(fd, &byte));
     try std.testing.expectEqual(winch.stop_byte, byte[0]);
+}
+
+test "winch: the next listener does not see a stop the last one left unread" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .wasi) return error.SkipZigTest;
+    const first = winch.listen() orelse return error.SkipZigTest;
+    try std.posix.raise(.TERM);
+    winch.stop();
+    const fd = winch.listen() orelse return error.SkipZigTest;
+    defer winch.stop();
+    try std.testing.expectEqual(first, fd); // the same pipe: never closed, never reused
+    try std.posix.raise(.WINCH);
+    var byte: [1]u8 = undefined;
+    try std.testing.expectEqual(1, try std.posix.read(fd, &byte));
+    try std.testing.expect(byte[0] != winch.stop_byte);
 }
 
 test "post wakes a program listening on the signal pipe, rather than its polling" {
