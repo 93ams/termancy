@@ -51,11 +51,12 @@ another variant replaces the lower one's (`--storage-s3-bucket` over `[storage.d
 `.merge = .append`, [below](#reading)) makes lists accumulate across sources instead.
 `explain(key)` names the layer and the file, variable, or flag behind a value.
 
-The struct's own defaults are the defaults: `decode` registers the settings type (its keys,
-secrets, variables, merges, and defaults) by itself, and `register(X)` does it earlier, for
-`get`, `keys`, `write`, or `explain` before a decode: until the type is registered they see
-only what the sources set, and after it, the struct's defaults too. A flag bound before then is kept or dropped, and keyed,
-once the type says which flags are settings. `setDefaults` is for other defaults, which can
+The struct's own defaults are the defaults. `Config.initFor(Settings, gpa)` makes a
+configuration for a settings type: it knows the type's keys, secrets, variables, merges,
+and defaults from the start, so `get`, `keys`, `write`, and `explain` show the defaults
+before any `decode`. `Config.init(gpa)` makes one without a type (for reading any file);
+`decode` registers its type then, and `register(X)` does it earlier; a flag bound before
+then is kept or dropped, and keyed, once the type says which flags are settings. `setDefaults` is for other defaults, which can
 be checked at compile time: a field the struct doesn't have, or a value of the wrong type,
 is a compile error.
 

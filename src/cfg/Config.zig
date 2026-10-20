@@ -207,13 +207,24 @@ pub const Source = struct {
 ///
 /// ```zig
 /// fn load(ctx: *cli.Context) !Settings {
-///     var config: cfg.Config = .init(ctx.arena); // freed with the arena: no deinit
+///     var config: cfg.Config = try .initFor(Settings, ctx.arena); // freed with the arena
 ///     ...
 ///     return config.decode(Settings, .{}, &diag);
 /// }
 /// ```
 pub fn init(gpa: Allocator) Config {
     return .{ .gpa = gpa, .arena = .init(gpa), .cache = .init(gpa), .file_arena = .init(gpa) };
+}
+
+/// `init` for the settings type `X` (a struct, or `cfg.settings(...)`), `register`ed from
+/// the start: `get`, `keys`, `write`, and `explain` see its defaults before any `decode`,
+/// and `bindFlags` keys flags by it. Use it whenever the settings type is known; `init`
+/// is for a configuration read without one.
+pub fn initFor(comptime X: type, gpa: Allocator) Allocator.Error!Config {
+    var config: Config = .init(gpa);
+    errdefer config.deinit();
+    try config.register(X);
+    return config;
 }
 
 /// Frees everything the configuration loaded or returned, including `decode` results.
@@ -311,8 +322,8 @@ pub fn setDefaults(config: *Config, comptime X: type, value: settings_.Of(X).Typ
 /// Tells the configuration about the settings type `X`: its keys (so `bindFlags` keeps only
 /// flags that are settings, under their keys), the struct's defaults (for `get` and
 /// `explain`; a key `setDefault` set keeps its value), its secrets, variables, merges, and
-/// choices. `decode` and `setDefaults` call it; call it first when reading before them, as
-/// `get`, `keys`, and `write` leave out the struct's defaults until it is called.
+/// choices. `initFor`, `decode`, and `setDefaults` call it; until it is called, `get`,
+/// `keys`, and `write` leave out the struct's defaults.
 pub fn register(config: *Config, comptime X: type) Allocator.Error!void {
     const a = config.arena.allocator();
     const name = @typeName(settings_.Of(X));
@@ -3438,6 +3449,13 @@ test "a check across a table's fields points at the table in its file" {
         "app.toml:3:1: admin: must be local (defaults: port = 80)",
         w.buffered(),
     );
+}
+
+test "initFor knows the settings type's defaults before any decode" {
+    var config: Config = try .initFor(AppSettings, testing.allocator);
+    defer config.deinit();
+    try testing.expectEqual(8080, (try config.get("server.port")).?.int);
+    try testing.expectEqual(Layer.default, (try config.explain("server.port")).?.layer);
 }
 
 test "decode registers the struct's defaults, and keys and filters flags bound before" {

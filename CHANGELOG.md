@@ -28,8 +28,9 @@ git history.
   follows keys a settings type renamed; `bindFlags` now leaves out every record whose key
   the configuration does not know (`setFlag` still sets any).
 - `Config.setDefaults` takes the settings type first, and is only for defaults other than
-  the struct's: `decode` registers a settings type and its own defaults by itself, and
-  `Config.register(X)` does so earlier. `setDefaults(X, value)` replaces what the struct's
+  the struct's: `Config.initFor(X, gpa)` makes a configuration that knows a settings type
+  and its defaults from the start (`decode` registers its type by itself, and
+  `Config.register(X)` does so on a configuration made with `init`). `setDefaults(X, value)` replaces what the struct's
   defaults set at those keys rather than merging with them.
 - A layer naming another variant of a choice replaces the lower layer's, instead of both
   being set ("set only one of disk and s3").

@@ -27,7 +27,7 @@ const Settings = struct {
 /// The defaults, under the file at `path` when there is one.
 fn loadSettings(ctx: *cli.Context, path: []const u8) !Settings {
     // On the run's arena: what `decode` returns lives as long as the config.
-    var config: cfg.Config = .init(ctx.arena);
+    var config: cfg.Config = try .initFor(Settings, ctx.arena);
     var diag: cfg.Diagnostic = .{};
     config.loadFile(ctx.io, .cwd(), path, null, &diag) catch |err| switch (err) {
         error.FileNotFound => {},

@@ -126,7 +126,7 @@ const show_flags = cli.flags(ShowFlags, field.Set(.{field.Spec(ShowFlags){ .fiel
 
 fn show(ctx: *cli.Context, flags: ShowFlags) !void {
     const global = try ctx.flags(Global);
-    var config: cfg.Config = .init(ctx.gpa);
+    var config: cfg.Config = try .initFor(shop, ctx.gpa);
     defer config.deinit();
     var diag: cfg.Diagnostic = .{};
     const variants: []const []const u8 = &.{ flags.env orelse "", "local" };

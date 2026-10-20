@@ -100,7 +100,7 @@ const Loaded = struct {
 /// `-j`). The `Config` is in the invocation's arena, so the settings live as long.
 fn load(ctx: *cli.Context) !Loaded {
     const global = try ctx.flags(Global);
-    var config: cfg.Config = .init(ctx.arena);
+    var config: cfg.Config = try .initFor(repo_settings, ctx.arena);
     config.useEnv(ctx.environ);
     var diag: cfg.Diagnostic = .{};
     const file = config.loadAppFile(ctx.io, "repos", .{ .path = global.config }, &diag) catch |err|
