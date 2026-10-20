@@ -236,7 +236,7 @@ fn spawnPosix(io: Io, gpa: Allocator, options: SpawnOptions) SpawnError!Pty {
         _ = sys.close(report[1]);
         return error.SpawnFailed;
     }
-    if (pid == 0) child(master, slave_path, report[1], program, argv, envp, cwd);
+    if (pid == 0) child(master, slave_path, &winsize, report[1], program, argv, envp, cwd);
     _ = sys.close(report[1]);
     var errno: [4]u8 = undefined;
     if (sys.readAll(report[0], &errno) > 0) {
@@ -252,6 +252,7 @@ fn spawnPosix(io: Io, gpa: Allocator, options: SpawnOptions) SpawnError!Pty {
 fn child(
     master: posix.fd_t,
     slave_path: [*:0]const u8,
+    winsize: *const posix.winsize,
     report: posix.fd_t,
     program: [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
@@ -262,6 +263,8 @@ fn child(
     _ = sys.setsid();
     const slave = sys.openSlave(slave_path);
     if (slave < 0) sys.fail(report);
+    // Again: macOS forgets a size set before the slave side was first opened.
+    _ = sys.ioctl(slave, tty.IOCSWINSZ, @intFromPtr(winsize));
     _ = sys.ioctl(slave, tty.IOCSCTTY, @as(usize, 0));
     for ([_]posix.fd_t{ 0, 1, 2 }) |fd| _ = sys.dup2(slave, fd);
     if (slave > 2) _ = sys.close(slave);

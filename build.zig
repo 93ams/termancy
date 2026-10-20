@@ -181,7 +181,8 @@ const examples = [_]Example{
         .name = "tasks",
         .args = &.{ "clear", "--dry-run", "--yes", "--config" },
         .path_arg = "examples/tasks/tasks.toml",
-        .env = &.{.{ "LANG", "de_DE.UTF-8" }},
+        // `LC_ALL`, which overrides any `LANG` or `LC_ALL` the runner sets.
+        .env = &.{.{ "LC_ALL", "de_DE.UTF-8" }},
         .stdout = "Würde 2 Aufgaben löschen, älter als 7 Tage\n",
     },
     .{
