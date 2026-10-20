@@ -16,12 +16,14 @@
 //! is a TOML file encrypted.
 //!
 //! What is wiped: the derived key, always, and the plaintext buffer when decryption fails.
-//! The plaintext `decrypt` returns belongs to the caller, who should `secureZero` it once
-//! done with it, as `Config.loadFile` does after parsing. What is not: the values parsed
-//! from it (they are the configuration), copies a parser made on the way (unescaped
-//! strings), and Argon2's working memory, all in the arena given; an arena does not wipe
-//! what it frees. A process that must not keep secrets in memory after use should give
-//! these an allocator that zeroes on free.
+//! Argon2's working memory, from which the key could be derived again, is not taken from
+//! the arena but mapped and unmapped for each derivation, so it is gone once the key is
+//! made. The plaintext `decrypt` returns belongs to the caller, who should `secureZero` it
+//! once done with it, as `Config.loadFile` does after parsing. What is not wiped: the
+//! values parsed from it (they are the configuration) and copies a parser made on the way
+//! (unescaped strings), both in the arena given; an arena does not wipe what it frees. A
+//! process that must not keep secrets in memory after use should give these an allocator
+//! that zeroes on free.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -99,7 +101,7 @@ pub fn encrypt(
     io.randomSecure(&nonce) catch return error.EntropyUnavailable;
     var key: [key_len]u8 = undefined;
     defer std.crypto.secureZero(u8, &key);
-    try deriveKey(arena, io, &key, passphrase, &salt, params);
+    try deriveKey(io, &key, passphrase, &salt, params);
 
     const body = try arena.alloc(u8, salt_len + nonce_len + plaintext.len + tag_len);
     @memcpy(body[0..salt_len], &salt);
@@ -158,7 +160,7 @@ pub fn decrypt(
     const tag = body[body.len - tag_len ..][0..tag_len].*;
     var key: [key_len]u8 = undefined;
     defer std.crypto.secureZero(u8, &key);
-    try deriveKey(arena, io, &key, passphrase, salt, parsed.params);
+    try deriveKey(io, &key, passphrase, salt, parsed.params);
     const plaintext = try arena.alloc(u8, ciphertext.len);
     Aead.decrypt(plaintext, ciphertext, tag, header, nonce, key) catch {
         // Unauthenticated bytes are not handed out, nor left behind.
@@ -201,7 +203,6 @@ pub fn parseHeader(header: []const u8) Error!Header {
 }
 
 fn deriveKey(
-    arena: Allocator,
     io: Io,
     key: *[key_len]u8,
     passphrase: []const u8,
@@ -213,7 +214,9 @@ fn deriveKey(
         return error.WeakParameters;
     }
     const argon_params: argon2.Params = .{ .t = params.t, .m = params.m, .p = params.p };
-    argon2.kdf(arena, key, passphrase, salt, argon_params, .argon2id, io) catch |err| {
+    // Unmapped once done: the key could be derived again from it, and an arena keeps it.
+    const scratch = std.heap.page_allocator;
+    argon2.kdf(scratch, key, passphrase, salt, argon_params, .argon2id, io) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             else => error.WeakParameters,
@@ -288,4 +291,15 @@ test "an empty passphrase is refused" {
     defer arena.deinit();
     const sealed = encrypt(arena.allocator(), testing.io, "a = 1", "", .toml, test_params);
     try testing.expectError(error.EmptyPassphrase, sealed);
+}
+
+test "Argon2's working memory is not left in the arena" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const params: Params = .{ .t = 1, .m = 1024, .p = 1 };
+    const envelope = try encrypt(arena.allocator(), testing.io, "a = 1", "p", .toml, params);
+    var opening: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer opening.deinit();
+    _ = try decrypt(opening.allocator(), testing.io, envelope, "p");
+    try testing.expect(opening.queryCapacity() < params.m * 1024);
 }
