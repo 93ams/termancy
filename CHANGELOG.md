@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A JPEG of more than `image.max_pixels` (8192 by 8192) is refused, as a PNG or GIF is: a
+  file of a few megabytes claiming 32768 by 32768 allocated gigabytes.
 - A GIF's frames larger than its screen count toward `image.max_pixels`: a few kilobytes of
   8192 by 8192 frames on a 1 by 1 screen took most of a minute to read.
 - A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new

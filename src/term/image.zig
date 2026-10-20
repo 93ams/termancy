@@ -1319,6 +1319,7 @@ const Jpeg = struct {
         var least: usize = 0;
         for (components[0..count]) |c| least += j.blocksAcross(c) * j.blocksDown(c);
         if (j.data.len * 8 < least) return error.InvalidImage;
+        if (j.width * j.height > max_pixels) return error.UnsupportedImage;
         for (components[0..count]) |*c| {
             c.blocks_w = j.mcus_x * c.h;
             c.blocks_h = j.mcus_y * c.v;
@@ -1876,4 +1877,15 @@ test "JPEG: cut short or corrupted, an error or an image, never a crash" {
             data[i] = saved;
         }
     }
+}
+
+test "JPEG: more than max_pixels is refused before it is allocated" {
+    const gpa = testing.allocator;
+    // 8192 by 8193 in grayscale, with bytes enough for a bit a block.
+    const data = try gpa.alloc(u8, 140_000);
+    defer gpa.free(data);
+    @memset(data, 0);
+    const sof = "\xff\xd8\xff\xc0\x00\x0b\x08\x20\x01\x20\x00\x01\x01\x11\x00";
+    @memcpy(data[0..sof.len], sof);
+    try testing.expectError(error.UnsupportedImage, readJpeg(gpa, data));
 }
