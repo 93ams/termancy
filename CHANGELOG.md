@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cbor.Reader.boolean` takes only `false` and `true` (`0xf4`, `0xf5`): a float whose bits
+  matched them (`f9 00 15`), or a simple value in two bytes (`f8 14`), read as a boolean.
 - A failed check on one value of a list (`<file> (value 2): ...`) is worded from the new
   `Messages.nth_value`, translated in the bundled tables, instead of an English
   `(2nd value)`. `field.ordinal`, now unused, is gone.

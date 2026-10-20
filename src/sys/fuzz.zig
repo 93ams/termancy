@@ -316,7 +316,8 @@ const transport_regressions = [_][]const u8{};
 
 // CBOR.
 
-/// Skipping an item reads no further than the input, and a map or array is skipped whole.
+/// Skipping an item reads no further than the input, a map or array is skipped whole, and a
+/// boolean is one byte.
 fn fuzzCbor(_: void, smith: *testing.Smith) anyerror!void {
     const bytes = try take(smith);
     defer testing.allocator.free(bytes);
@@ -333,7 +334,11 @@ fn fuzzCbor(_: void, smith: *testing.Smith) anyerror!void {
             .text => _ = typed.textString() catch break,
             .array => _ = typed.array() catch break,
             .map => _ = typed.map() catch break,
-            .simple => _ = typed.boolean() catch break,
+            .simple => {
+                const at = typed.pos;
+                _ = typed.boolean() catch break;
+                try testing.expectEqual(at + 1, typed.pos);
+            },
             .tag => typed.skip() catch break,
         }
     }
@@ -348,4 +353,7 @@ test "fuzz: cbor" {
 }
 
 /// Inputs that once broke the CBOR reader.
-const cbor_regressions = [_][]const u8{};
+const cbor_regressions = [_][]const u8{
+    // A half float whose bits are 21 read as `true`.
+    "\xf9\x00\x15",
+};
