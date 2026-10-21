@@ -1026,13 +1026,20 @@ fn regressions(format: Format) []const []const u8 {
         // could not find the end of a key quoted with escapes; and reading a piece at a
         // time cut before `\x9d:\x0c`, which is not a key; and it took a first piece that
         // was a block scalar for the whole document, then added keys to it; and
-        // reformatting took the `#` in a key for a comment, so declined what it wrote.
+        // reformatting took the `#` in a key for a comment, so declined what it wrote; and
+        // reading a piece at a time took a piece for a document, so a `...` ended only
+        // that piece and a byte order mark starting it was dropped, and a first piece whose
+        // root was a flow mapping or indented was followed by keys at the first column.
         .yaml => &.{
             "counts: [3, -4]\n",
             "\"\x19counts\":\n  - 3\n",
             "b:\x0c\n\x9d:\x0c",
             " |+\nxs: [a]\nlist:\n- 1\n",
             "c#\xcb\xf4ounts: [3, -4]\n",
+            "a: 1\n...\nb: 2\n",
+            "a: 1\n\xef\xbb\xbfb: 2\n",
+            "{a: 1,\nb: 2}\nc: 3\n",
+            "# c\n  a: 'x\nb: y'\nc: 1\n",
         },
         else => &.{},
     };

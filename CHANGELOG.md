@@ -477,6 +477,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `yaml.parseReader` (YAML through `Config.loadReader`) reads exactly what `yaml.parse`
+  reads: it took each piece for a document, so it accepted keys after `...` and after a
+  root that was a flow mapping or indented, and dropped a byte order mark starting a line.
 - `termancy image` (`image.decode`) reads a GIF's first frame only; it read every frame to
   keep the first, so a long animation was slow and a bad later frame refused the file.
 - A GIF cut short, or followed by junk, keeps the frames before the damage, as browsers
