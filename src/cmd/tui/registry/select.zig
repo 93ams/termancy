@@ -10,7 +10,7 @@
 //! ```
 //!
 //! Keys: everything `List` moves with (up/down, j/k, pgup/pgdown, home/end, g/G); enter
-//! chooses the highlighted item; esc cancels. Enter on an empty list does nothing. In a
+//! (or ctrl+q) chooses the highlighted item; esc cancels. Enter on an empty list does nothing. In a
 //! full-screen program with the mouse on, the wheel moves and a click chooses; `top` is
 //! the screen row the select starts on.
 
@@ -45,7 +45,7 @@ pub fn update(model: *Select, msg: tui.Msg) tui.Cmd {
     }
     if (msg == .key) {
         const key = msg.key;
-        if (key.matches("enter") and model.list.items.len > 0) {
+        if ((key.matches("enter") or key.matches("ctrl+q")) and model.list.items.len > 0) {
             model.status = .submitted;
             return .quit;
         }
@@ -101,6 +101,13 @@ test "esc cancels; an empty list cannot be chosen from" {
     try testing.expect(!d.done());
     try d.press("esc");
     try testing.expectEqual(Status.canceled, d.model().status);
+}
+
+test "ctrl+q chooses too" {
+    var d: Driver = try .init(testing.allocator, .{ .list = .{ .items = &.{ "a", "b" } } }, .{});
+    defer d.deinit();
+    try d.press("ctrl+q");
+    try testing.expectEqual(Status.submitted, d.model().status);
 }
 
 test "highlight starts on a given item" {

@@ -70,35 +70,45 @@ pub const Session = struct {
         };
     }
 
-    /// The indexes of the items chosen: one, or (with `limit` above 1) up to `limit`,
-    /// typed as numbers separated by spaces or commas. Null when the input ends.
+    /// The indexes of the items chosen, in the order typed: one, or (with `limit` above 1)
+    /// up to `limit`, typed as numbers separated by spaces or commas. An empty answer
+    /// takes `preset` when there is one. Null when the input ends.
     pub fn choose(
         session: *Session,
         header: []const u8,
         items: []const []const u8,
         limit: usize,
-    ) !?[]const usize {
+        preset: []const usize,
+    ) !?[]usize {
+        const arena = session.ctx.arena;
         const w = session.out();
         if (header.len > 0) try w.print("{s}\n", .{header});
         for (items, 1..) |item, n| try w.print("{d}) {s}\n", .{ n, item });
-        const label = if (limit == 1)
-            try std.fmt.allocPrint(session.ctx.arena, "Number (1-{d})", .{items.len})
-        else
-            try std.fmt.allocPrint(
-                session.ctx.arena,
-                "Numbers (1-{d}, up to {d})",
-                .{ items.len, limit },
-            );
+        var label: Io.Writer.Allocating = .init(arena);
+        if (limit == 1) {
+            try label.writer.print("Number (1-{d}", .{items.len});
+        } else {
+            try label.writer.print("Numbers (1-{d}, up to {d}", .{ items.len, limit });
+        }
+        for (preset, 0..) |i, n| try label.writer.print("{s}{d}", .{
+            if (n == 0) ", enter for " else " ",
+            i + 1,
+        });
+        try label.writer.writeByte(')');
         var problem: ?[]const u8 = null;
         while (true) {
-            const answer = try session.ask(label, problem, false) orelse return null;
+            const answer = try session.ask(label.written(), problem, false) orelse return null;
+            if (answer.len == 0 and preset.len > 0) return try arena.dupe(usize, preset);
             problem = "Type the numbers of items in the list.";
             var chosen: std.ArrayList(usize) = .empty;
             var words = std.mem.tokenizeAny(u8, answer, " ,");
             const valid = while (words.next()) |word| {
                 const n = std.fmt.parseInt(usize, word, 10) catch break false;
                 if (n < 1 or n > items.len) break false;
-                try chosen.append(session.ctx.arena, n - 1);
+                // A number typed twice chooses its item once.
+                if (std.mem.indexOfScalar(usize, chosen.items, n - 1) == null) {
+                    try chosen.append(arena, n - 1);
+                }
             } else chosen.items.len > 0 and chosen.items.len <= limit;
             if (valid) return chosen.items;
         }
@@ -119,6 +129,34 @@ pub const Session = struct {
             if (std.ascii.eqlIgnoreCase(answer, "n")) return false;
             problem = "Answer yes or no.";
         }
+    }
+
+    /// Lines of text, until an empty line twice in a row or the end of input (Ctrl-D at
+    /// the start of a line): easy to type and to hear, with no key but enter and Ctrl-D.
+    /// With nothing typed, `value`.
+    pub fn text(
+        session: *Session,
+        header: []const u8,
+        placeholder: []const u8,
+        value: []const u8,
+    ) ![]const u8 {
+        const w = session.out();
+        if (header.len > 0) try w.print("{s}\n", .{header});
+        if (placeholder.len > 0) try w.print("({s})\n", .{placeholder});
+        try w.writeAll("Type the text; an empty line twice, or Ctrl-D, ends it.\n");
+        if (value.len > 0) try w.print("With nothing typed, it is:\n{s}\n", .{value});
+        try w.flush();
+        var lines: std.ArrayList(u8) = .empty;
+        var empty_before = false;
+        while (try session.reader.interface.takeDelimiter('\n')) |raw| {
+            const line = std.mem.trimEnd(u8, raw, "\r");
+            if (line.len == 0 and empty_before) break;
+            empty_before = line.len == 0;
+            try lines.appendSlice(session.ctx.arena, line);
+            try lines.append(session.ctx.arena, '\n');
+        }
+        const typed = std.mem.trimEnd(u8, lines.items, "\n");
+        return if (typed.len == 0) value else typed;
     }
 
     /// A line of text, hidden when `secret`; an empty answer is `value`. Null when the

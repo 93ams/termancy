@@ -6,12 +6,17 @@
 //! pick.limit = 2;
 //! // ... run ...
 //! for (pick.list.items, 0..) |item, i| if (pick.isChosen(i)) use(item);
+//! for (pick.order.items) |i| use(pick.list.items[i]); // in the order chosen
 //! ```
 //!
-//! Keys: everything `List` moves with; space (or x) toggles the highlighted item; a
-//! chooses every item (as many as the limit allows), or clears them all when that is
-//! already done; enter submits, choosing the highlighted item when nothing else is; esc
-//! cancels. With a limit, items past it cannot be chosen until another is cleared.
+//! Keys: everything `List` moves with; space (or tab, x, ctrl+space) toggles the
+//! highlighted item; a (or ctrl+a) chooses every item (as many as the limit allows), or
+//! clears them all when that is already done, unless `toggle_all` is off; enter (or ctrl+q)
+//! submits, choosing the highlighted item when nothing else is; esc cancels. With a limit,
+//! items past it cannot be chosen until another is cleared.
+//!
+//! Each item shows a mark: `chosen_mark` when chosen, else `cursor_mark` on the highlighted
+//! one and `unchosen_mark` on the rest. A chosen item, mark and text, is in `styles.chosen`.
 
 const std = @import("std");
 const tui = @import("tui");
@@ -26,11 +31,16 @@ gpa: Allocator,
 list: List,
 /// One flag per item.
 chosen: []bool,
+/// The indexes of the chosen items, in the order they were chosen.
+order: std.ArrayList(usize),
 /// The most items that may be chosen; null for no limit.
 limit: ?usize = null,
+/// Whether a (and ctrl+a) choose every item.
+toggle_all: bool = true,
 /// A line above the items; none when empty.
 header: []const u8 = "",
 chosen_mark: []const u8 = "✓ ",
+cursor_mark: []const u8 = "• ",
 unchosen_mark: []const u8 = "• ",
 status: Status = .active,
 styles: Styles = .{},
@@ -44,13 +54,16 @@ pub const Styles = struct {
 /// A multi-select over `list`'s items, none chosen.
 pub fn init(gpa: Allocator, list: List) Allocator.Error!MultiSelect {
     const chosen = try gpa.alloc(bool, list.items.len);
+    errdefer gpa.free(chosen);
     @memset(chosen, false);
-    return .{ .gpa = gpa, .list = list, .chosen = chosen };
+    const order: std.ArrayList(usize) = try .initCapacity(gpa, list.items.len);
+    return .{ .gpa = gpa, .list = list, .chosen = chosen, .order = order };
 }
 
-/// Frees the flags.
+/// Frees the flags and the order.
 pub fn deinit(model: *MultiSelect) void {
     model.gpa.free(model.chosen);
+    model.order.deinit(model.gpa);
     model.* = undefined;
 }
 
@@ -61,13 +74,19 @@ pub fn isChosen(model: *const MultiSelect, index: usize) bool {
 
 /// How many items are chosen.
 pub fn count(model: *const MultiSelect) usize {
-    return std.mem.count(bool, model.chosen, &.{true});
+    return model.order.items.len;
 }
 
 /// Chooses or clears item `index`; choosing past the limit does nothing.
 pub fn toggle(model: *MultiSelect, index: usize) void {
-    if (!model.chosen[index] and model.full()) return;
-    model.chosen[index] = !model.chosen[index];
+    if (model.chosen[index]) {
+        model.chosen[index] = false;
+        const at = std.mem.indexOfScalar(usize, model.order.items, index).?;
+        _ = model.order.orderedRemove(at);
+    } else if (!model.full()) {
+        model.chosen[index] = true;
+        model.order.appendAssumeCapacity(index);
+    }
 }
 
 fn full(model: *const MultiSelect) bool {
@@ -78,10 +97,12 @@ fn full(model: *const MultiSelect) bool {
 /// Chooses every item in order until the limit, or clears all if no more fit.
 pub fn toggleAll(model: *MultiSelect) void {
     const before = model.count();
-    for (model.chosen) |*flag| {
-        if (!flag.* and !model.full()) flag.* = true;
+    for (model.chosen, 0..) |flag, i| {
+        if (!flag) model.toggle(i);
     }
-    if (model.count() == before) @memset(model.chosen, false);
+    if (model.count() > before) return;
+    @memset(model.chosen, false);
+    model.order.clearRetainingCapacity();
 }
 
 pub fn update(model: *MultiSelect, msg: tui.Msg) tui.Cmd {
@@ -94,12 +115,14 @@ pub fn update(model: *MultiSelect, msg: tui.Msg) tui.Cmd {
     if (msg != .key) return model.list.update(msg);
     const key = msg.key;
     const items = model.list.items.len;
-    if ((key.matches("space") or key.matches("x")) and items > 0) {
+    const toggles = key.matches("space") or key.matches("tab") or key.matches("x") or
+        key.matches("ctrl+space");
+    if (toggles and items > 0) {
         model.toggle(model.list.cursor);
-    } else if (key.matches("a") or key.matches("ctrl+a")) {
+    } else if (model.toggle_all and (key.matches("a") or key.matches("ctrl+a"))) {
         model.toggleAll();
-    } else if (key.matches("enter") and items > 0) {
-        if (model.count() == 0) model.chosen[model.list.cursor] = true;
+    } else if ((key.matches("enter") or key.matches("ctrl+q")) and items > 0) {
+        if (model.count() == 0) model.toggle(model.list.cursor);
         model.status = .submitted;
         return .quit;
     } else if (key.matches("esc")) {
@@ -115,12 +138,14 @@ fn writeItem(
     w: *std.Io.Writer,
     index: usize,
 ) std.Io.Writer.Error!void {
-    const chosen = model.chosen[index];
-    const style: tui.Style = if (chosen) model.styles.chosen else .{};
-    try style.paint(w, if (chosen) model.chosen_mark else model.unchosen_mark);
-    // The mark's reset ended the list's own style for this row; start it again.
-    if (chosen and index == model.list.cursor) try model.list.styles.cursor.writeSgr(w);
-    try w.writeAll(model.list.items[index]);
+    const item = model.list.items[index];
+    if (!model.chosen[index]) {
+        const mark = if (index == model.list.cursor) model.cursor_mark else model.unchosen_mark;
+        return w.print("{s}{s}", .{ mark, item });
+    }
+    try model.styles.chosen.writeSgr(w);
+    try w.print("{s}{s}", .{ model.chosen_mark, item });
+    if (model.styles.chosen.hasSgr()) try w.writeAll(tui.ansi.reset);
 }
 
 pub fn view(model: *const MultiSelect, w: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -206,15 +231,48 @@ test "the limit caps choosing" {
     try testing.expect(d.model().isChosen(3));
 }
 
+test "the order chosen, and the marks" {
+    var model: MultiSelect = try .init(testing.allocator, .{ .items = &letters });
+    model.cursor_mark = "> ";
+    var d: Driver = try .init(testing.allocator, model, .{});
+    defer finish(&d);
+    try d.expectFrame("> > a\n  • b\n  • c\n  • d");
+    try d.press("end");
+    try d.press("tab");
+    try d.press("home");
+    try d.press("space");
+    try d.press("down");
+    try d.press("ctrl+space");
+    try d.press("home");
+    try d.press("x"); // clears a, which space chooses again, last
+    try d.press("space");
+    try d.expectFrame("> ✓ a\n  ✓ b\n  • c\n  ✓ d");
+    try testing.expectEqualSlices(usize, &.{ 3, 1, 0 }, d.model().order.items);
+}
+
+test "toggle_all off: a is not a key" {
+    var d: Driver = undefined;
+    try startPick(&d, null);
+    defer finish(&d);
+    d.model().toggle_all = false;
+    try d.press("a");
+    try d.press("ctrl+a");
+    try testing.expectEqual(0, d.model().count());
+}
+
 test "a chooses all that fit, then clears" {
     var d: Driver = undefined;
     try startPick(&d, 3);
     defer finish(&d);
+    try d.press("end");
+    try d.press("space");
     try d.press("a");
     try testing.expectEqual(3, d.model().count());
-    try testing.expect(!d.model().isChosen(3));
+    try testing.expect(!d.model().isChosen(2));
+    try testing.expectEqualSlices(usize, &.{ 3, 0, 1 }, d.model().order.items);
     try d.press("a");
     try testing.expectEqual(0, d.model().count());
+    try testing.expectEqual(0, d.model().order.items.len);
     try d.press("esc");
     try testing.expectEqual(Status.canceled, d.model().status);
 }

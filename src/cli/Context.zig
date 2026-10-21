@@ -358,7 +358,10 @@ pub fn flags(ctx: *Context, comptime X: type) FlagsError!sets.FlagSet(X).Value {
     const T = sets.FlagSet(X).Value;
     var result: T = comptime field.initDefaults(T);
     const owner = @typeName(T);
-    inline for (comptime flagPaths(T, "")) |path| {
+    const paths = comptime flagPaths(T, "");
+    // Each path is walked at compile time, all against this function's one quota.
+    @setEvalBranchQuota(1_000 * (paths.len + 1));
+    inline for (paths) |path| {
         if (ctx.lastOccurrence(owner, path)) |last| {
             const slot = field.ptrAt(T, path, &result);
             const Field = @TypeOf(slot.*);
@@ -384,6 +387,8 @@ pub const FlagsError = values.Error || Allocator.Error;
 /// (before its variants' fields), and the fields of groups and of a choice's variants.
 fn flagPaths(comptime T: type, comptime prefix: []const u8) []const []const u8 {
     comptime {
+        // A set with many groups (gum's style flags) walks many fields.
+        @setEvalBranchQuota(100_000);
         var out: []const []const u8 = &.{};
         for (field.fieldNames(T), field.fieldTypes(T)) |name, F| {
             const C = field.Unwrap(F);

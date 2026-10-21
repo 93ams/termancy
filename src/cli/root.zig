@@ -66,6 +66,9 @@ pub const flags = sets.flags;
 pub const args = sets.args;
 /// The options `flags` takes: per field, its spelling; flag groups.
 pub const FlagOptions = sets.FlagOptions;
+/// The options of a field that is a group of flags (its prefix, separator, variables), the
+/// same type in any flags struct, so one can be shared: `.cursor = shared_group`.
+pub const GroupPlace = sets.GroupPlace;
 /// The options `args` takes: per field, its name, completion, and prompt.
 pub const ArgOptions = sets.ArgOptions;
 /// A completer for a flag's or positional's `.complete`: `.from(fn)`.

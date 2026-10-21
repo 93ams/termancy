@@ -1,71 +1,242 @@
-//! `termancy ui spin`: run a command with a spinner on the terminal while it works.
+//! `termancy ui spin`: run a command with a spinner on the terminal while it works, as gum's
+//! `spin` does.
 //!
-//! The command runs as a concurrent task; the main task animates the spinner until the
-//! task signals that it is done. The terminal stays in its normal mode, so Ctrl-C reaches
-//! the command as `SIGINT` (it is in the same process group) and termancy records it with
-//! `sys.signal`, then ends with status 130 once the command has stopped.
+//! The spinner is a `tui.Program` and the command its background work (`tui.Cmd.work`):
+//! `Job.finish` reads the command's output (on POSIX a pseudo-terminal, as gum's, and a pipe
+//! for standard error; pipes elsewhere) into the `Job`, which the view shows from while
+//! it runs, then waits for it. The command runs in a process group of its own, so Ctrl-C
+//! and `--timeout` can stop all of it (SIGINT, as a terminal's Ctrl-C does, or SIGTERM, as
+//! timeout(1) does); termancy then ends, on a pseudo-terminal after a second at most (then
+//! the group is killed), else at once.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("cli");
+const cfg = @import("cfg");
 const field = @import("field");
 const tui = @import("tui");
 const sys = @import("sys");
 const term = @import("term.zig");
+const styles = @import("styles.zig");
+const Spinner = @import("../tui/registry/spinner.zig");
+const Pty = tui.term.Pty;
 const live = tui.term.live;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+const Child = std.process.Child;
 
-pub const Frames = enum { dots, line, mini_dot, points, pulse, globe, moon, arc, bouncing_bar };
+/// gum's spinners, then termancy's older names.
+pub const Name = enum {
+    line,
+    dot,
+    minidot,
+    jump,
+    pulse,
+    points,
+    globe,
+    moon,
+    monkey,
+    meter,
+    hamburger,
+    dots,
+    mini_dot,
+    arc,
+    bouncing_bar,
+};
+
+pub const Align = enum { left, right };
 
 pub const Flags = struct {
     title: []const u8 = "Loading...",
-    spinner: Frames = .dots,
+    spinner: Name = .dot,
+    @"align": Align = .left,
     show_output: bool = false,
+    show_error: bool = false,
+    show_stdout: bool = false,
+    show_stderr: bool = false,
+    timeout: cfg.Duration = .zero,
+    padding: styles.Spacing = .{},
+    spinner_style: styles.Styles = .{},
+    title_style: styles.Styles = .{},
 };
-const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
+const flags_flags = cli.flags(Flags, field.Set(.{ field.Spec(Flags){ .fields = .{
     .title = .{ .help = "Text next to the spinner" },
-    .spinner = .{ .help = "The spinner's frames" },
-    .show_output = .{ .help = "Let the command write to the terminal as it runs" },
-} }}), .{});
+    .spinner = .{ .help = "The spinner's frames, by gum's names (dots, mini-dot, arc, and " ++
+        "bouncing-bar are termancy's own)" },
+    .@"align" = .{ .help = "Where the spinner is: left or right of the title" },
+    .show_output = .{
+        .help = "Show the command's output as it runs, and print it if the command succeeds",
+    },
+    .show_error = .{ .help = "Print the command's output if it fails" },
+    .show_stdout = .{ .help = "--show-output for standard output only" },
+    .show_stderr = .{ .help = "--show-output for standard error only" },
+    .timeout = .{
+        .help = "Stop the command after this long (0 waits): status 124, \"timed out\" on stderr",
+    },
+    .padding = .{ .help = term.help.padding },
+} }, styles.spec }), .{ .env_prefix = "TERMANCY_SPIN_", .fields = .{
+    .spinner = .{ .short = 's' },
+    .@"align" = .{ .short = 'a' },
+    .spinner_style = styles.group("spinner"),
+    .title_style = styles.group("title"),
+} });
 
 pub const command = cli.command(.{
     .name = "spin",
     .summary = "Run a command with a spinner",
     .description =
-    \\Run the command after -- and show a spinner on the terminal until it ends. Then
-    \\print what the command wrote to standard output (and standard error, to standard
-    \\error), and exit with its status. With --show-output, the command writes directly
-    \\as it runs instead.
+    \\Run the command after -- with a spinner on the terminal, and exit with its status.
     \\
-    \\Without a terminal, the command runs the same way with no spinner. Ctrl-C stops
-    \\the command and exits with status 130, printing nothing. A command that cannot be
-    \\found exits with status 127.
+    \\Where standard output is a terminal, the command's output stays hidden unless asked
+    \\for: --show-output shows both its streams under the spinner as they come and prints
+    \\them if the command succeeds; --show-stdout and --show-stderr do that for one;
+    \\--show-error prints both if it fails. Where standard output is not a terminal
+    \\(files=$(termancy ui spin -- find .)), the command's standard output goes straight
+    \\there, and its standard error follows once the spinner is gone.
+    \\The command runs on a pseudo-terminal, as in gum, so it keeps its colors; its
+    \\standard error stays apart, on a pipe.
+    \\
+    \\Ctrl-C stops the command and exits with status 130; --timeout stops it with status
+    \\124 and "timed out" on stderr. A command that cannot be found exits with status 127.
+    \\With no terminal at all, the command runs with no spinner. Style the parts with
+    \\--spinner.* and --title.*; every flag can also come from a variable:
+    \\TERMANCY_SPIN_TITLE, TERMANCY_SPIN_SPINNER_FOREGROUND.
     ,
     .flags = flags_flags,
     .args = .{ .min = 1, .max = null, .usage = "-- <command> [arg...]" },
     .examples =
     \\termancy ui spin --title "Building..." -- zig build
+    \\termancy ui spin --spinner moon --show-error -- make test
     \\files=$(termancy ui spin -- find / -name '*.zig')
     ,
     .run = run,
 });
 
-/// How the command ended and what it wrote.
-pub const Child = struct {
-    term: std.process.Child.Term,
-    stdout: []u8 = &.{},
-    stderr: []u8 = &.{},
-
-    pub fn deinit(child: Child, gpa: Allocator) void {
-        gpa.free(child.stdout);
-        gpa.free(child.stderr);
-    }
-};
-
-pub const RunError = sys.process.CaptureError || sys.process.StreamError;
-
 fn run(ctx: *cli.Context, flags: Flags) !void {
-    const child = execute(ctx, ctx.args, flags) catch |err| switch (err) {
+    const io = ctx.io;
+    var buffer: [64]u8 = undefined;
+    var terminal = tui.Terminal.open(io, &buffer) catch |err| switch (err) {
+        error.NotATerminal => return runPlain(ctx, flags),
+        error.Canceled => return error.Canceled,
+    };
+    const size = terminal.size() catch tui.Size{ .width = 80, .height = 24 };
+    terminal.close();
+    const caught = try Io.File.stdout().isTty(io);
+    var job = try startJob(ctx, caught, size);
+    defer job.deinit();
+    var model: term.Framed(Spin) = .{
+        .inner = try .init(ctx.arena, ctx.theme, &job, flags),
+        .gpa = ctx.gpa,
+        .padding = flags.padding.sides,
+    };
+    const options = term.timed(term.inline_options, flags.timeout);
+    const outcome = term.runOutcome(ctx, @TypeOf(model), &model, options) catch |err| {
+        job.stop(false);
+        return err;
+    };
+    const result = model.inner.result orelse {
+        job.stop(!outcome.timed_out);
+        if (outcome.timed_out) return term.exitTimedOut(ctx);
+        return term.exitInterrupted(ctx);
+    };
+    const status = result catch |err|
+        return ctx.fail("{s}: {s}", .{ ctx.args[0], @errorName(err) });
+    if (caught) {
+        try ctx.out.writeAll(printed(flags, status, job.output()));
+    } else {
+        try ctx.err.writeAll(job.stderr.items);
+    }
+    return exitWith(ctx, status);
+}
+
+/// Starts the command for the spinner: on POSIX, on a pseudo-terminal of `size` (its
+/// standard output where that is caught, and its controlling terminal), as gum does, so
+/// it keeps its colors and can open `/dev/tty`; elsewhere on pipes. Standard error is a
+/// pipe either way, so the two stay apart; standard output not `caught` is termancy's.
+fn startJob(ctx: *cli.Context, caught: bool, size: tui.Size) !Job {
+    const io = ctx.io;
+    // The keys come from a terminal on standard input; the command gets nothing there.
+    const keys = try Io.File.stdin().isTty(io);
+    if (comptime builtin.os.tag != .windows and Pty.supported) pty: {
+        if (try unrunnable(ctx.arena, io, ctx.environ, ctx.args[0])) |status| {
+            return spawnFailed(ctx, if (status == 127) error.FileNotFound else error.AccessDenied);
+        }
+        const stdin: ?Io.File = if (!keys)
+            Io.File.stdin()
+        else
+            Io.Dir.cwd().openFile(io, "/dev/null", .{}) catch null;
+        defer if (keys) if (stdin) |file| file.close(io);
+        return Job.spawnPty(ctx.gpa, io, .{
+            .argv = ctx.args,
+            .environ = ctx.environ,
+            .size = size,
+            .stdin = stdin,
+            .stdout = if (caught) null else Io.File.stdout(),
+            .pipe_stderr = true,
+        }) catch |err| switch (err) {
+            error.PtyUnavailable => break :pty,
+            error.SpawnFailed => return spawnFailed(ctx, error.AccessDenied),
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+    return Job.spawn(ctx.gpa, io, ctx.args, .{
+        .stdin = if (keys) .ignore else .inherit,
+        .stdout = if (caught) .pipe else .inherit,
+        .stderr = .pipe,
+    }) catch |err| return spawnFailed(ctx, err);
+}
+
+/// Why a shell could not run `name`, before trying: 127 when it is missing, 126 when it
+/// names a file that is not executable; null when it can be found.
+fn unrunnable(
+    arena: Allocator,
+    io: Io,
+    environ: *const std.process.Environ.Map,
+    name: []const u8,
+) !?u8 {
+    if (try sys.process.which(arena, io, environ, sys.process.native, name) != null) return null;
+    if (std.mem.indexOfScalar(u8, name, '/') == null) return 127;
+    Io.Dir.cwd().access(io, name, .{}) catch return 127;
+    return 126;
+}
+
+/// With no terminal: the command runs on termancy's own streams, `--timeout` still
+/// stopping it.
+fn runPlain(ctx: *cli.Context, flags: Flags) !void {
+    const io = ctx.io;
+    var job = Job.spawn(ctx.gpa, io, ctx.args, .{}) catch |err| return spawnFailed(ctx, err);
+    defer job.deinit();
+    const child = &job.process.child;
+    if (flags.timeout.ns == 0) return exitWith(ctx, sys.process.exitStatus(try child.wait(io)));
+    var done: Io.Event = .unset;
+    var task = io.concurrent(waitAndSet, .{ &job, &done }) catch
+        return exitWith(ctx, sys.process.exitStatus(try child.wait(io)));
+    const timeout: Io.Timeout = .{ .duration = .{ .raw = flags.timeout.toIo(), .clock = .awake } };
+    done.waitTimeout(io, timeout) catch |err| switch (err) {
+        error.Timeout => {
+            // It may have ended meanwhile.
+            if (task.cancel(io)) |ended| {
+                return exitWith(ctx, sys.process.exitStatus(ended));
+            } else |_| {}
+            job.stop(false);
+            return term.exitTimedOut(ctx);
+        },
+        error.Canceled => return error.Canceled,
+    };
+    return exitWith(ctx, sys.process.exitStatus(try task.await(io)));
+}
+
+fn waitAndSet(job: *Job, done: *Io.Event) Child.WaitError!Child.Term {
+    defer done.set(job.io);
+    return job.process.child.wait(job.io);
+}
+
+const SpawnFailure = cli.Context.Exit || std.process.SpawnError || Io.Writer.Error;
+
+/// Reports a command that could not start: 127 when it is not found, 126 when it cannot
+/// run, as sh(1) does.
+fn spawnFailed(ctx: *cli.Context, err: std.process.SpawnError) SpawnFailure {
+    switch (err) {
         error.FileNotFound => {
             try ctx.err.print("{s}: {s}: command not found\n", .{ ctx.app_name, ctx.args[0] });
             return ctx.exit(127);
@@ -75,122 +246,443 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
             return ctx.exit(126);
         },
         else => |e| return e,
-    };
-    defer child.deinit(ctx.gpa);
-    if (sys.signal.interrupted()) return term.exitInterrupted(ctx);
-    try ctx.out.writeAll(child.stdout);
-    try ctx.err.writeAll(child.stderr);
-    switch (sys.process.exitStatus(child.term)) {
+    }
+}
+
+/// Ends with the command's `status`.
+fn exitWith(ctx: *cli.Context, status: u8) !void {
+    switch (status) {
         0 => {},
         1 => return error.CommandFailed,
         2 => return error.UsageFailed,
-        else => |status| return ctx.exit(status),
+        else => return ctx.exit(status),
     }
 }
 
-/// Runs `argv`, with a spinner when there is a terminal that can show one.
-fn execute(ctx: *cli.Context, argv: []const []const u8, flags: Flags) !Child {
-    var buffer: [1024]u8 = undefined;
-    var terminal = tui.Terminal.open(ctx.io, &buffer) catch |err| switch (err) {
-        error.NotATerminal => return runChild(ctx.gpa, ctx.io, argv, flags.show_output),
-        error.Canceled => return error.Canceled,
-    };
-    defer terminal.close();
-    const capability = terminal.capabilityIn(ctx.environ);
-    if (!capability.escapes) return runChild(ctx.gpa, ctx.io, argv, flags.show_output);
+/// What the command wrote: each stream, and both in the order they came.
+pub const Output = struct {
+    stdout: []const u8 = "",
+    stderr: []const u8 = "",
+    both: []const u8 = "",
+};
 
-    sys.signal.install();
-    defer sys.signal.uninstall();
-    var done: Io.Event = .unset;
-    var task = ctx.io.concurrent(runAndSignal, .{
-        ctx.gpa, ctx.io, argv, flags.show_output, &done,
-    }) catch return runChild(ctx.gpa, ctx.io, argv, flags.show_output);
-    spin(ctx, &terminal, capability, &done, flags) catch |err| {
-        if (task.cancel(ctx.io)) |child| child.deinit(ctx.gpa) else |_| {}
-        return err;
-    };
-    return task.await(ctx.io);
+/// What gum prints once the command has ended, where standard output is a terminal: the
+/// streams the flags show when it succeeded, both with `--show-error` when it failed, and
+/// otherwise nothing.
+pub fn printed(flags: Flags, status: u8, output: Output) []const u8 {
+    if (status != 0) return if (flags.show_error) output.both else "";
+    if (flags.show_output or (flags.show_stdout and flags.show_stderr)) return output.both;
+    if (flags.show_stdout) return output.stdout;
+    if (flags.show_stderr) return output.stderr;
+    return "";
 }
 
-/// Animates the spinner on `terminal` until `done` is set, then erases it.
-fn spin(
-    ctx: *cli.Context,
-    terminal: *tui.Terminal,
-    capability: tui.capability.Capability,
-    done: *Io.Event,
-    flags: Flags,
-) !void {
-    const io = ctx.io;
-    var model: live.Spinner = .{ .title = flags.title, .frames = framesOf(flags.spinner) };
-    const items = [_]live.Item{.{ .spinner = &model }};
-    var display: live.Live = .init(terminal.writer(), capability, &items);
-    terminal.recordModes(.{ .hidden_cursor = true });
-    defer terminal.recordModes(.{});
-    defer display.clear() catch {};
-    while (!done.isSet()) {
-        try display.draw(.now(io, .awake));
-        const timeout: Io.Timeout = .{ .duration = .{ .raw = model.interval, .clock = .awake } };
-        done.waitTimeout(io, timeout) catch |err| switch (err) {
-            error.Timeout => {},
+/// The command, on pipes or a pseudo-terminal, and what it has written to them.
+pub const Job = struct {
+    process: union(enum) { child: Child, pty: Pty },
+    io: Io,
+    gpa: Allocator,
+    /// Held while the output grows, and while the view reads it.
+    mutex: Io.Mutex = .init,
+    stdout: std.ArrayList(u8) = .empty,
+    stderr: std.ArrayList(u8) = .empty,
+    /// Both, in the order they came.
+    both: std.ArrayList(u8) = .empty,
+
+    pub const Error = Allocator.Error || Io.Batch.AwaitConcurrentError || Child.WaitError ||
+        error{WaitFailed};
+
+    /// Where the command's standard streams go: termancy's own by default.
+    pub const Streams = struct {
+        stdin: std.process.SpawnOptions.StdIo = .inherit,
+        stdout: std.process.SpawnOptions.StdIo = .inherit,
+        stderr: std.process.SpawnOptions.StdIo = .inherit,
+    };
+
+    /// Starts `argv` on `streams`, in a process group of its own.
+    pub fn spawn(
+        gpa: Allocator,
+        io: Io,
+        argv: []const []const u8,
+        streams: Streams,
+    ) std.process.SpawnError!Job {
+        const child = try std.process.spawn(io, .{
+            .argv = argv,
+            .stdin = streams.stdin,
+            .stdout = streams.stdout,
+            .stderr = streams.stderr,
+            .pgid = if (builtin.os.tag == .windows) null else 0,
+        });
+        return .{ .process = .{ .child = child }, .io = io, .gpa = gpa };
+    }
+
+    /// Starts a command on a pseudo-terminal, in a session (and process group) of its own.
+    pub fn spawnPty(gpa: Allocator, io: Io, options: Pty.SpawnOptions) Pty.SpawnError!Job {
+        const pty: Pty = try .spawn(io, gpa, options);
+        return .{ .process = .{ .pty = pty }, .io = io, .gpa = gpa };
+    }
+
+    pub fn deinit(job: *Job) void {
+        if (job.process == .pty) job.process.pty.deinit();
+        job.stdout.deinit(job.gpa);
+        job.stderr.deinit(job.gpa);
+        job.both.deinit(job.gpa);
+    }
+
+    /// Reads the command's output to its end, then waits for it: its exit status, as a
+    /// shell reports it. Canceled, it leaves the command running, for `stop`.
+    pub fn finish(job: *Job) Error!u8 {
+        switch (job.process) {
+            .child => |*child| {
+                const sinks = .{ &job.stdout, &job.stderr };
+                if (child.stdout) |out| {
+                    try job.read(2, .{ out, child.stderr.? }, sinks, false);
+                } else if (child.stderr) |err| {
+                    try job.read(1, .{err}, .{&job.stderr}, false);
+                }
+                return sys.process.exitStatus(try child.wait(job.io));
+            },
+            .pty => |*pty| {
+                try job.read(2, .{ pty.output, pty.errors.? }, .{ &job.stdout, &job.stderr }, true);
+                return (try pty.wait()).status();
+            },
+        }
+    }
+
+    /// Reads `files` into `sinks` (and `both`) to their end; a terminal's `\r\n` (`crlf`,
+    /// the first file) comes as `\n`.
+    fn read(
+        job: *Job,
+        comptime n: usize,
+        files: [n]Io.File,
+        sinks: [n]*std.ArrayList(u8),
+        crlf: bool,
+    ) Error!void {
+        var buffer: Io.File.MultiReader.Buffer(n) = undefined;
+        var reader: Io.File.MultiReader = undefined;
+        reader.init(job.gpa, job.io, buffer.toStreams(), &files);
+        defer reader.deinit();
+        while (reader.fill(256, .none)) |_| {
+            job.mutex.lockUncancelable(job.io);
+            defer job.mutex.unlock(job.io);
+            for (sinks, 0..) |sink, i| {
+                const r = reader.reader(i);
+                var rest = r.buffered();
+                while (rest.len > 0) {
+                    const cut = if (crlf and i == 0) std.mem.indexOf(u8, rest, "\r\n") else null;
+                    const end = cut orelse rest.len;
+                    try sink.appendSlice(job.gpa, rest[0..end]);
+                    try job.both.appendSlice(job.gpa, rest[0..end]);
+                    rest = rest[@min(end + 1, rest.len)..];
+                }
+                r.tossBuffered();
+            }
+        } else |err| switch (err) {
+            error.EndOfStream => {},
+            else => |e| return e,
+        }
+        // A terminal reports its other side closing as an I/O error; any other read error
+        // only cuts the output short.
+        reader.checkAnyError() catch |err| switch (err) {
             error.Canceled => return error.Canceled,
+            else => {},
         };
     }
+
+    /// What the command wrote so far. Only once it has ended, or under `mutex`.
+    pub fn output(job: *const Job) Output {
+        return .{ .stdout = job.stdout.items, .stderr = job.stderr.items, .both = job.both.items };
+    }
+
+    /// Stops the command and what it started: its process group gets SIGINT (`interrupt`,
+    /// as from a terminal's Ctrl-C) or SIGTERM (as from timeout(1)). Does not wait for it;
+    /// `deinit` waits a second for a command on a pseudo-terminal, then kills the group.
+    pub fn stop(job: *Job, interrupt: bool) void {
+        if (comptime builtin.os.tag == .windows) return job.process.child.kill(job.io);
+        const pid = switch (job.process) {
+            .child => |child| child.id orelse return,
+            .pty => |pty| pty.process.pid,
+        };
+        std.posix.kill(-pid, if (interrupt) .INT else .TERM) catch {};
+    }
+
+    /// Tells a command on a pseudo-terminal that the terminal changed size.
+    fn resize(job: *Job, size: tui.Size) void {
+        if (job.process == .pty) job.process.pty.resize(size) catch {};
+    }
+};
+
+/// The spinner and its title, over what the command writes as it runs.
+pub const Spin = struct {
+    spinner: Spinner,
+    /// `--title`, laid out in its style.
+    title: []const u8,
+    @"align": Align = .left,
+    job: *Job,
+    /// The streams shown under the spinner while the command runs.
+    show_stdout: bool = false,
+    show_stderr: bool = false,
+    /// The terminal's size, and the rows the view takes besides the output, so the
+    /// spinner stays on screen.
+    rows: usize = 24,
+    columns: usize = 80,
+    reserved: usize = 3,
+    /// How the command ended; null while it runs.
+    result: ?Message = null,
+
+    pub const Message = Job.Error!u8;
+
+    pub fn init(
+        arena: Allocator,
+        theme: *const cli.Theme,
+        job: *Job,
+        flags: Flags,
+    ) Allocator.Error!Spin {
+        var spinner = spinnerOf(flags.spinner);
+        spinner.styles = .{ .spinner = flags.spinner_style.over(theme.accent), .title = .{} };
+        return .{
+            .spinner = spinner,
+            .title = try styles.render(arena, flags.title_style.over(.{}), flags.title),
+            .@"align" = flags.@"align",
+            .job = job,
+            .show_stdout = flags.show_output or flags.show_stdout,
+            .show_stderr = flags.show_output or flags.show_stderr,
+            .reserved = 3 + flags.padding.sides.top + flags.padding.sides.bottom,
+        };
+    }
+
+    pub fn start(spin: *Spin) tui.Cmd {
+        return .batch(&.{ spin.spinner.start(), .work(0, @intFromPtr(spin.job)) });
+    }
+
+    pub fn work(_: Io, _: Allocator, _: u32, arg: u64) Message {
+        const job: *Job = @ptrFromInt(@as(usize, @intCast(arg)));
+        return job.finish();
+    }
+
+    pub fn update(spin: *Spin, msg: tui.Message(Message)) tui.Cmd {
+        switch (msg) {
+            .app => |result| {
+                spin.result = result;
+                return .quit;
+            },
+            .resize => |size| {
+                spin.rows = size.height;
+                spin.columns = size.width;
+                spin.job.resize(size);
+            },
+            else => {},
+        }
+        return spin.spinner.update(msg.base().?);
+    }
+
+    pub fn view(spin: *const Spin, w: *Io.Writer) Io.Writer.Error!void {
+        const gap: []const u8 = if (spin.title.len > 0) " " else "";
+        if (spin.@"align" == .right) try w.print("{s}{s}", .{ spin.title, gap });
+        try spin.spinner.view(w);
+        if (spin.@"align" == .left) try w.print("{s}{s}", .{ gap, spin.title });
+        if (!spin.show_stdout and !spin.show_stderr) return;
+        const job = spin.job;
+        job.mutex.lockUncancelable(job.io);
+        defer job.mutex.unlock(job.io);
+        const output = job.output();
+        const text = if (spin.show_stdout and spin.show_stderr)
+            output.both
+        else if (spin.show_stdout)
+            output.stdout
+        else
+            output.stderr;
+        if (text.len == 0) return;
+        try w.writeAll("\n\n");
+        try writeTail(w, text, @max(spin.rows -| spin.reserved, 1), spin.columns);
+    }
+};
+
+/// The end of `text` that fits `rows` rows of `columns` columns, long lines wrapping: the
+/// last whole lines, or when not even the last fits, its start, cut to fit.
+pub fn writeTail(
+    w: *Io.Writer,
+    text: []const u8,
+    rows: usize,
+    columns: usize,
+) Io.Writer.Error!void {
+    const body = std.mem.trimEnd(u8, text, "\n");
+    var start = body.len;
+    var end = body.len;
+    var used: usize = 0;
+    while (true) {
+        const begin = if (std.mem.lastIndexOfScalar(u8, body[0..end], '\n')) |i| i + 1 else 0;
+        const wide = tui.width.of(body[begin..end]);
+        const height = @max(std.math.divCeil(usize, wide, @max(columns, 1)) catch 1, 1);
+        if (used + height > rows) break;
+        used += height;
+        start = begin;
+        if (begin == 0) break;
+        end = begin - 1;
+    }
+    if (start < body.len or body.len == 0) return w.writeAll(body[start..]);
+    const last = if (std.mem.lastIndexOfScalar(u8, body, '\n')) |i| i + 1 else 0;
+    try tui.width.truncate(w, body[last..], rows * columns, "…");
 }
 
-fn runAndSignal(
-    gpa: Allocator,
-    io: Io,
-    argv: []const []const u8,
-    show_output: bool,
-    done: *Io.Event,
-) RunError!Child {
-    defer done.set(io);
-    return runChild(gpa, io, argv, show_output);
-}
+/// bubbles' dot frames, which end in a space: gum draws two between them and the title.
+const dot = blk: {
+    var frames: [live.frames.dot.len][]const u8 = undefined;
+    for (&frames, live.frames.dot) |*frame, glyph| frame.* = glyph ++ " ";
+    const final = frames;
+    break :blk final;
+};
 
-/// Runs `argv` to the end: its output captured, or (`show_output`) written directly.
-pub fn runChild(
-    gpa: Allocator,
-    io: Io,
-    argv: []const []const u8,
-    show_output: bool,
-) RunError!Child {
-    if (show_output) return .{ .term = try sys.process.stream(io, argv, .{}) };
-    const output = try sys.process.capture(gpa, io, argv, .{});
-    return .{ .term = output.term, .stdout = output.stdout, .stderr = output.stderr };
-}
-
-/// The frames `--spinner` names.
-pub fn framesOf(name: Frames) []const []const u8 {
-    return switch (name) {
-        inline else => |tag| &@field(live.frames, @tagName(tag)),
+/// The spinner `name` names, with its frames and pace: gum's, for gum's names.
+pub fn spinnerOf(name: Name) Spinner {
+    const f = live.frames;
+    const frames: []const []const u8, const ms: i64 = switch (name) {
+        .line => .{ &f.line, 100 },
+        .dot => .{ &dot, 100 },
+        .minidot, .dots => .{ &f.dots, 83 },
+        .jump => .{ &f.jump, 100 },
+        .pulse => .{ &f.pulse, 125 },
+        .points => .{ &f.points, 143 },
+        .globe => .{ &f.globe, 250 },
+        .moon => .{ &f.moon, 125 },
+        .monkey => .{ &f.monkey, 333 },
+        .meter => .{ &f.meter, 143 },
+        .hamburger => .{ &f.hamburger, 333 },
+        .mini_dot => .{ &f.mini_dot, 80 },
+        .arc => .{ &f.arc, 80 },
+        .bouncing_bar => .{ &f.bouncing_bar, 80 },
     };
+    return .{ .frames = frames, .interval = .fromMilliseconds(ms) };
 }
 
 const testing = std.testing;
-const builtin = @import("builtin");
 
-test framesOf {
-    try testing.expectEqualStrings("-", framesOf(.line)[0]);
-    try testing.expectEqual(10, framesOf(.dots).len);
+test spinnerOf {
+    try testing.expectEqualStrings("⣾ ", spinnerOf(.dot).frames[0]);
+    try testing.expectEqualStrings("🙈", spinnerOf(.monkey).frames[0]);
+    try testing.expectEqual(333, spinnerOf(.hamburger).interval.toMilliseconds());
+    // termancy's older names: dots is gum's minidot.
+    try testing.expectEqual(spinnerOf(.minidot).frames.ptr, spinnerOf(.dots).frames.ptr);
+    try testing.expectEqualStrings("[    ]", spinnerOf(.bouncing_bar).frames[0]);
 }
 
-test "runChild captures output and status" {
+test "printed: gum's rules, where standard output is a terminal" {
+    const output: Output = .{ .stdout = "out\n", .stderr = "err\n", .both = "out\nerr\n" };
+    try testing.expectEqualStrings("", printed(.{}, 0, output));
+    try testing.expectEqualStrings("out\nerr\n", printed(.{ .show_output = true }, 0, output));
+    try testing.expectEqualStrings("out\n", printed(.{ .show_stdout = true }, 0, output));
+    try testing.expectEqualStrings("err\n", printed(.{ .show_stderr = true }, 0, output));
+    const both: Flags = .{ .show_stdout = true, .show_stderr = true };
+    try testing.expectEqualStrings("out\nerr\n", printed(both, 0, output));
+    // --show-error: only on failure, then everything.
+    try testing.expectEqualStrings("", printed(.{ .show_error = true }, 0, output));
+    try testing.expectEqualStrings("out\nerr\n", printed(.{ .show_error = true }, 3, output));
+    // Failed without --show-error: nothing, whatever the other flags say.
+    try testing.expectEqualStrings("", printed(.{ .show_output = true }, 1, output));
+}
+
+fn expectTail(expected: []const u8, text: []const u8, rows: usize, columns: usize) !void {
+    var buffer: [64]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    try writeTail(&w, text, rows, columns);
+    try testing.expectEqualStrings(expected, w.buffered());
+}
+
+test writeTail {
+    try expectTail("c\nd", "a\nb\nc\nd\n", 2, 80);
+    try expectTail("a\nb", "a\nb", 5, 80);
+    try expectTail("", "", 3, 80);
+    // A line of seven columns takes two rows of four.
+    try expectTail("1234567", "a\n1234567\n", 2, 4);
+    try expectTail("1234…", "1234567", 1, 5);
+}
+
+const piped: Job.Streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .pipe };
+
+fn testJob(argv: []const []const u8) !Job {
+    return Job.spawn(testing.allocator, testing.io, argv, piped);
+}
+
+test "Job: the streams caught, and the status" {
     const windows = builtin.os.tag == .windows;
     const argv: []const []const u8 = if (windows)
         &.{ "cmd.exe", "/c", "echo out& 1>&2 echo err& exit /b 3" }
     else
         &.{ "sh", "-c", "echo out; echo err >&2; exit 3" };
-    const child = try runChild(testing.allocator, testing.io, argv, false);
-    defer child.deinit(testing.allocator);
+    var job = try testJob(argv);
+    defer job.deinit();
+    const ended = try job.finish();
     const eol = if (windows) "\r\n" else "\n";
-    try testing.expectEqualStrings("out" ++ eol, child.stdout);
-    try testing.expectEqualStrings("err" ++ eol, child.stderr);
-    try testing.expectEqual(3, sys.process.exitStatus(child.term));
+    try testing.expectEqual(3, ended);
+    try testing.expectEqualStrings("out" ++ eol, job.stdout.items);
+    try testing.expectEqualStrings("err" ++ eol, job.stderr.items);
+    try testing.expectEqual(2 * ("out" ++ eol).len, job.both.items.len);
 }
 
-test "runChild: a missing command" {
-    const argv: []const []const u8 = &.{"termancy-test-no-such-command"};
-    const result = runChild(testing.allocator, testing.io, argv, false);
-    try testing.expectError(error.FileNotFound, result);
+test "unrunnable: 127 for a missing command, 126 for a file that does not run" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    try environ.put("PATH", "/usr/bin:/bin");
+    const a = arena.allocator();
+    try testing.expectEqual(null, try unrunnable(a, testing.io, &environ, "sh"));
+    try testing.expectEqual(127, try unrunnable(a, testing.io, &environ, "termancy-no-such"));
+    try testing.expectEqual(127, try unrunnable(a, testing.io, &environ, "/termancy/no/such"));
+    try testing.expectEqual(126, try unrunnable(a, testing.io, &environ, "/etc/passwd"));
+}
+
+test "Job: a missing command" {
+    try testing.expectError(error.FileNotFound, testJob(&.{"termancy-test-no-such-command"}));
+}
+
+test "Job on a pseudo-terminal: standard output a terminal, standard error apart" {
+    if (builtin.os.tag == .windows or !Pty.supported) return error.SkipZigTest;
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    try environ.put("PATH", "/usr/bin:/bin");
+    const script = "test -t 1 && echo tty; test -t 2 || echo pipe >&2; exit 4";
+    var job = try Job.spawnPty(testing.allocator, testing.io, .{
+        .argv = &.{ "sh", "-c", script },
+        .environ = &environ,
+        .pipe_stderr = true,
+    });
+    defer job.deinit();
+    try testing.expectEqual(4, try job.finish());
+    try testing.expectEqualStrings("tty\n", job.stdout.items);
+    try testing.expectEqualStrings("pipe\n", job.stderr.items);
+}
+
+test "Job.stop ends the command's whole process group" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var job = try testJob(&.{ "sh", "-c", "sleep 30; echo late" });
+    defer job.deinit();
+    job.stop(false);
+    // The pipes close only once sh and its sleep have both gone.
+    const ended = try job.finish();
+    try testing.expectEqual(128 + 15, ended);
+    try testing.expectEqualStrings("", job.stdout.items);
+}
+
+test "the spinner, the title on either side, and the output under it" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var job = try testJob(&.{ "sh", "-c", "echo one; echo two" });
+    defer job.deinit();
+    const flags: Flags = .{ .spinner = .line, .title = "Wait", .show_stdout = true };
+    const spin: Spin = try .init(arena.allocator(), &cli.Theme.default, &job, flags);
+    var d: tui.testing.Driver(Spin) = try .init(testing.allocator, spin, .{});
+    defer d.deinit();
+    // The driver runs the work at once: the command has ended.
+    try testing.expect(d.done());
+    try testing.expectEqual(0, try d.model().result.?);
+    try d.expectFrame("- Wait\n\none\ntwo");
+    d.model().@"align" = .right;
+    d.model().rows = 4; // room for one line of output
+    var out: Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try d.model().view(&out.writer);
+    try testing.expectEqualStrings("Wait \x1b[35m-\x1b[0m\n\ntwo", out.written());
 }

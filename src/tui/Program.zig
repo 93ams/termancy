@@ -57,6 +57,7 @@
 //!
 //! Ctrl-C quits without reaching the model and sets `interrupted`, which a command maps to
 //! exit status 130; set `Options.interrupt = false` to receive it as a key instead.
+//! `Options.timeout` ends the program the same way once it passes, setting `timed_out`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -286,6 +287,10 @@ pub const Options = struct {
     /// At most this many frames a second (60 is Bubble Tea's); changes in between are
     /// drawn together once the time comes. 0 draws every change at once.
     max_fps: u16 = 0,
+    /// End the program this long after `start`, without the model, as on Ctrl-C but with
+    /// `Outcome.timed_out` set (gum's `--timeout`). A deadline like any other, so it needs
+    /// no signals.
+    timeout: ?Io.Duration = null,
 };
 
 /// Where the terminal's cursor shows (`Model.cursor`): `x` columns into line `y` of the
@@ -329,6 +334,8 @@ pub const Queries = struct {
 pub const Outcome = struct {
     /// Ended by Ctrl-C; by convention the command exits with status 130.
     interrupted: bool,
+    /// Ended by `Options.timeout`; gum exits with status 124.
+    timed_out: bool = false,
 };
 
 /// How often `run` checks the terminal size while idle, which a resize signal (`winch`)
@@ -369,6 +376,9 @@ pub fn Program(comptime Model: type) type {
         redraw: bool = true,
         state: State = .ready,
         interrupted: bool = false,
+        /// Ended by `Options.timeout`, which passes at `timeout_at`.
+        timed_out: bool = false,
+        timeout_at: ?Io.Timestamp = null,
         /// The terminal is to be lent out (see `release`); events wait in the decoder.
         pending: ?Release = null,
         /// The frame is off screen and the modes are off, until `reacquire`.
@@ -503,6 +513,7 @@ pub fn Program(comptime Model: type) type {
         pub fn start(p: *Self) Error!void {
             assert(p.state == .ready);
             p.state = .running;
+            if (p.options.timeout) |timeout| p.timeout_at = p.now.addDuration(timeout);
             if (p.options.capability.escapes) {
                 try p.writeModesOn();
                 try p.options.queries.write(p.out);
@@ -625,6 +636,10 @@ pub fn Program(comptime Model: type) type {
             if (p.state != .running) return;
             assert(now.nanoseconds >= p.now.nanoseconds);
             p.now = now;
+            if (p.timeout_at) |at| if (at.nanoseconds <= now.nanoseconds) {
+                p.timed_out = true;
+                return p.stop();
+            };
             // No answer in time: the guess stands, and a terminal that does not answer is
             // not asked again.
             if (p.reflow_probe) |probe| {
@@ -709,10 +724,13 @@ pub fn Program(comptime Model: type) type {
             try p.settle();
         }
 
-        /// When `advance` next has work: the earliest timer, the escape timeout, or a frame
-        /// `max_fps` held back.
+        /// When `advance` next has work: the earliest timer, the escape timeout, a frame
+        /// `max_fps` held back, or `Options.timeout`.
         pub fn nextDeadline(p: *const Self) ?Io.Timestamp {
             var best = p.escapeDeadline();
+            if (p.timeout_at) |at| {
+                if (best == null or at.nanoseconds < best.?.nanoseconds) best = at;
+            }
             if (p.reflow_probe) |probe| {
                 if (best == null or probe.deadline.nanoseconds < best.?.nanoseconds) best = probe.deadline;
             }
@@ -1242,7 +1260,7 @@ pub fn Program(comptime Model: type) type {
                 try p.advance(p.now);
             }
             terminal.recordModes(.{});
-            return .{ .interrupted = p.interrupted };
+            return .{ .interrupted = p.interrupted, .timed_out = p.timed_out };
         }
 
         /// Runs the program over a remote terminal until it quits or the other end goes:
@@ -1289,7 +1307,7 @@ pub fn Program(comptime Model: type) type {
                 }
                 try p.advance(p.now);
             }
-            return .{ .interrupted = p.interrupted };
+            return .{ .interrupted = p.interrupted, .timed_out = p.timed_out };
         }
 
         /// Lends the terminal out for `pending` and takes it back.

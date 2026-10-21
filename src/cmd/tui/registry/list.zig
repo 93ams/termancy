@@ -3,7 +3,7 @@
 //!
 //! ```zig
 //! var list: List = .{ .items = &.{ "apple", "banana", "cherry" }, .height = 5 };
-//! _ = list.update(msg); // up/down, j/k, pgup/pgdown, home/end, g/G
+//! _ = list.update(msg); // up/down, j/k, pgup/pgdown (left/right, h/l), home/end, g/G
 //! const choice = list.current(); // "apple"
 //! ```
 //!
@@ -29,6 +29,8 @@ cursor: usize = 0,
 offset: usize = 0,
 /// The most items shown at once.
 height: usize = 10,
+/// Up on the first item goes to the last, and down on the last to the first.
+wrap: bool = false,
 /// The terminal's width, from the last resize; rows are cut to fit.
 width: ?usize = null,
 /// Written before the highlighted item.
@@ -40,7 +42,10 @@ top: usize = 0,
 styles: Styles = .{},
 
 pub const Styles = struct {
+    /// The highlighted row: its prefix, and its text unless `cursor_text` is set.
     cursor: tui.Style = .{ .fg = .{ .indexed = 212 } },
+    /// The highlighted item's text, when it differs from its prefix.
+    cursor_text: ?tui.Style = null,
     item: tui.Style = .{},
 };
 
@@ -61,12 +66,16 @@ pub fn update(list: *List, msg: tui.Msg) tui.Cmd {
 /// Applies a navigation key; returns whether the key was one.
 pub fn handleKey(list: *List, key: tui.input.Key) bool {
     if (key.matches("up") or key.matches("k") or key.matches("ctrl+p")) {
-        list.moveBy(-1);
+        list.step(-1);
     } else if (key.matches("down") or key.matches("j") or key.matches("ctrl+n")) {
-        list.moveBy(1);
-    } else if (key.matches("pgup") or key.matches("ctrl+b")) {
+        list.step(1);
+    } else if (key.matches("pgup") or key.matches("ctrl+b") or key.matches("left") or
+        key.matches("h"))
+    {
         list.page(-1);
-    } else if (key.matches("pgdown") or key.matches("ctrl+f")) {
+    } else if (key.matches("pgdown") or key.matches("ctrl+f") or key.matches("right") or
+        key.matches("l"))
+    {
         list.page(1);
     } else if (key.matches("home") or key.matches("g")) {
         list.moveTo(0);
@@ -98,6 +107,15 @@ pub fn handleMouse(list: *List, mouse: tui.input.Mouse, top: usize) ?usize {
 pub fn moveBy(list: *List, delta: isize) void {
     const target = @as(isize, @intCast(list.cursor)) + delta;
     list.moveTo(@intCast(@max(0, target)));
+}
+
+/// Moves the cursor one item up (`delta` -1) or down (1), round to the other end when
+/// `wrap` is on.
+pub fn step(list: *List, delta: isize) void {
+    const last = list.items.len -| 1;
+    if (list.wrap and delta < 0 and list.cursor == 0) return list.moveTo(last);
+    if (list.wrap and delta > 0 and list.cursor == last) return list.moveTo(0);
+    list.moveBy(delta);
 }
 
 /// Moves the cursor a screenful up (`direction` < 0) or down.
@@ -146,6 +164,13 @@ pub fn view(list: *const List, w: *std.Io.Writer) std.Io.Writer.Error!void {
     }
 }
 
+/// The style item `index`'s text is drawn in, for models that restart it after a style of
+/// their own within the row.
+pub fn textStyle(list: *const List, index: usize) tui.Style {
+    if (index != list.cursor) return list.styles.item;
+    return list.styles.cursor_text orelse list.styles.cursor;
+}
+
 /// Writes item `index` as the list shows it, with `text` in place of the item, so
 /// models built on the list can decorate items (marks, highlights) and keep its look.
 pub fn writeRow(
@@ -156,8 +181,8 @@ pub fn writeRow(
 ) std.Io.Writer.Error!void {
     const is_cursor = index == list.cursor;
     const prefix = if (is_cursor) list.cursor_prefix else list.item_prefix;
-    const style = if (is_cursor) list.styles.cursor else list.styles.item;
-    try style.paint(w, prefix);
+    try (if (is_cursor) list.styles.cursor else list.styles.item).paint(w, prefix);
+    const style = list.textStyle(index);
     try style.writeSgr(w);
     const room = if (list.width) |width| width -| tui.width.of(prefix) else null;
     if (room) |columns| {
@@ -227,6 +252,22 @@ test "page up and page down move a screenful" {
     try d.expectFrame("> damson\n  elder\n  fig");
 }
 
+test "wrap: past either end to the other; left and right page" {
+    var d: tui.testing.Driver(List) = undefined;
+    try startList(&d, .{ .items = &fruits, .height = 3, .wrap = true });
+    defer d.deinit();
+    try d.press("up");
+    try testing.expectEqual(6, d.model().cursor);
+    try d.press("down");
+    try testing.expectEqual(0, d.model().cursor);
+    try d.press("right");
+    try d.press("l");
+    try testing.expectEqual(6, d.model().cursor);
+    try d.press("h");
+    try d.press("left");
+    try testing.expectEqual(0, d.model().cursor);
+}
+
 test "rows are cut to the terminal width" {
     const list: List = .{ .items = &.{ "a long item name", "short" } };
     var d: tui.testing.Driver(List) = try .init(testing.allocator, list, .{
@@ -254,6 +295,17 @@ test "setItems keeps the cursor in range" {
     try testing.expectEqual(1, list.cursor);
     try testing.expectEqual(0, list.offset);
     try testing.expectEqual(List.Window{ .start = 0, .end = 2 }, list.window());
+}
+
+test "the cursor's prefix and text styled apart" {
+    var buffer: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    const list: List = .{
+        .items = &.{"a"},
+        .styles = .{ .cursor = .{ .bold = true }, .cursor_text = .{} },
+    };
+    try list.view(&w);
+    try testing.expectEqualStrings("\x1b[1m> \x1b[0ma", w.buffered());
 }
 
 test "the cursor row is styled" {

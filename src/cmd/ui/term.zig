@@ -6,24 +6,64 @@
 //! go to standard output, so `x=$(termancy ui choose a b)` works. With no terminal at all, an
 //! interactive command fails at once with a usage error, never waiting. Ctrl-C ends with
 //! status 130 and esc with status 1, both printing nothing.
+//!
+//! What gum's commands share, here for every command to use the same way:
+//!
+//! - `--timeout <duration>` (`cfg.Duration`, `0` for none): `timed` puts it in the
+//!   options, and `run` then ends with status 124 and `timed out` on stderr. A command
+//!   whose timeout is an answer (confirm takes its current choice) calls `runOutcome`.
+//! - `--show-help` and `--padding`: `Framed` draws the key help under a component and
+//!   pads the whole.
+//! - `--strip-ansi`, `--input-delimiter`, `--output-delimiter`: `items` with `Input`, and
+//!   `writeJoined`. Delimiters are typed with escapes (`\n`, `\t`, `\0`).
+//! - Style groups (`--cursor.foreground`): styles.zig.
+//! - Variables: `.env_prefix = "TERMANCY_<COMMAND>_"` on the flag set.
 
 const std = @import("std");
 const cli = @import("cli");
+const cfg = @import("cfg");
 const tui = @import("tui");
 const Io = std.Io;
 
 /// The status after Ctrl-C: 128 + `SIGINT`, as shells report it.
 pub const interrupted_status: u8 = 130;
 
+/// The status after `--timeout` passed, as gum's (and `timeout(1)`'s).
+pub const timed_out_status: u8 = 124;
+
+/// Help for the flags the commands share, worded once.
+pub const help = struct {
+    pub const timeout = "End after this long (0 waits forever): status 124, \"timed out\" on stderr";
+    pub const show_help = "Show the keys under the component";
+    pub const padding = "Space around the component: \"1\", \"1 2\", or \"1 2 1 2\"";
+    pub const strip_ansi = "Remove escape sequences from standard input";
+    pub const input_delimiter = "What separates items on standard input (\\n, \\t, \\0 work)";
+    pub const output_delimiter = "What separates the items printed";
+};
+
 /// Runs `model` on the terminal until it quits, updating it in place; returns whether it
-/// ended by Ctrl-C. Fails with a usage error when there is no terminal. The model stays
-/// the caller's, to read and free as usual.
+/// ended by Ctrl-C. After `Options.timeout`, ends the command with status 124 and
+/// `timed out` on stderr. Fails with a usage error when there is no terminal. The model
+/// stays the caller's, to read and free as usual.
 pub fn run(
     ctx: *cli.Context,
     comptime Model: type,
     model: *Model,
     options: tui.Options,
 ) !bool {
+    const outcome = try runOutcome(ctx, Model, model, options);
+    if (outcome.timed_out) return exitTimedOut(ctx);
+    return outcome.interrupted;
+}
+
+/// `run`, returning how the program ended, timeout included, for a command that reads its
+/// model after a timeout as an answer.
+pub fn runOutcome(
+    ctx: *cli.Context,
+    comptime Model: type,
+    model: *Model,
+    options: tui.Options,
+) !tui.Outcome {
     var buffer: [4096]u8 = undefined;
     var terminal = tui.Terminal.open(ctx.io, &buffer) catch |err| switch (err) {
         error.NotATerminal => return noTerminal(ctx),
@@ -34,8 +74,14 @@ pub fn run(
     with_capability.capability = terminal.capabilityIn(ctx.environ);
     var program: tui.Program(Model) = .init(ctx.gpa, model, terminal.writer(), with_capability);
     defer program.deinit();
-    const outcome = try program.run(&terminal);
-    return outcome.interrupted;
+    return program.run(&terminal);
+}
+
+/// `options` ending after `timeout` (`--timeout`); zero waits forever, as gum's.
+pub fn timed(options: tui.Options, timeout: cfg.Duration) tui.Options {
+    var with = options;
+    if (timeout.ns > 0) with.timeout = timeout.toIo();
+    return with;
 }
 
 /// The options interactive commands run with: inline, erased when done.
@@ -59,16 +105,90 @@ pub fn exitInterrupted(ctx: *cli.Context) cli.Context.Exit {
     return ctx.exit(interrupted_status);
 }
 
-/// The items to choose from: the arguments, or else the lines of standard input. Fails
-/// with a usage error when there are no arguments and standard input is a terminal (the
-/// items cannot come from where the keys do), and fails when there are no items.
-pub fn items(ctx: *cli.Context) ![]const []const u8 {
+/// Ends with status 124 after `--timeout`, writing `timed out` to stderr as gum does. The
+/// terminal must already be restored.
+pub fn exitTimedOut(ctx: *cli.Context) cli.Context.Exit {
+    ctx.err.writeAll("timed out\n") catch {};
+    return ctx.exit(timed_out_status);
+}
+
+/// How items are read from standard input.
+pub const Input = struct {
+    /// `--strip-ansi`: escape sequences (colors) go.
+    strip_ansi: bool = true,
+    /// `--input-delimiter`, as typed: escapes stand for their bytes (see `unescape`).
+    delimiter: []const u8 = "\\n",
+};
+
+/// The items to choose from: the arguments, or else standard input split at the
+/// delimiter. Fails with a usage error when there are no arguments and standard input is
+/// a terminal (the items cannot come from where the keys do), and fails when there are no
+/// items.
+pub fn items(ctx: *cli.Context, input: Input) ![]const []const u8 {
     if (ctx.args.len > 0) return ctx.args;
-    const text = try readStdin(ctx) orelse
+    const found = try stdinItems(ctx, input) orelse
         return ctx.usageError("no items: give them as arguments or on standard input", .{});
-    const found = try lines(ctx.arena, text);
     if (found.len == 0) return ctx.fail("no items to choose from", .{});
     return found;
+}
+
+/// Standard input split into items as `items` splits it (perhaps none), or null when it
+/// is a terminal.
+pub fn stdinItems(ctx: *cli.Context, input: Input) !?[]const []const u8 {
+    const delimiter = try unescape(ctx.arena, input.delimiter);
+    if (delimiter.len == 0) return ctx.usageError("--input-delimiter must not be empty", .{});
+    var text = try readStdin(ctx) orelse return null;
+    if (input.strip_ansi) text = try stripAnsi(ctx.arena, text);
+    return try split(ctx.arena, text, delimiter);
+}
+
+/// `text` without its escape sequences.
+pub fn stripAnsi(arena: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error![]const u8 {
+    if (std.mem.indexOfScalar(u8, text, 0x1b) == null) return text;
+    var out: Io.Writer.Allocating = .init(arena);
+    tui.ansi.strip(&out.writer, text) catch return error.OutOfMemory;
+    return out.written();
+}
+
+/// A delimiter as typed, with `\n`, `\t`, `\r`, `\0`, and `\\` standing for their bytes
+/// (so the default reads `\n` in help); any other backslash stays.
+pub fn unescape(arena: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error![]const u8 {
+    if (std.mem.indexOfScalar(u8, text, '\\') == null) return text;
+    var out: Io.Writer.Allocating = .init(arena);
+    writeUnescaped(&out.writer, text) catch return error.OutOfMemory;
+    return out.written();
+}
+
+fn writeUnescaped(w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const byte: ?u8 = if (text[i] == '\\' and i + 1 < text.len) switch (text[i + 1]) {
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            '0' => 0,
+            '\\' => '\\',
+            else => null,
+        } else null;
+        if (byte) |b| {
+            try w.writeByte(b);
+            i += 1;
+        } else try w.writeByte(text[i]);
+    }
+}
+
+/// Writes `chosen` with the delimiter (as typed, see `unescape`) between them and a line
+/// break after, as gum prints results (`--output-delimiter`).
+pub fn writeJoined(
+    w: *Io.Writer,
+    chosen: []const []const u8,
+    delimiter: []const u8,
+) Io.Writer.Error!void {
+    for (chosen, 0..) |item, i| {
+        if (i > 0) try writeUnescaped(w, delimiter);
+        try w.writeAll(item);
+    }
+    try w.writeByte('\n');
 }
 
 /// All of standard input, or null when it is a terminal.
@@ -83,17 +203,34 @@ pub fn readStdin(ctx: *cli.Context) !?[]const u8 {
     };
 }
 
-/// The lines of `text`, without their `\n` or `\r\n`; a final line break ends the last
-/// line rather than starting an empty one.
-pub fn lines(
+/// What `style` and `format` work on: the arguments joined by line breaks, or else standard
+/// input without its final line breaks and, with `strip_ansi` (`--strip-ansi`), its escape
+/// sequences. Fails with a usage error when there are no arguments and standard input is a
+/// terminal.
+pub fn inputText(ctx: *cli.Context, strip_ansi: bool) ![]const u8 {
+    if (ctx.args.len > 0) return std.mem.join(ctx.arena, "\n", ctx.args);
+    const input = try readStdin(ctx) orelse
+        return ctx.usageError("no text: give it as arguments or on standard input", .{});
+    const trimmed = std.mem.trimEnd(u8, input, "\n");
+    return if (strip_ansi) stripAnsi(ctx.arena, trimmed) else trimmed;
+}
+
+/// `text` split at each `delimiter` (not empty); a final delimiter ends the last item
+/// rather than starting an empty one. At line breaks (`\n`), `\r\n` ends a line too; at
+/// anything else, a final line break goes, as `echo` adds one.
+pub fn split(
     arena: std.mem.Allocator,
     text: []const u8,
+    delimiter: []const u8,
 ) std.mem.Allocator.Error![]const []const u8 {
+    std.debug.assert(delimiter.len > 0);
+    const by_line = std.mem.eql(u8, delimiter, "\n");
+    const rest = if (by_line) text else std.mem.trimEnd(u8, text, "\r\n");
     var list: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |line| {
-        if (it.index == null and line.len == 0) break;
-        try list.append(arena, std.mem.trimEnd(u8, line, "\r"));
+    var it = std.mem.splitSequence(u8, rest, delimiter);
+    while (it.next()) |item| {
+        if (it.index == null and item.len == 0) break;
+        try list.append(arena, if (by_line) std.mem.trimEnd(u8, item, "\r") else item);
     }
     return list.items;
 }
@@ -116,41 +253,146 @@ pub fn writeStyled(
     try tui.ansi.downsample(w, text, color);
 }
 
-/// A model with a line of text above it, for components that have no header of their own.
-pub fn Headed(comptime Inner: type) type {
+/// The keys the help line under a component shows (`--show-help`), in `tui.Keymap`'s
+/// look: `↑/↓ navigate • enter submit`. Only for showing: every action is `.hint`.
+pub const Hints = tui.Keymap(enum { hint });
+pub const Hint = Hints.Binding;
+
+/// `Inner` with what gum puts around every component: above it, `--header`; below it,
+/// after a blank line, the help line of its keys (`--show-help`); around it all,
+/// `--padding`. The component sees the terminal smaller by the padding and the help line
+/// (and no wider than `max_width`), so it cuts its rows to fit. The inner model's `cursor`
+/// and `handoff`, when it has them, go through, and so does background work (`Message`
+/// and `work`, see `tui.Cmd.work`).
+pub fn Framed(comptime Inner: type) type {
     return struct {
-        header: []const u8,
         inner: Inner,
-        style: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
+        /// For laying the view out.
+        gpa: std.mem.Allocator,
+        /// Above the component, laid out already (`styles.render`); none when empty.
+        header: []const u8 = "",
+        /// `--padding`.
+        padding: tui.Style.Sides = .{},
+        /// The help line; none when empty (`--no-show-help`).
+        hints: []const Hint = &.{},
+        /// The most columns the component gets (`--width`); null for the terminal's.
+        max_width: ?usize = null,
+        /// Written on the help line before the keys, as gum's table writes `2/10 • `.
+        status: ?*const fn (inner: *const Inner, w: *Io.Writer) Io.Writer.Error!void = null,
+        /// The terminal's width less the padding, for cutting the help line.
+        width: ?usize = null,
 
         const Self = @This();
+        pub const Message = if (@hasDecl(Inner, "Message")) Inner.Message else void;
+        // The program runs `work` only when `Message` is not void.
+        pub const work = if (@hasDecl(Inner, "work")) Inner.work else {};
 
-        pub fn update(model: *Self, msg: tui.Msg) tui.Cmd {
-            return model.inner.update(msg);
+        pub fn start(model: *Self) tui.Cmd {
+            return if (@hasDecl(Inner, "start")) model.inner.start() else .none;
+        }
+
+        // shortcut: mouse rows are not shifted by the padding; offset them when a
+        // command runs a framed component with the mouse on.
+        pub fn update(model: *Self, msg: tui.Message(Message)) tui.Cmd {
+            if (msg != .resize) return model.inner.update(msg);
+            var size = msg.resize;
+            const sides = model.padding.left + model.padding.right;
+            const width = @min(size.width -| sides, model.max_width orelse std.math.maxInt(usize));
+            size.width = std.math.lossyCast(u16, width);
+            const help_rows: usize = if (model.hints.len > 0) 2 else 0;
+            const rows = model.padding.top + model.padding.bottom + model.headerRows() + help_rows;
+            size.height = std.math.lossyCast(u16, size.height -| rows);
+            model.width = size.width;
+            return model.inner.update(.{ .resize = size });
         }
 
         pub fn view(model: *const Self, w: *Io.Writer) Io.Writer.Error!void {
-            if (model.header.len > 0) {
-                try model.style.paint(w, model.header);
-                try w.writeByte('\n');
+            var body: Io.Writer.Allocating = .init(model.gpa);
+            defer body.deinit();
+            if (model.header.len > 0) try body.writer.print("{s}\n", .{model.header});
+            try model.inner.view(&body.writer);
+            // The program ignores a final line break; so must the help line below.
+            const text = body.written();
+            if (std.mem.endsWith(u8, text, "\n")) body.shrinkRetainingCapacity(text.len - 1);
+            if (model.hints.len > 0) {
+                try body.writer.writeAll("\n\n");
+                const line = body.written().len;
+                if (model.status) |status| try status(&model.inner, &body.writer);
+                const used = tui.width.of(body.written()[line..]);
+                const hints: Hints = .{ .bindings = model.hints };
+                const width = if (model.width) |width| width -| used else null;
+                try hints.writeHelp(&body.writer, .{ .width = width });
             }
-            try model.inner.view(w);
+            if (std.meta.eql(model.padding, .{})) return w.writeAll(body.written());
+            const style: tui.Style = .{ .padding = model.padding };
+            try style.render(w, body.written());
+        }
+
+        /// The inner model's cursor, moved below the header and inside the padding.
+        pub fn cursor(model: *const Self) ?tui.Cursor {
+            if (!@hasDecl(Inner, "cursor")) return null;
+            var at = model.inner.cursor() orelse return null;
+            at.x += model.padding.left;
+            at.y += model.padding.top + model.headerRows();
+            return at;
+        }
+
+        fn headerRows(model: *const Self) usize {
+            if (model.header.len == 0) return 0;
+            return std.mem.count(u8, model.header, "\n") + 1;
+        }
+
+        pub fn handoff(model: *Self, io: Io, id: u32) tui.Cmd {
+            return if (@hasDecl(Inner, "handoff")) model.inner.handoff(io, id) else .none;
+        }
+
+        pub fn deinit(model: *Self) void {
+            if (@hasDecl(Inner, "deinit")) model.inner.deinit();
         }
     };
 }
 
 const testing = std.testing;
 
-test lines {
+test split {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    const got = try lines(arena.allocator(), "a\r\nb\n\nc\n");
+    const a = arena.allocator();
+    const got = try split(a, "a\r\nb\n\nc\n", "\n");
     try testing.expectEqual(4, got.len);
     try testing.expectEqualStrings("a", got[0]);
     try testing.expectEqualStrings("", got[2]);
     try testing.expectEqualStrings("c", got[3]);
-    try testing.expectEqual(0, (try lines(arena.allocator(), "")).len);
-    try testing.expectEqual(1, (try lines(arena.allocator(), "x")).len);
+    try testing.expectEqual(0, (try split(a, "", "\n")).len);
+    try testing.expectEqual(1, (try split(a, "x", "\n")).len);
+    const commas = try split(a, "a,b\r,c,\n", ",");
+    try testing.expectEqual(3, commas.len);
+    try testing.expectEqualStrings("b\r", commas[1]);
+    try testing.expectEqualStrings("c", commas[2]);
+    try testing.expectEqual(2, (try split(a, "a::b", "::")).len);
+}
+
+test "unescape, stripAnsi, and writeJoined" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("\n", try unescape(a, "\\n"));
+    try testing.expectEqualStrings("a\tb\x00\\\\x\\", try unescape(a, "a\\tb\\0\\\\\\x\\"));
+    try testing.expectEqualStrings(", ", try unescape(a, ", "));
+    try testing.expectEqualStrings("red x", try stripAnsi(a, "\x1b[31mred\x1b[0m x"));
+    var buffer: [32]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    try writeJoined(&w, &.{ "a", "b" }, "\\n");
+    try writeJoined(&w, &.{ "c", "d" }, ", ");
+    try writeJoined(&w, &.{}, ",");
+    try testing.expectEqualStrings("a\nb\nc, d\n\n", w.buffered());
+}
+
+test timed {
+    try testing.expectEqual(null, timed(.{}, .zero).timeout);
+    const options = timed(inline_options, try .parse("1m30s"));
+    try testing.expectEqual(90 * std.time.ns_per_s, options.timeout.?.toNanoseconds());
+    try testing.expect(options.clear_on_quit);
 }
 
 test writeStyled {
@@ -161,22 +403,33 @@ test writeStyled {
     try testing.expectEqualStrings("x\x1b[1;91my\x1b[0m", w.buffered());
 }
 
-test Headed {
-    const Static = struct {
-        pub fn update(_: *@This(), _: tui.Msg) tui.Cmd {
-            return .quit;
+test "Framed: the header above, and the inner cursor and handoff go through" {
+    const Field = struct {
+        edits: u32 = 0,
+        pub fn update(_: *@This(), msg: tui.Msg) tui.Cmd {
+            return if (msg == .key and msg.key.matches("e")) .handoff(1) else .none;
         }
         pub fn view(_: *const @This(), w: *Io.Writer) Io.Writer.Error!void {
-            try w.writeAll("body");
+            try w.writeAll("> ab");
+        }
+        pub fn cursor(_: *const @This()) ?tui.Cursor {
+            return .{ .x = 4, .y = 0 };
+        }
+        pub fn handoff(m: *@This(), _: Io, _: u32) tui.Cmd {
+            m.edits += 1;
+            return .none;
         }
     };
-    var d: tui.testing.Driver(Headed(Static)) = try .init(
-        testing.allocator,
-        .{ .header = "Title", .inner = .{} },
-        .{},
-    );
+    var d: tui.testing.Driver(Framed(Field)) = try .init(testing.allocator, .{
+        .inner = .{},
+        .gpa = testing.allocator,
+        .header = "Two\nlines",
+        .padding = .{ .top = 1, .left = 2 },
+    }, .{});
     defer d.deinit();
-    try d.expectFrame("Title\nbody");
-    try d.press("x");
-    try testing.expect(d.done());
+    try d.expectFrame("       \n  Two  \n  lines\n  > ab ");
+    try testing.expectEqual(3, d.screen.row);
+    try testing.expectEqual(6, d.screen.column);
+    try d.press("e");
+    try testing.expectEqual(1, d.model().inner.edits);
 }

@@ -148,7 +148,7 @@ fn keyName(bytes: []const u8) struct { ?[]const u8, usize } {
     for (sequences) |s| if (std.mem.startsWith(u8, bytes, s[0])) return .{ s[1], s[0].len };
     const c = bytes[0];
     switch (c) {
-        '\r', '\n' => return .{ "Enter", 1 },
+        '\r' => return .{ "Enter", 1 },
         0x7f, 0x08 => return .{ "Backspace", 1 },
         '\t' => return .{ "Tab", 1 },
         0x1b => {
@@ -156,7 +156,7 @@ fn keyName(bytes: []const u8) struct { ?[]const u8, usize } {
                 return .{ altName(bytes[1]), 2 };
             return .{ "Escape", 1 };
         },
-        0x01...0x07, 0x0b, 0x0c, 0x0e...0x1a => return .{ ctrlName(c), 1 },
+        0x01...0x07, 0x0a...0x0c, 0x0e...0x1a => return .{ ctrlName(c), 1 },
         else => {},
     }
     const len = std.unicode.utf8ByteSequenceLength(c) catch 1;
