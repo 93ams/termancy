@@ -179,8 +179,8 @@ test "usage errors come before any input or terminal" {
         "Run 'termancy filter --help' for usage.\n");
     try expectRun(&.{ "table", "--separator", ";;" }, &.{}, 2, "", "termancy: invalid --separator " ++
         "\";;\" (use one character, or \\t)\nRun 'termancy table --help' for usage.\n");
-    try expectRun(&.{ "pager", "termancy-no-such-file" }, &.{}, 1, "", "termancy: termancy-no-such-file: " ++
-        "no such file\n");
+    // A name that is no file is the text to show, but a directory cannot be shown.
+    try expectRun(&.{ "pager", "." }, &.{}, 1, "", "termancy: .: IsDir\n");
     try expectRun(&.{ "file", "termancy-no-such-dir" }, &.{}, 1, "", "termancy: termancy-no-such-dir: " ++
         "no such directory\n");
 }

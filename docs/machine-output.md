@@ -152,6 +152,7 @@ Their interface goes to the terminal, never to stdout. Cancelling (Esc) exits 1 
 output; Ctrl-C exits 130; `--timeout` exits 124 with `timed out` on stderr. `ui confirm`
 answers with its status: Esc is no, and a timeout takes the highlighted answer; with
 `--show-output` it prints the question and the answer (`Deploy? No`), Esc included, as gum.
+`ui pager` has nothing to cancel: q and Esc both exit 0, as gum's.
 
 `ui spin -- <cmd>` exits with the command's own status. Where stdout is not a terminal, the
 command's stdout goes straight to it and its stderr to stderr once the spinner is gone; where

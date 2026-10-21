@@ -191,6 +191,14 @@ included (`0`, the default, fits the terminal); the row count leads the help lin
 `--separator` is any one character; `--print` writes the whole table to standard output
 instead.
 
+`ui pager [file|text]` shows a file, else the argument itself, else standard input, in a
+rounded border with numbered, wrapped lines (`--no-show-line-numbers`, `--no-soft-wrap`);
+colored input keeps its colors; `/` searches for a regular expression (smart case),
+highlighting every match, and n/N step through them; q and Esc both exit 0. `ui file
+[path]` shows permissions and sizes (`--no-permissions`, `--no-size`) and prints the
+absolute path chosen; `--directory` lets enter choose a directory (right opens one), and
+the path can come from `TERMANCY_FILE_PATH`.
+
 ## Terminal output and media
 
 | command | |

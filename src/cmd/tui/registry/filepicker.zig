@@ -7,11 +7,17 @@
 //! if (picker.status == .submitted) use(picker.chosen.?);
 //! ```
 //!
-//! Directories come first, marked with `/`. Keys: up/down and the other `list` keys move;
-//! enter, right, or l opens a directory or chooses a file; left, h, or backspace go to the
-//! parent (with the cursor on the directory just left); `.` shows or hides dotfiles; esc
-//! or q quits as canceled. With `extensions` set, only files ending in one of them are
-//! listed. A directory that cannot be read leaves the listing as it was and says why.
+//! Directories come first, marked with `/`; a symbolic link shows where it points
+//! (`name → target`). Keys: up/down and the other `list` keys move; enter chooses (a file,
+//! or with `allow_directories` a directory) or else opens the directory; right or l opens
+//! a directory; left, h, or backspace go to the parent (with the cursor on the directory
+//! just left); `.` shows or hides dotfiles; esc or q quits as canceled. With `extensions`
+//! set, only files ending in one of them are listed. A directory that cannot be read
+//! leaves the listing as it was and says why.
+//!
+//! `show_permissions` and `show_size` add columns before the name, as gum's file picker
+//! has them: `drwxr-xr-x   4.1kB src/`. The highlighted row is all in `styles.selected`;
+//! the others are styled part by part.
 //!
 //! The picker reads directories with the `std.Io` it was given, when it starts and when
 //! it moves; nothing else does I/O.
@@ -31,7 +37,7 @@ gpa: Allocator,
 io: Io,
 /// The directory listed, absolute.
 dir: std.ArrayList(u8) = .empty,
-/// The entries of `dir`, directories first; `labels` are what the list shows.
+/// The entries of `dir`, directories first; `labels` are their names as shown.
 entries: std.ArrayList(Entry) = .empty,
 labels: std.ArrayList([]const u8) = .empty,
 /// Holds the names and labels of the current listing.
@@ -40,6 +46,17 @@ list: List = .{ .items = &.{} },
 /// List only files ending in one of these (such as ".zig"); empty lists every file.
 extensions: []const []const u8 = &.{},
 show_hidden: bool = false,
+show_permissions: bool = false,
+show_size: bool = false,
+/// Columns the size takes, right-aligned.
+size_width: usize = 8,
+/// The most entries shown; fewer when the terminal is too short for them.
+height: usize = 10,
+/// What enter chooses: files, and directories (which it otherwise opens).
+allow_files: bool = true,
+allow_directories: bool = false,
+/// Written above the directory, already styled.
+header: []const u8 = "",
 /// The chosen file's absolute path, once `status` is `submitted`.
 chosen: ?[]u8 = null,
 status: Status = .active,
@@ -47,18 +64,38 @@ status: Status = .active,
 message: []const u8 = "",
 styles: Styles = .{},
 
-pub const Entry = struct { name: []const u8, directory: bool };
+pub const Entry = struct {
+    name: []const u8,
+    /// A directory, or a link to one: it opens.
+    directory: bool,
+    /// Where a symbolic link points; null for anything else.
+    target: ?[]const u8 = null,
+    /// As `ls -l` shows it; read only for `show_permissions` or `show_size`.
+    permissions: [10]u8 = @splat('?'),
+    size: u64 = 0,
+};
 
 /// What to list.
 pub const Options = struct {
     /// Only files ending in one of these; empty lists every file.
     extensions: []const []const u8 = &.{},
     show_hidden: bool = false,
+    show_permissions: bool = false,
+    show_size: bool = false,
+    allow_files: bool = true,
+    allow_directories: bool = false,
 };
 
 pub const Styles = struct {
     path: tui.Style = .{ .fg = .{ .indexed = 240 } },
     message: tui.Style = .{ .fg = .{ .indexed = 203 } },
+    /// The highlighted row after the cursor (`list.styles.cursor` draws the cursor).
+    selected: tui.Style = .{ .fg = .{ .indexed = 212 }, .bold = true },
+    directory: tui.Style = .{ .fg = .{ .indexed = 99 } },
+    file: tui.Style = .{},
+    symlink: tui.Style = .{ .fg = .{ .indexed = 36 } },
+    permissions: tui.Style = .{ .fg = .{ .indexed = 244 } },
+    size: tui.Style = .{ .fg = .{ .indexed = 240 } },
 };
 
 /// A picker listing `path` (relative to the working directory, or absolute).
@@ -69,6 +106,10 @@ pub fn init(gpa: Allocator, io: Io, path: []const u8, options: Options) !FilePic
         .names = .init(gpa),
         .extensions = options.extensions,
         .show_hidden = options.show_hidden,
+        .show_permissions = options.show_permissions,
+        .show_size = options.show_size,
+        .allow_files = options.allow_files,
+        .allow_directories = options.allow_directories,
     };
     errdefer picker.deinit();
     const real = try Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
@@ -102,16 +143,24 @@ fn handle(picker: *FilePicker, msg: tui.Msg) !tui.Cmd {
                 picker.status = .canceled;
                 return .quit;
             }
-            if (key.matches("enter") or key.matches("right") or key.matches("l")) {
-                return picker.open();
-            }
-            if (key.matches("left") or key.matches("h") or key.matches("backspace")) {
+            if (key.matches("enter")) return picker.choose();
+            if (key.matches("right") or key.matches("l")) {
+                try picker.open();
+            } else if (key.matches("left") or key.matches("h") or key.matches("backspace")) {
                 try picker.up();
             } else if (key.matches(".")) {
                 picker.show_hidden = !picker.show_hidden;
                 const keep = if (picker.currentEntry()) |entry| entry.name else null;
                 try picker.load(keep);
             } else _ = picker.list.handleKey(key);
+        },
+        .resize => |size| {
+            // The header, the directory, and a message take a row each.
+            const header = if (picker.header.len > 0) std.mem.count(u8, picker.header, "\n") + 1 else 0;
+            const room = @as(usize, size.height) -| (header + 2);
+            picker.list.height = @max(1, @min(picker.height, room));
+            picker.list.moveTo(picker.list.cursor);
+            _ = picker.list.update(msg);
         },
         else => _ = picker.list.update(msg),
     }
@@ -124,17 +173,26 @@ pub fn currentEntry(picker: *const FilePicker) ?Entry {
     return picker.entries.items[picker.list.cursor];
 }
 
-fn open(picker: *FilePicker) !tui.Cmd {
+/// Chooses the highlighted entry if its kind may be chosen, or else opens it.
+fn choose(picker: *FilePicker) !tui.Cmd {
     const entry = picker.currentEntry() orelse return .none;
-    const path = try std.fs.path.join(picker.gpa, &.{ picker.dir.items, entry.name });
-    if (entry.directory) {
-        defer picker.gpa.free(path);
-        try picker.enter(path, null);
+    const allowed = if (entry.directory) picker.allow_directories else picker.allow_files;
+    if (!allowed) {
+        try picker.open();
         return .none;
     }
-    picker.chosen = path;
+    picker.chosen = try std.fs.path.join(picker.gpa, &.{ picker.dir.items, entry.name });
     picker.status = .submitted;
     return .quit;
+}
+
+/// Lists the highlighted entry, if it is a directory.
+fn open(picker: *FilePicker) !void {
+    const entry = picker.currentEntry() orelse return;
+    if (!entry.directory) return;
+    const path = try std.fs.path.join(picker.gpa, &.{ picker.dir.items, entry.name });
+    defer picker.gpa.free(path);
+    try picker.enter(path, null);
 }
 
 fn up(picker: *FilePicker) !void {
@@ -174,16 +232,30 @@ fn load(picker: *FilePicker, select: ?[]const u8) !void {
         const directory = entry.kind == .directory or
             (entry.kind == .sym_link and isDirectory(picker.io, dir, entry.name));
         if (!directory and !picker.wanted(entry.name)) continue;
-        try entries.append(picker.gpa, .{
-            .name = try arena.dupe(u8, entry.name),
-            .directory = directory,
-        });
+        var item: Entry = .{ .name = try arena.dupe(u8, entry.name), .directory = directory };
+        if (entry.kind == .sym_link) {
+            var buffer: [std.fs.max_path_bytes]u8 = undefined;
+            if (dir.readLink(picker.io, entry.name, &buffer)) |len| {
+                item.target = try arena.dupe(u8, buffer[0..len]);
+            } else |_| {}
+        }
+        if (picker.show_permissions or picker.show_size) {
+            const lstat: Io.Dir.StatFileOptions = .{ .follow_symlinks = false };
+            if (dir.statFile(picker.io, entry.name, lstat)) |stat| {
+                item.permissions = permissionsOf(stat, entry.name);
+                item.size = stat.size;
+            } else |_| {}
+        }
+        try entries.append(picker.gpa, item);
     }
     std.mem.sortUnstable(Entry, entries.items, {}, before);
     var labels: std.ArrayList([]const u8) = .empty;
     errdefer labels.deinit(picker.gpa);
     for (entries.items) |entry| {
-        const label = if (entry.directory)
+        const slash: []const u8 = if (entry.directory) "/" else "";
+        const label = if (entry.target) |target|
+            try std.fmt.allocPrint(arena, "{s}{s} → {s}", .{ entry.name, slash, target })
+        else if (entry.directory)
             try std.fmt.allocPrint(arena, "{s}/", .{entry.name})
         else
             entry.name;
@@ -211,6 +283,58 @@ fn wanted(picker: *const FilePicker, name: []const u8) bool {
     return false;
 }
 
+/// `ls -l`'s mode column: the kind, then read, write, and execute for the owner, the
+/// group, and others; on Windows, what its attributes and `name` imply (`windowsBits`).
+fn permissionsOf(stat: Io.File.Stat, name: []const u8) [10]u8 {
+    var mode: [10]u8 = "-rwxrwxrwx".*;
+    mode[0] = switch (stat.kind) {
+        .directory => 'd',
+        .sym_link => 'l',
+        .named_pipe => 'p',
+        .unix_domain_socket => 's',
+        .character_device => 'c',
+        .block_device => 'b',
+        else => '-',
+    };
+    const Permissions = Io.File.Permissions;
+    const bits: u32 = if (@hasDecl(Permissions, "toMode"))
+        @intCast(stat.permissions.toMode() & 0o777)
+    else if (@hasDecl(Permissions, "toAttributes"))
+        // The attributes themselves; bit 0 is FILE_ATTRIBUTE_READONLY.
+        windowsBits(@backingInt(stat.permissions) & 1 != 0, stat.kind == .directory, name)
+    else
+        0o666;
+    for (mode[1..], 0..) |*c, i| {
+        if (bits & (@as(u32, 0o400) >> @intCast(i)) == 0) c.* = '-';
+    }
+    return mode;
+}
+
+/// What Windows implies for every class: read, write unless read-only, and execute for
+/// a directory or a program (`.exe`, `.bat`, `.cmd`, `.com`).
+fn windowsBits(read_only: bool, directory: bool, name: []const u8) u32 {
+    var bits: u32 = if (read_only) 0o444 else 0o666;
+    const program = for ([_][]const u8{ ".exe", ".bat", ".cmd", ".com" }) |extension| {
+        if (std.ascii.endsWithIgnoreCase(name, extension)) break true;
+    } else false;
+    if (directory or program) bits |= 0o111;
+    return bits;
+}
+
+/// `bytes` as gum's file picker shows a size (go-humanize's, without the space): powers
+/// of 1000, one decimal below ten: `6B`, `4.1kB`, `15MB`.
+fn formatSize(buffer: *[16]u8, bytes: u64) []const u8 {
+    if (bytes < 10) return std.fmt.bufPrint(buffer, "{d}B", .{bytes}) catch unreachable;
+    const units = [_][]const u8{ "B", "kB", "MB", "GB", "TB", "PB", "EB" };
+    const value: f64 = @floatFromInt(bytes);
+    const exponent: usize = @intFromFloat(@floor(@log10(value) / 3));
+    const scale = std.math.pow(f64, 1000, @floatFromInt(exponent));
+    const rounded = @floor(value / scale * 10 + 0.5) / 10;
+    const unit = units[exponent];
+    if (rounded < 10) return std.fmt.bufPrint(buffer, "{d:.1}{s}", .{ rounded, unit }) catch unreachable;
+    return std.fmt.bufPrint(buffer, "{d:.0}{s}", .{ rounded, unit }) catch unreachable;
+}
+
 fn isDirectory(io: Io, dir: Io.Dir, name: []const u8) bool {
     var sub = dir.openDir(io, name, .{}) catch return false;
     sub.close(io);
@@ -222,14 +346,23 @@ fn before(_: void, a: Entry, b: Entry) bool {
     return std.mem.lessThan(u8, a.name, b.name);
 }
 
-/// The directory, the entries (or "(empty)"), and a message when a move failed.
+/// The header, the directory, the entries (or "(empty)"), and a message when a move
+/// failed.
 pub fn view(picker: *const FilePicker, w: *Writer) Writer.Error!void {
+    if (picker.header.len > 0) {
+        try w.writeAll(picker.header);
+        try w.writeByte('\n');
+    }
     try picker.styles.path.paint(w, picker.dir.items);
     try w.writeByte('\n');
     if (picker.entries.items.len == 0) {
         try picker.styles.path.paint(w, "  (empty)");
     } else {
-        try picker.list.view(w);
+        const shown = picker.list.window();
+        for (shown.start..shown.end) |i| {
+            if (i > shown.start) try w.writeByte('\n');
+            try picker.writeEntry(w, i);
+        }
     }
     if (picker.message.len > 0) {
         try w.writeByte('\n');
@@ -237,8 +370,55 @@ pub fn view(picker: *const FilePicker, w: *Writer) Writer.Error!void {
     }
 }
 
+/// Entry `index`: the cursor (or as much space), the permissions and size when shown,
+/// and the name, cut to the width.
+fn writeEntry(picker: *const FilePicker, w: *Writer, index: usize) Writer.Error!void {
+    const entry = picker.entries.items[index];
+    const list = &picker.list;
+    const s = picker.styles;
+    const is_cursor = index == list.cursor;
+    const prefix = if (is_cursor) list.cursor_prefix else list.item_prefix;
+    try (if (is_cursor) list.styles.cursor else list.styles.item).paint(w, prefix);
+    // The cursor's row is all in `selected`, so its parts have no styles of their own.
+    const none: tui.Style = .{};
+    if (is_cursor) try s.selected.writeSgr(w);
+    var used = tui.width.of(prefix);
+    if (picker.show_permissions) {
+        try (if (is_cursor) none else s.permissions).paint(w, &entry.permissions);
+        used += entry.permissions.len;
+    }
+    if (picker.show_size) {
+        var buffer: [16]u8 = undefined;
+        const size = formatSize(&buffer, entry.size);
+        try w.splatByteAll(' ', picker.size_width -| size.len);
+        try (if (is_cursor) none else s.size).paint(w, size);
+        used += @max(picker.size_width, size.len);
+    }
+    if (picker.show_permissions or picker.show_size) {
+        try w.writeByte(' ');
+        used += 1;
+    }
+    const name = if (is_cursor) none else if (entry.target != null)
+        s.symlink
+    else if (entry.directory) s.directory else s.file;
+    try name.writeSgr(w);
+    const label = picker.labels.items[index];
+    if (list.width) |width| {
+        try tui.width.truncate(w, label, width -| used, "…");
+    } else try w.writeAll(label);
+    if (name.hasSgr() or (is_cursor and s.selected.hasSgr())) try w.writeAll(tui.ansi.reset);
+}
+
 const testing = std.testing;
-const plain: FilePicker.Styles = .{ .path = .{}, .message = .{} };
+const plain: FilePicker.Styles = .{
+    .path = .{},
+    .message = .{},
+    .selected = .{},
+    .directory = .{},
+    .symlink = .{},
+    .permissions = .{},
+    .size = .{},
+};
 
 const Fixture = struct {
     tmp: testing.TmpDir,
@@ -345,4 +525,96 @@ test "an empty directory, and one that cannot be read" {
     try d.expectFrameContains("FileNotFound");
     try d.press("down");
     try testing.expectEqualStrings("", d.model().message);
+}
+
+test "permissions, sizes, and where a link points" {
+    if (!@hasDecl(Io.File.Permissions, "fromMode")) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.txt", .data = &@as([1234]u8, @splat('x')) });
+    try tmp.dir.writeFile(io, .{ .sub_path = "b", .data = "seven b" });
+    try tmp.dir.setFilePermissions(io, "a.txt", .fromMode(0o640), .{});
+    try tmp.dir.setFilePermissions(io, "b", .fromMode(0o755), .{});
+    try tmp.dir.symLink(io, "a.txt", "link", .{});
+    const root = try tmp.dir.realPathFileAlloc(io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    const options: FilePicker.Options = .{ .show_permissions = true, .show_size = true };
+    var d: tui.testing.Driver(FilePicker) = try .init(
+        testing.allocator,
+        try styledPickerWith(io, root, options),
+        .{},
+    );
+    defer d.deinit();
+    try d.expectFrameContains("> -rw-r-----   1.2kB a.txt\n");
+    try d.expectFrameContains("\n  -rwxr-xr-x      7B b\n");
+    try d.expectFrameContains("      5B link → a.txt");
+    // Each part in its own style, but the highlighted row all in `selected`.
+    d.model().styles = .{};
+    try d.press("down");
+    try d.press("up");
+    const bytes = d.frameBytes();
+    try testing.expect(std.mem.indexOf(u8, bytes, "\x1b[1;38;5;212m-rw-r-----   1.2kB a.txt\x1b[0m") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "\x1b[38;5;244m-rwxr-xr-x\x1b[0m") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "\x1b[38;5;36mlink → a.txt\x1b[0m") != null);
+}
+
+test "choosing a directory, or only directories" {
+    var f: Fixture = try .init();
+    defer f.deinit();
+    const options: FilePicker.Options = .{ .allow_files = false, .allow_directories = true };
+    var d: tui.testing.Driver(FilePicker) = try .init(
+        testing.allocator,
+        try styledPickerWith(testing.io, f.root, options),
+        .{},
+    );
+    defer d.deinit();
+    // right opens a directory and does nothing to a file; enter on a file neither.
+    try d.press("right");
+    try testing.expect(std.mem.endsWith(u8, d.model().dir.items, "src"));
+    try d.press("down");
+    try d.press("l");
+    try d.press("enter");
+    try testing.expect(!d.done());
+    try testing.expectEqualStrings("main.zig", d.model().currentEntry().?.name);
+    // enter chooses the directory instead of opening it.
+    try d.press("left");
+    try d.press("enter");
+    try testing.expect(d.done());
+    const expected = try std.fs.path.join(testing.allocator, &.{ f.root, "src" });
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, d.model().chosen.?);
+}
+
+test windowsBits {
+    try testing.expectEqual(0o666, windowsBits(false, false, "notes.txt"));
+    try testing.expectEqual(0o555, windowsBits(true, false, "SETUP.EXE"));
+    try testing.expectEqual(0o777, windowsBits(false, true, "src"));
+}
+
+test "no more entries than the terminal has rows for" {
+    var f: Fixture = try .init();
+    defer f.deinit();
+    var picker = try styledPicker(testing.io, f.root);
+    picker.header = "Pick";
+    var d: tui.testing.Driver(FilePicker) = try .init(testing.allocator, picker, .{
+        .program = .{ .size = .{ .width = 40, .height = 5 } },
+    });
+    defer d.deinit();
+    // Five rows: the header, the directory, two entries, and one for a message.
+    try testing.expectEqual(2, d.model().list.height);
+    try d.expectFrameContains("\n> src/\n  README.md");
+    try d.resize(.{ .width = 40, .height = 30 });
+    try testing.expectEqual(10, d.model().list.height);
+}
+
+test formatSize {
+    var buffer: [16]u8 = undefined;
+    const cases = [_]struct { u64, []const u8 }{
+        .{ 0, "0B" },          .{ 6, "6B" },           .{ 999, "999B" },
+        .{ 1000, "1.0kB" },    .{ 1234, "1.2kB" },     .{ 4096, "4.1kB" },
+        .{ 15_000, "15kB" },   .{ 999_999, "1000kB" }, .{ 1_500_000, "1.5MB" },
+        .{ 3 << 40, "3.3TB" },
+    };
+    for (cases) |case| try testing.expectEqualStrings(case[1], formatSize(&buffer, case[0]));
 }
