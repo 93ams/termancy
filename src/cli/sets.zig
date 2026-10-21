@@ -22,7 +22,7 @@
 //! in, so one can be declared once and shared. `.env_prefix`, for the whole set or a group,
 //! gives every flag under it a variable: the prefix and the flag's name in SCREAMING_SNAKE
 //! (`APP_` gives `--public-host` the variable `APP_PUBLIC_HOST`), unless the flag names its
-//! own `.env`. A tagged union is a choice: a flag naming
+//! own `.env` (`""` for none). A tagged union is a choice: a flag naming
 //! the variant (`--storage s3`), and each variant's fields as a group under it
 //! (`--storage-s3-bucket`, which also picks `s3`). A list of structs cannot be flags and
 //! must be marked `.internal`.
@@ -130,7 +130,7 @@ pub fn FlagPlace(comptime Parent: type, comptime V: type) type {
         aliases: []const []const u8 = &.{},
         /// The placeholder in help, instead of one from the type.
         value_name: ?[]const u8 = null,
-        /// Read when the flag is not given.
+        /// Read when the flag is not given; `""` reads none, even under an `env_prefix`.
         env: ?[]const u8 = null,
         /// Accepted, but not shown in help or completion.
         hidden: bool = false,
@@ -361,7 +361,10 @@ fn collect(
             .kind = .value,
             .short = place.short,
             .help = field_spec.help,
-            .env = place.env orelse if (env) |e| e ++ screaming(own) else null,
+            .env = if (place.env) |e| (if (e.len == 0) null else e) else if (env) |e|
+                e ++ screaming(own)
+            else
+                null,
             .hidden = hide,
             .deprecated = field_spec.deprecated,
             .prompt = place.prompt,
@@ -698,6 +701,16 @@ test "a group's separator and variables" {
     try testing.expectEqualStrings("cursor", set.groups[0].prefix);
     // Without a prefix, only a flag's own `.env`.
     try testing.expectEqual(null, example.list[0].env);
+}
+
+test "a flag opts out of the prefix with .env = \"\"" {
+    const Flags = struct { level: u8 = 0, min_level: u8 = 0 };
+    const set = flags(Flags, field.none, .{ .env_prefix = "APP_", .fields = .{
+        .level = .{ .env = "" },
+        .min_level = .{ .env = "APP_LEVEL" },
+    } });
+    try testing.expectEqual(null, set.list[0].env);
+    try testing.expectEqualStrings("APP_LEVEL", set.list[1].env.?);
 }
 
 const Copy = struct {
