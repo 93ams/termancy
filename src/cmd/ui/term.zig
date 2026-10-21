@@ -300,7 +300,7 @@ pub fn Framed(comptime Inner: type) type {
             const width = @min(size.width -| sides, model.max_width orelse std.math.maxInt(usize));
             size.width = std.math.lossyCast(u16, width);
             const help_rows: usize = if (model.hints.len > 0) 2 else 0;
-            const rows = model.padding.top + model.padding.bottom + help_rows;
+            const rows = model.padding.top + model.padding.bottom + model.headerRows() + help_rows;
             size.height = std.math.lossyCast(u16, size.height -| rows);
             model.width = size.width;
             return model.inner.update(.{ .resize = size });
@@ -332,13 +332,14 @@ pub fn Framed(comptime Inner: type) type {
         pub fn cursor(model: *const Self) ?tui.Cursor {
             if (!@hasDecl(Inner, "cursor")) return null;
             var at = model.inner.cursor() orelse return null;
-            const header_rows = if (model.header.len == 0)
-                0
-            else
-                std.mem.count(u8, model.header, "\n") + 1;
             at.x += model.padding.left;
-            at.y += model.padding.top + header_rows;
+            at.y += model.padding.top + model.headerRows();
             return at;
+        }
+
+        fn headerRows(model: *const Self) usize {
+            if (model.header.len == 0) return 0;
+            return std.mem.count(u8, model.header, "\n") + 1;
         }
 
         pub fn handoff(model: *Self, io: Io, id: u32) tui.Cmd {

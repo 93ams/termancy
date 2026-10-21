@@ -202,7 +202,6 @@ pub fn build(
     };
     // The header, and with a border, the rules above, under, and below it.
     const chrome: usize = if (border != null) 4 else 1;
-    const help_rows: usize = if (flags.show_help) 2 else 0;
     var selected = theme.accent;
     selected.bold = true;
     return .{
@@ -210,7 +209,6 @@ pub fn build(
         .rows = rows,
         // --print shows every row; a height of 0 fits the terminal.
         .height = if (flags.print or flags.height == 0) null else flags.height -| chrome,
-        .reserved = flags.padding.sides.top + flags.padding.sides.bottom + help_rows,
         .selectable = !flags.print,
         .border = border,
         .styles = .{
@@ -514,7 +512,7 @@ test "build: titles from the first record or from --columns, widths, and height"
     const named = try buildOf(&arena, &records, .{ .columns = &.{ "x", "y" } });
     try testing.expectEqual(2, named.rows.len);
     try testing.expectEqual(null, named.height);
-    try testing.expectEqual(2, named.reserved); // the help line and the blank line above it
+    try testing.expectEqual(0, named.reserved); // `term.Framed` takes the help line off
     const printed = try buildOf(&arena, &.{}, .{ .print = true, .border = .none, .height = 5 });
     try testing.expectEqual(0, printed.columns.len);
     try testing.expect(!printed.selectable and printed.border == null and printed.height == null);
