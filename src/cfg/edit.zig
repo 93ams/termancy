@@ -349,10 +349,7 @@ fn reformatToml(arena: Allocator, source: []const u8, tree: Value) EditError![]c
                     }
                     w.writeAll(" = ") catch break :write;
                     const value = lookupSegments(tree, span.path) orelse return error.Unsupported;
-                    // Whether a date-like string was a date or a string is only in the text.
-                    if (holdsDateTime(value)) {
-                        w.writeAll(value_text) catch break :write;
-                    } else toml.writeValue(w, value) catch |err| switch (err) {
+                    toml.writeValue(w, value) catch |err| switch (err) {
                         error.WriteFailed => break :write,
                         error.Unrepresentable => return error.Unsupported,
                     };
@@ -777,7 +774,7 @@ fn editToml(arena: Allocator, source: []const u8, change: Change) EditError![]co
                 if (span.kind != .entry or !segmentsEql(span.path, key)) continue;
                 const old = source[span.value_start..span.value_end];
                 const text = try keepSingleQuotes(arena, old, set.value, .toml) orelse
-                    try keepDateTimeQuoted(arena, old, set.value) orelse value.written();
+                    value.written();
                 return splice(arena, source, span.value_start, span.value_end, text);
             }
             return insertToml(arena, source, all, key, value.written());
@@ -1482,33 +1479,6 @@ fn lineBreak(source: []const u8) []const u8 {
 /// `value` is a string that can be written that way; else null, for the format's own
 /// spelling. TOML's literal strings and YAML's single-quoted ones have no escapes, so a
 /// path such as `C:\dir` reads better kept in them.
-/// `value` as a TOML string, when it replaces a string (`old` is quoted) and reads like a
-/// date-time, which `toml.writeValue` would write bare, making it a date.
-fn keepDateTimeQuoted(arena: Allocator, old: []const u8, value: Value) EditError!?[]const u8 {
-    if (value != .string or !toml.isDateTime(value.string)) return null;
-    if (old.len == 0 or (old[0] != '"' and old[0] != '\'')) return null;
-    var out: std.Io.Writer.Allocating = .init(arena);
-    toml.writeString(&out.writer, value.string) catch |err| switch (err) {
-        error.WriteFailed => return error.OutOfMemory,
-        error.Unrepresentable => return error.Unsupported,
-    };
-    return out.written();
-}
-
-/// Whether `value` is or holds a string that reads like a TOML date-time.
-fn holdsDateTime(value: Value) bool {
-    return switch (value) {
-        .string => |s| toml.isDateTime(s),
-        .array => |a| for (a.items) |item| {
-            if (holdsDateTime(item)) break true;
-        } else false,
-        .table => |t| for (t.values()) |item| {
-            if (holdsDateTime(item)) break true;
-        } else false,
-        else => false,
-    };
-}
-
 fn keepSingleQuotes(
     arena: Allocator,
     old: []const u8,
@@ -2353,14 +2323,26 @@ test "TOML date-like strings stay strings, and date-times stay bare" {
     try expectReformat(
         .toml,
         "s   =   \"2024-01-01\"\nd = 2024-01-01\nl = [ '07:32:00', 1979-05-27 ]\nn   =   1\n",
-        "s = \"2024-01-01\"\nd = 2024-01-01\nl = [ '07:32:00', 1979-05-27 ]\nn = 1\n",
+        "s = \"2024-01-01\"\nd = 2024-01-01\nl = [\"07:32:00\", 1979-05-27]\nn = 1\n",
     );
     try expectEdit(.toml, "s = \"2024-01-01\"\n", setTo("s", .{ .string = "2025-02-02" }), "s = \"2025-02-02\"\n");
-    try expectEdit(.toml, "d = 2024-01-01\n", setTo("d", .{ .string = "2025-02-02" }), "d = 2025-02-02\n");
+    try expectEdit(.toml, "d = 2024-01-01\n", setTo("d", .{ .datetime = "2025-02-02" }), "d = 2025-02-02\n");
+    // The value's kind decides, not the text it replaces: a string is quoted.
+    try expectEdit(.toml, "d = 2024-01-01\n", setTo("d", .{ .string = "2025-02-02" }), "d = \"2025-02-02\"\n");
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const sorted = (try sort(arena.allocator(), .toml, "s = \"2024-01-01\"\na = 1\n")).?;
     try testing.expectEqualStrings("a = 1\ns = \"2024-01-01\"\n", sorted);
+}
+
+test "a date-time is set in every format" {
+    const day: Value = .{ .datetime = "2024-01-01" };
+    try expectEdit(.toml, "a = 1\n", setTo("d", day), "a = 1\nd = 2024-01-01\n");
+    try expectEdit(.json, "{\"a\": 1}\n", setTo("d", day), "{\"a\": 1, \"d\": \"2024-01-01\"}\n");
+    try expectEdit(.yaml, "a: 1\n", setTo("d", day), "a: 1\nd: 2024-01-01\n");
+    try expectEdit(.zon, ".{ .a = 1 }\n", setTo("d", day), ".{ .a = 1, .d = \"2024-01-01\" }\n");
+    try expectEdit(.dotenv, "A=1\n", setTo("d", day), "A=1\nD=2024-01-01\n");
+    try expectEdit(.ini, "a = 1\n", setTo("d", day), "a = 1\nd = 2024-01-01\n");
 }
 
 test "reformat TOML keeps comments" {

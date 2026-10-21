@@ -12,7 +12,9 @@
 //! Plain scalars resolve with the core schema: `null`/`~`/empty, `true`/`false` in three
 //! casings, decimal, `0x` and `0o` integers, and floats including `.inf`, `-.inf` and `.nan`.
 //! Anything else, and every quoted or block scalar, is a string. A decimal integer too large
-//! for an `i64` becomes a float, as in `json.zig`. An empty document is an empty table.
+//! for an `i64` becomes a float, as in `json.zig`. An empty document is an empty table. The
+//! core schema has no timestamp: `2024-01-01` is a string, and a `.datetime` is written
+//! plain and reads back as a string.
 //!
 //! Rejected with a positioned error, never misread: anchors and aliases unless enabled,
 //! tags, merge keys, complex (`?`) keys, directives, a second document, tabs in
@@ -1326,7 +1328,7 @@ fn writeFlow(writer: *std.Io.Writer, value: Value) WriteError!void {
             if (std.math.isInf(f)) return writer.writeAll(if (f > 0) ".inf" else "-.inf");
             try writeFloat(writer, f);
         },
-        .string => |s| try writeString(writer, s),
+        .string, .datetime => |s| try writeString(writer, s),
         .array => |a| {
             try writer.writeByte('[');
             for (a.items, 0..) |item, i| {

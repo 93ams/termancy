@@ -142,6 +142,30 @@ test "every format reads what it writes" {
     }
 }
 
+test "a date-like string stays a string in TOML, and a TOML date-time stays a date" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const from_json = try Format.json.parse(a, "{\"d\": \"2024-01-01\"}", null);
+    const from_toml = try Format.toml.parse(a, "d = 2024-01-01\n", null);
+    try testing.expectEqualStrings("2024-01-01", from_toml.lookup("d").?.datetime);
+    const cases = [_]struct { Value, Format, []const u8 }{
+        .{ from_json, .toml, "d = \"2024-01-01\"\n" },
+        .{ from_toml, .toml, "d = 2024-01-01\n" },
+        .{ from_toml, .json, "{\n  \"d\": \"2024-01-01\"\n}\n" },
+        .{ from_toml, .zon, ".{\n    .d = \"2024-01-01\",\n}\n" },
+        .{ from_toml, .yaml, "d: 2024-01-01\n" },
+        .{ from_toml, .dotenv, "D=2024-01-01\n" },
+        .{ from_toml, .ini, "d = 2024-01-01\n" },
+    };
+    for (cases) |case| {
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        try case[1].write(&out.writer, case[0]);
+        try testing.expectEqualStrings(case[2], out.written());
+    }
+}
+
 test "one document in JSON, YAML, and TOML reads as one tree" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();

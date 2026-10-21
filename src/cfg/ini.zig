@@ -283,7 +283,7 @@ pub fn writeScalar(writer: *std.Io.Writer, leaf: Value) WriteError!void {
     var buffer: [4096]u8 = undefined;
     var text: std.Io.Writer = .fixed(&buffer);
     switch (leaf) {
-        .string => |s| return writeText(writer, s),
+        .string, .datetime => |s| return writeText(writer, s),
         .array => |a| for (a.items, 0..) |item, i| {
             if (item == .array or item == .table) return error.Unrepresentable;
             if (i > 0) text.writeByte(',') catch return error.Unrepresentable;

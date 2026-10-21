@@ -991,6 +991,18 @@ const cases = [_]Case{
         .stdout = "[a]\nb = \"1\"\n",
     },
     .{
+        .name = "convert keeps a date-like JSON string a TOML string",
+        .args = &.{ "cfg", "convert", "-", "-f", "json", "-t", "toml" },
+        .stdin = "{\"d\": \"2024-01-01\"}",
+        .stdout = "d = \"2024-01-01\"\n",
+    },
+    .{
+        .name = "convert keeps a TOML date a date, and writes it to JSON as text",
+        .args = &.{ "cfg", "convert", "-", "-f", "toml", "-t", "json" },
+        .stdin = "d = 2024-01-01\n",
+        .stdout = "{\n  \"d\": \"2024-01-01\"\n}\n",
+    },
+    .{
         .name = "convert standard input without --from",
         // No input: termancy fails before reading it, and writing it would race the exit.
         .args = &.{ "cfg", "convert", "-", "--to", "json" },
@@ -1834,6 +1846,26 @@ const edit_chains = [_]EditChain{
         ,
     },
     .{
+        .name = "a profile named like a date, recorded bare, is still the one in use",
+        .seed = "profiled_by_date",
+        .file = "profiled_by_date.toml",
+        .steps = &.{
+            .{ .args = &.{ "profile", "list" }, .stdout = "* 2024-01-01\n" },
+            .{ .args = &.{ "get", "server.host" }, .stdout = "example.com\n" },
+        },
+        .content =
+        \\current_profile = 2024-01-01
+        \\
+        \\[server]
+        \\host = "localhost"
+        \\
+        \\[profiles."2024-01-01".server]
+        \\host = "example.com"
+        \\
+        \\
+        ,
+    },
+    .{
         .name = "fmt --sort sorts every table",
         .seed = "unsorted",
         .file = "unsorted.toml",
@@ -1938,10 +1970,14 @@ const edit_chains = [_]EditChain{
             .{ .args = &.{ "set", "ratio", "1.5" } },
             .{ .args = &.{ "set", "on", "true" } },
             .{ .args = &.{ "set", "-s", "off", "false" } },
+            .{ .args = &.{ "set", "start", "2024-01-01" } },
+            .{ .args = &.{ "set", "-s", "day", "2024-01-02" } },
             .{ .args = &.{ "rm", "a" } },
             .{ .args = &.{ "get", "version", "-o", "json" }, .stdout = "\"1.10\"\n" },
+            .{ .args = &.{ "get", "start", "-o", "json" }, .stdout = "\"2024-01-01\"\n" },
         },
-        .content = "version = \"1.10\"\nratio = 1.5\non = true\noff = \"false\"\n",
+        .content = "version = \"1.10\"\nratio = 1.5\non = true\noff = \"false\"\n" ++
+            "start = 2024-01-01\nday = \"2024-01-02\"\n",
     },
     .{
         .name = "failed edits leave the file alone",

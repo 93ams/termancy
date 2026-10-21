@@ -1432,10 +1432,13 @@ fn foldTree(config: *Config, a: Allocator, tree: Value) Allocator.Error!Value {
     }
 }
 
-/// Marks `key_path` as secret: `write` redacts it.
+/// Marks `key_path` as secret: `write` redacts it, and every reference that expands it.
 pub fn markSecret(config: *Config, key_path: []const u8) Allocator.Error!void {
+    if (config.secrets.contains(key_path)) return;
     const a = config.arena.allocator();
     try config.secrets.put(a, try a.dupe(u8, key_path), {});
+    // References that expanded it earlier were recorded as plain; a rebuild redacts them.
+    config.invalidate();
 }
 
 /// Whether the value at `key` is or holds a secret: the key or a table above it is secret,
@@ -1787,7 +1790,7 @@ const Expander = struct {
         if (e.config.holdsSecret(target)) try e.config.derived_secrets.put(e.arena, from, {});
         const value = e.root.lookup(target).?;
         return switch (value) {
-            .string => |s| s,
+            .string, .datetime => |s| s,
             .table, .array => {
                 try e.report(from, try std.fmt.allocPrint(
                     e.arena,
@@ -2112,7 +2115,7 @@ pub fn flagText(config: *Config, key_path: []const u8) Allocator.Error!?[]const 
 /// A scalar's text, in `a`; null for anything else.
 fn scalarText(a: Allocator, value: Value) Allocator.Error!?[]const u8 {
     return switch (value) {
-        .string => |text| try a.dupe(u8, text),
+        .string, .datetime => |text| try a.dupe(u8, text),
         .bool => |b| if (b) "true" else "false",
         .int => |n| try std.fmt.allocPrint(a, "{d}", .{n}),
         .float => |f| try std.fmt.allocPrint(a, "{d}", .{f}),
@@ -3161,6 +3164,38 @@ test "a reference to a secret is redacted where it expands" {
     try testing.expect(std.mem.indexOf(u8, out.written(), "host = \"h\"") != null);
     // Only what is written is redacted; the value itself still expands.
     try testing.expectEqualStrings("pg://u:hunter2@h", (try config.get("db.url")).?.string);
+}
+
+test "marking a secret after a get redacts the references that expanded it" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    config.useReferences();
+    try config.loadSource("a.toml",
+        \\password = "hunter2"
+        \\url = "pg://u:${password}@h"
+    , .toml, null);
+    try testing.expectEqualStrings("pg://u:hunter2@h", (try config.get("url")).?.string);
+    try config.markSecret("password");
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try config.write(&out.writer, .toml, .{});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "hunter2") == null);
+}
+
+test "a date-time expands to its text in a reference, and is redacted as a secret" {
+    var config: Config = .init(testing.allocator);
+    defer config.deinit();
+    config.useReferences();
+    try config.loadSource("a.toml",
+        \\born = 1979-05-27
+        \\file = "backup-${born}.tar"
+    , .toml, null);
+    try config.markSecret("born");
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try config.write(&out.writer, .toml, .{});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "1979") == null);
+    try testing.expectEqualStrings("backup-1979-05-27.tar", (try config.get("file")).?.string);
 }
 
 test "a scalar or empty document is handled per format" {

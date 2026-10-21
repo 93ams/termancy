@@ -16,8 +16,10 @@ flags, overrides; decoding into structs; provenance. The role [viper] plays in G
 
 ## Value model
 
-One dynamic tree (`cfg.Value`: null, bool, int, float, string, array, ordered table) addressed
-by dotted paths: `servers.0.host`, `a."dotted.key"`.
+One dynamic tree (`cfg.Value`: null, bool, int, float, string, date-time, array, ordered table)
+addressed by dotted paths: `servers.0.host`, `a."dotted.key"`. A date-time (`.datetime`) holds
+the text of a TOML offset date-time, local date-time, local date, or local time; only TOML
+reads one, and the other formats write it as text, which they read back as a string.
 
 ## Formats
 
@@ -27,7 +29,7 @@ All read and written, with errors at line and column:
 |---|---|
 | JSON | full; also streamed from a reader (`json.parseReader`, `Config.loadReader`) |
 | JSON with comments | `.jsonc`, `.json5`: `//` and `/* */` comments, trailing commas; written as JSON |
-| TOML | 1.0; date-times keep their text, decode into `cfg.DateTime`, and are written back bare |
+| TOML | 1.0; date-times keep their text, decode into `cfg.DateTime` or text, and are written back bare; strings are always written quoted |
 | YAML | the configuration subset: block and flow collections, quoted, plain, and block scalars over several lines, indentation indicators, comments; anchors and aliases with `parseWith(.{ .aliases = true })`, under a node budget; tags and multiple documents are rejected rather than misread; read from a reader a top-level entry at a time (`yaml.parseReader`, `Config.loadReader`) |
 | ZON | everything `@import` of a `.zon` file accepts, parsed by the compiler's own front end; writes zig-fmt output |
 | dotenv | `export`, quotes, escapes, `$VAR` / `${VAR}` / `${VAR:-default}`; `A__B` nests as `a.b` |

@@ -307,7 +307,7 @@ fn writeValue(
         .bool => |b| try writer.writeAll(if (b) "true" else "false"),
         .int => |i| try writer.print("{d}", .{i}),
         .float => |f| try writeFloat(writer, f),
-        .string => |s| try writeString(writer, s),
+        .string, .datetime => |s| try writeString(writer, s),
         .array => |a| {
             if (level == max_depth) return error.Unrepresentable;
             if (a.items.len == 0) return writer.writeAll(".{}");

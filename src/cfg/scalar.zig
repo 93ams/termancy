@@ -7,6 +7,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Value = @import("value.zig").Value;
+const toml = @import("toml.zig");
 
 /// What the `parse` functions can fail with.
 pub const ParseError = error{ InvalidCharacter, Overflow };
@@ -174,8 +175,9 @@ fn scaleNumber(number: []const u8, scale: u64) ParseError!u64 {
 }
 
 /// The value untyped text most plausibly means: `true`/`false` are booleans, integers and
-/// decimal floats are numbers, `null` is null, and anything else is the string itself. Used
-/// for command-line `key=value` input, where the user wrote no type.
+/// decimal floats are numbers, `null` is null, a TOML date or time (`2024-01-01`,
+/// `07:32:00`) is a date-time, and anything else is the string itself. Used for
+/// command-line `key=value` input, where the user wrote no type.
 pub fn infer(text: []const u8) Value {
     if (std.mem.eql(u8, text, "true")) return .{ .bool = true };
     if (std.mem.eql(u8, text, "false")) return .{ .bool = false };
@@ -184,6 +186,7 @@ pub fn infer(text: []const u8) Value {
     if (looksLikeDecimal(text)) {
         if (std.fmt.parseFloat(f64, text)) |f| return .{ .float = f } else |_| {}
     }
+    if (toml.isDateTime(text)) return .{ .datetime = text };
     return .{ .string = text };
 }
 
@@ -209,8 +212,8 @@ fn looksLikeDecimal(text: []const u8) bool {
 /// has, in RFC 3339 spelling. Text forms: `1979-05-27`, `07:32:00`, `07:32:00.999`,
 /// `1979-05-27T07:32:00` (local), `1979-05-27T07:32:00Z`, `1979-05-27 07:32:00-07:00`.
 ///
-/// Configuration keeps a date-time as its text (TOML writes it back unquoted), and a field
-/// of this type decodes it.
+/// Configuration keeps a date-time as a `.datetime` holding its text (TOML writes it back
+/// bare), and a field of this type decodes it and encodes as one.
 pub const DateTime = struct {
     date: ?Date = null,
     time: ?Time = null,
@@ -431,7 +434,11 @@ test infer {
     try testing.expectEqual(Value{ .float = 2.5 }, infer("2.5"));
     try testing.expectEqual(Value{ .float = 1e3 }, infer("1e3"));
     try testing.expectEqual(Value.null, infer("null"));
-    const strings = [_][]const u8{ "1.2.3", "inf", "nan", "0x10", "True", "", "8080/tcp" };
+    try testing.expectEqualStrings("2024-01-01", infer("2024-01-01").datetime);
+    try testing.expectEqualStrings("07:32:00", infer("07:32:00").datetime);
+    const strings = [_][]const u8{
+        "1.2.3", "inf", "nan", "0x10", "True", "", "8080/tcp", "2024-13-01",
+    };
     for (strings) |text| try testing.expectEqualStrings(text, infer(text).string);
 }
 
