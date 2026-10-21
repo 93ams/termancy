@@ -586,15 +586,16 @@ const SharedSecret = struct {
     protocol: PinProtocol,
     bytes: [64]u8,
 
-    fn derive(protocol: PinProtocol, z: [32]u8) SharedSecret {
+    fn derive(protocol: PinProtocol, z: *const [32]u8) SharedSecret {
         var secret: SharedSecret = .{ .protocol = protocol, .bytes = undefined };
         switch (protocol) {
             .one => {
-                Sha256.hash(&z, secret.bytes[0..32], .{});
+                Sha256.hash(z, secret.bytes[0..32], .{});
                 secret.bytes[32..].* = secret.bytes[0..32].*;
             },
             .two => {
-                const prk = HkdfSha256.extract(&@as([32]u8, @splat(0)), &z);
+                var prk = HkdfSha256.extract(&@as([32]u8, @splat(0)), z);
+                defer secure.wipe(&prk);
                 HkdfSha256.expand(secret.bytes[0..32], "CTAP2 HMAC key", prk);
                 HkdfSha256.expand(secret.bytes[32..], "CTAP2 AES key", prk);
             },
@@ -784,10 +785,16 @@ fn writeAgreementKey(w: *Io.Writer, point: P256) Io.Writer.Error!void {
     try cbor.writeBytes(w, &affine.y.toBytes(.big));
 }
 
-/// One side of the key agreement: `own` times `theirs`, and the secret from its `x`.
-fn agree(protocol: PinProtocol, own: [32]u8, theirs: P256) ?SharedSecret {
-    const product = theirs.mul(own, .big) catch return null;
-    return .derive(protocol, product.affineCoordinates().x.toBytes(.big));
+/// One side of the key agreement: `own` times `theirs`, and the secret from its `x`. The
+/// shared point and its `x` are wiped.
+fn agree(protocol: PinProtocol, own: *const [32]u8, theirs: P256) ?SharedSecret {
+    var product = theirs.mul(own.*, .big) catch return null;
+    defer secure.wipe(std.mem.asBytes(&product));
+    var affine = product.affineCoordinates();
+    defer secure.wipe(std.mem.asBytes(&affine));
+    var z = affine.x.toBytes(.big);
+    defer secure.wipe(&z);
+    return .derive(protocol, &z);
 }
 
 /// Gets a PIN token from the key: agrees a secret, then sends the PIN's hash encrypted
@@ -808,7 +815,7 @@ pub fn getPinToken(
     var own = P256.scalar.random(channel.io, .big);
     defer secure.wipe(&own);
     const ours = P256.basePoint.mul(own, .big) catch return error.InvalidResponse;
-    var secret = agree(protocol, own, theirs) orelse return error.InvalidResponse;
+    var secret = agree(protocol, &own, theirs) orelse return error.InvalidResponse;
     defer secure.wipe(&secret.bytes);
 
     var pin_hash: [Sha256.digest_length]u8 = undefined;
@@ -1137,7 +1144,7 @@ const FakeKey = struct {
             @backingInt(PinCommand.get_pin_token) => {
                 const pin = key.pin orelse return w.writeByte(0x35);
                 if (key.retries == 0) return w.writeByte(0x32);
-                const secret = agree(protocol, key.agreement, platform.?).?;
+                const secret = agree(protocol, &key.agreement, platform.?).?;
                 var plain: [32]u8 = undefined;
                 const given = secret.decrypt(pin_hash_enc, &plain) orelse return w.writeByte(0x11);
                 var want: [Sha256.digest_length]u8 = undefined;
