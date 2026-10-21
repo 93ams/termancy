@@ -477,6 +477,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg`: `Config.markSecret` after a `get` also redacts the references that had already
+  expanded the secret (`url = "pg://u:${password}@h"`); `write` and `snapshot` showed them
+  in plain text.
 - `cfg`: converting to TOML (`termancy cfg convert`, `toml.write`) no longer turns a string
   that reads like a date (`{"d": "2024-01-01"}`) into a TOML date for every other reader; it
   stays a quoted string, and so does a new key set with `cfg set --string`.
