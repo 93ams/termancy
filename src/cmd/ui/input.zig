@@ -278,11 +278,11 @@ pub const write = cli.command(.{
     .summary = "Read several lines of text",
     .description =
     \\Read text of any number of lines and print it. It starts as --value, or else as what
-    \\standard input holds when it is piped. Lines longer than --width wrap; the text
-    \\scrolls past --height rows.
+    \\standard input holds when it is piped. Lines longer than --width wrap between words;
+    \\the text scrolls past --height rows. With ACCESSIBLE=1, the text is typed as plain
+    \\lines, ended by an empty line twice or Ctrl-D.
     \\
-    \\Keys: enter submits (so does Ctrl-D); ctrl+j or alt+enter starts a new line (ctrl+j
-    \\only where the terminal tells it from enter, with the kitty keyboard protocol);
+    \\Keys: enter submits (so does Ctrl-D); ctrl+j (or alt+enter) starts a new line;
     \\ctrl+e opens the text in $VISUAL or $EDITOR and takes it back when the editor exits;
     \\the usual editing keys, and ctrl+z to undo; esc cancels (status 1); Ctrl-C interrupts
     \\(status 130). --timeout ends with status 124.
@@ -301,6 +301,14 @@ pub const write = cli.command(.{
 
 fn runWrite(ctx: *cli.Context, flags: WriteFlags) !void {
     const value = try startingValue(ctx, flags.value, flags.strip_ansi);
+    if (plain.wanted(ctx)) {
+        var session: plain.Session = undefined;
+        try session.open(ctx);
+        defer session.close();
+        const text = try session.text(flags.header, flags.placeholder, value);
+        try ctx.out.print("{s}\n", .{text});
+        return;
+    }
     const header = try styles.render(
         ctx.arena,
         flags.header_style.over(ctx.theme.note),
@@ -315,17 +323,14 @@ fn runWrite(ctx: *cli.Context, flags: WriteFlags) !void {
         &write_hints,
     );
     defer model.deinit();
-    // The kitty keyboard protocol, where there is one, tells ctrl+j from enter.
-    var options = term.timed(term.inline_options, flags.timeout);
-    options.kitty_keyboard = true;
+    const options = term.timed(term.inline_options, flags.timeout);
     if (try term.run(ctx, @TypeOf(model), &model, options)) return term.exitInterrupted(ctx);
     if (model.inner.area.status != .submitted) return error.CommandFailed;
     try ctx.out.print("{s}\n", .{model.inner.area.value()});
 }
 
 const write_hints = [_]term.Hint{
-    // alt+enter first: ctrl+j is enter where the terminal cannot tell them apart.
-    .{ .keys = &.{ "alt+enter", "ctrl+j" }, .action = .hint, .help = "insert newline" },
+    .{ .keys = &.{"ctrl+j"}, .action = .hint, .help = "insert newline" },
     .{ .keys = &.{"ctrl+e"}, .action = .hint, .help = "open editor" },
     .{ .keys = &.{"enter"}, .action = .hint, .help = "submit" },
 };
@@ -576,7 +581,7 @@ test "write: rows to --height, line numbers, the cursor, and --max-lines" {
     var d: tui.testing.Driver(@TypeOf(model)) = try .init(testing.allocator, model, .{});
     defer d.deinit();
     try d.expectFrame("┃ 1 one \n┃    \n┃    \n┃    \n\n" ++
-        "alt+enter/ctrl+j insert newline • ctrl+e open editor • enter submit");
+        "ctrl+j insert newline • ctrl+e open editor • enter submit");
     try testing.expectEqual(0, d.screen.row);
     try testing.expectEqual(7, d.screen.column);
     try d.press("ctrl+j");

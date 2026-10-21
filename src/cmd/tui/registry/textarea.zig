@@ -9,7 +9,7 @@
 //! if (area.status == .submitted) use(area.value());
 //! ```
 //!
-//! Keys: printable characters insert, enter starts a new line; left/right move by
+//! Keys: printable characters insert, enter (or ctrl+j) starts a new line; left/right move by
 //! character, alt+left/alt+right by word, up/down by line (keeping the column), home/end
 //! (ctrl+a/ctrl+e) to the ends of the line; backspace and delete erase; ctrl+w erases the
 //! word before the cursor, ctrl+u the line before it, ctrl+k the line after it. Ctrl+d
@@ -22,10 +22,10 @@
 //! `undo_limit` steps are kept, each a copy of the whole text; 0 turns undo off. A
 //! `tui.Program` with `suspend_on_ctrl_z` on stops the process on ctrl+z instead.
 //!
-//! With `width`, a line longer than a row continues on the next (between characters),
-//! and up and down move by rows. `max_lines` bounds the lines; `end_of_buffer` fills the
-//! rows below the text up to `height`, as an editor marks them. `cursorPosition` is where a
-//! real terminal cursor goes (`tui.Cursor`).
+//! With `width`, a line longer than a row continues on the next (between words, or
+//! characters for a longer word), and up and down move by rows. `max_lines` bounds the
+//! lines; `end_of_buffer` fills the rows below the text up to `height`, as an editor marks
+//! them. `cursorPosition` is where a real terminal cursor goes (`tui.Cursor`).
 //!
 //! The text grows with `gpa`; a keystroke that needs memory that is not there is dropped.
 
@@ -267,7 +267,7 @@ fn edit(area: *Textarea, key: tui.input.Key) bool {
             area.last_edit = .none;
         }
         area.insertAs(buffer[0..len], .typing) catch {};
-    } else if (key.matches("enter")) {
+    } else if (key.matches("enter") or key.matches("ctrl+j")) {
         area.insertAs("\n", .typing) catch {};
     } else if (key.matches("ctrl+z")) {
         _ = area.undo();
@@ -388,15 +388,23 @@ pub const Rows = struct {
     }
 };
 
-/// The end of a row from `start`: as many characters as fit in `columns`, at least one.
+/// The end of a row from `start`: up to the last space that fits in `columns`, or for a
+/// word longer than that, as many characters as fit (at least one). A space at the edge
+/// stays on the row, in the column kept for the cursor.
 fn rowEnd(line: []const u8, start: usize, columns: usize) usize {
     var it: tui.width.Iterator = .{ .bytes = line, .index = start };
     var used: usize = 0;
     var end = start;
+    var after_space = start;
     while (it.next()) |cluster| {
-        if (used + cluster.width > columns and end > start) break;
+        const space = cluster.bytes[0] == ' ';
+        if (used + cluster.width > columns and end > start) {
+            if (space) return it.index;
+            return if (after_space > start) after_space else end;
+        }
         used += cluster.width;
         end = it.index;
+        if (space) after_space = end;
     }
     return end;
 }
@@ -768,6 +776,23 @@ test "width wraps long lines; up and down move by rows" {
     try testing.expectEqual(4, d.model().cursor);
     try d.press("down");
     try testing.expectEqual(7, d.model().cursor);
+}
+
+test "width wraps between words, and cuts a longer word" {
+    var area: Textarea = .{
+        .gpa = testing.allocator,
+        .prompt = "> ",
+        .width = 7,
+        .focused = false,
+        .styles = .{ .prompt = .{} },
+    };
+    defer area.deinit();
+    // Seven columns: the prompt, four characters, and one for the cursor.
+    try area.setValue("ab cd ef abcdefg");
+    var out: Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try area.view(&out.writer);
+    try testing.expectEqualStrings("> ab \n> cd \n> ef \n> abcd\n> efg", out.written());
 }
 
 test "max_lines stops the text at a line break past it" {

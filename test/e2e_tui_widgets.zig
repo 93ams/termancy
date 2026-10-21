@@ -685,10 +685,19 @@ const pty_cases = [_]PtyCase{
         .stdout = "one\nappended-line\n",
     },
     .{
+        // ctrl+j (LF) starts a line, as gum's.
         .name = "write --show-line-numbers --max-lines 2",
         .command = "\"$TERMANCY\" ui write --show-line-numbers --max-lines 2",
-        .keys = "a\\033\\rb\\033\\rc\\r",
+        .keys = "a\\nb\\nc\\r",
         .stdout = "a\nbc\n",
+    },
+    .{
+        .name = "ACCESSIBLE: write, ended by an empty line twice",
+        .command = "\"$TERMANCY\" ui write --header Notes",
+        .keys = "one\\r\\rtwo\\r\\r\\r",
+        .env = &accessible,
+        .wait_for = "ends it.",
+        .stdout = "one\n\ntwo\n",
     },
     .{
         // gum's timeout: no error, the answer highlighted (the default) is taken.

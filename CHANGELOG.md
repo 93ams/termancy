@@ -9,6 +9,11 @@ git history.
 
 ### Breaking
 
+- **A line feed is ctrl+j, not enter:** `term.input` decodes LF (0x0a) as ctrl+j, as Bubble
+  Tea and crossterm do; enter is CR, which every terminal sends in raw mode (Windows
+  consoles with virtual terminal input too). The textarea takes ctrl+j as enter.
+- **`termancy ui write` submits with enter**, as gum's: ctrl+j (or alt+enter) starts a line.
+  Ctrl-D still submits.
 - **`cfg.Value` has a date-time kind:** `.datetime` holds the text of a TOML offset
   date-time, local date-time, local date, or local time, and `toml.parse` gives one where it
   gave a `.string`. An exhaustive `switch` over a `cfg.Value` needs a `.datetime` arm. TOML
@@ -166,18 +171,18 @@ git history.
 
 ### Added
 
-- **`termancy ui input`, `write`, and `confirm` work as gum's:** `input` takes `--width` (text
-  wider scrolls sideways), `--cursor.mode blink|static|hide` (the terminal's own cursor), and
-  its value from standard input when piped; `write` submits with enter, starts a line with
-  ctrl+j or alt+enter, opens the text in `$EDITOR` with ctrl+e, wraps lines at `--width`,
-  and takes `--show-line-numbers`, `--show-cursor-line`, `--max-lines`, and a value from
-  standard input; `confirm` takes `--show-output`, `--timeout` (the highlighted answer, not
-  an error), `--default=false` and `--no-default` beside `--default no`, an empty
-  `--negative` for one button, and `q` for no. All three take `--header`, `--padding`,
+- **`termancy ui input`, `write`, and `confirm` work as gum's:** `input` takes `--width`
+  (text wider scrolls sideways), `--cursor.mode blink|static|hide` (the terminal's own
+  cursor), and its value from standard input when piped; `write` opens the text in `$EDITOR`
+  with ctrl+e, wraps lines between words at `--width`, asks with plain lines under
+  `ACCESSIBLE=1`, and takes `--show-line-numbers`, `--show-cursor-line`, `--max-lines`, and
+  a value from standard input; `confirm` takes `--show-output`, `--timeout` (the highlighted
+  answer, not an error), `--default=false` and `--no-default` beside `--default no`, an
+  empty `--negative` for one button, and `q` for no. All three take `--header`, `--padding`,
   `--show-help`, style groups (`--cursor.foreground`, `--selected.background`,
   `--line-number.foreground`), and `TERMANCY_INPUT_*`, `TERMANCY_WRITE_*`, and
-  `TERMANCY_CONFIRM_*` variables. Components: `input`'s `width` and `scroll`;
-  `textarea`'s `width` (lines wrap, up and down move by rows), `max_lines`,
+  `TERMANCY_CONFIRM_*` variables. Components: `input`'s `width` and `scroll`; `textarea`'s
+  `width` (lines wrap between words, up and down move by rows), `max_lines`,
   `end_of_buffer`, `cursor_line` styles, and `cursorPosition`; `confirm`'s ctrl+n/ctrl+p,
   `q`, and an empty `negative`. `sys.process.editText` takes `.at`.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in

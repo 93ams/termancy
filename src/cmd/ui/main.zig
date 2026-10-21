@@ -20,8 +20,9 @@
 //! Interactive commands draw on the terminal (`/dev/tty` when stdio is redirected) and
 //! print results to standard output, so they compose in `$(...)` and pipes. Without any
 //! terminal they fail at once with status 2. Esc ends with status 1 and Ctrl-C with 130,
-//! printing nothing. With `ACCESSIBLE=1`, `choose`, `confirm`, and `input` ask with plain
-//! lines instead, numbered choices and typed answers, for screen readers (plain.zig).
+//! printing nothing. With `ACCESSIBLE=1`, `choose`, `confirm`, `input`, and `write` ask
+//! with plain lines instead, numbered choices and typed answers, for screen readers
+//! (plain.zig).
 //! `style`, `format`, and `table --print` write escapes only where
 //! standard output shows them, honoring `NO_COLOR` and `FORCE_COLOR`. See term.zig.
 //!

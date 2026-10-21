@@ -376,11 +376,12 @@ fn decodeOne(bytes: []const u8, final: bool, allow_alt: bool) Decoded {
 /// The key a single ASCII byte stands for.
 fn controlKey(c: u8) Key.Code {
     return switch (c) {
-        '\r', '\n' => .enter,
+        // In raw mode Enter sends CR; LF is ctrl+j, as Bubble Tea and crossterm read it.
+        '\r' => .enter,
         '\t' => .tab,
         0x7f, 0x08 => .backspace,
         0x00 => .{ .char = ' ' },
-        0x01...0x07, 0x0b, 0x0c, 0x0e...0x1a => .{ .char = 'a' + c - 1 },
+        0x01...0x07, 0x0a...0x0c, 0x0e...0x1a => .{ .char = 'a' + c - 1 },
         0x1c...0x1f => .{ .char = '\\' + c - 0x1c },
         else => .{ .char = c },
     };
@@ -388,8 +389,8 @@ fn controlKey(c: u8) Key.Code {
 
 fn controlMods(c: u8) Mods {
     return switch (c) {
-        '\r', '\n', '\t', 0x7f => .{},
-        0x00...0x08, 0x0b, 0x0c, 0x0e...0x1a, 0x1c...0x1f => .{ .ctrl = true },
+        '\r', '\t', 0x7f => .{},
+        0x00...0x08, 0x0a...0x0c, 0x0e...0x1a, 0x1c...0x1f => .{ .ctrl = true },
         else => .{},
     };
 }
@@ -877,7 +878,7 @@ test "decode: printable text and UTF-8" {
 }
 
 test "decode: control keys" {
-    try expectDecoded("enter enter tab backspace", "\r\n\t\x7f");
+    try expectDecoded("enter ctrl+j tab backspace", "\r\n\t\x7f");
     try expectDecoded("ctrl+a ctrl+c ctrl+z ctrl+backspace", "\x01\x03\x1a\x08");
     try expectDecoded("ctrl+space ctrl+\\ ctrl+] ctrl+^ ctrl+_", "\x00\x1c\x1d\x1e\x1f");
 }
