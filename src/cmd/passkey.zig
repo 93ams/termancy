@@ -84,6 +84,8 @@ pub const command = cli.command(.{
 fn runGet(ctx: *cli.Context, flags: GetFlags) !void {
     const options = webauthn.RequestOptions.parseJson(ctx.arena, try readOptions(ctx)) catch |err|
         return badOptions(ctx, err);
+    // Before any authenticator is asked, on every system.
+    if (webauthn.rpIdFor(options.rp_id, flags.origin) == null) return ctx.fail(invalid_origin, .{});
     const assertion = switch (builtin.os.tag) {
         .windows => windows_hello.assert(ctx.arena, options, flags.origin, .{
             .attachment = attachmentOf(flags.authenticator),
@@ -98,6 +100,7 @@ fn runGet(ctx: *cli.Context, flags: GetFlags) !void {
 fn runCreate(ctx: *cli.Context, flags: CreateFlags) !void {
     const options = webauthn.CreationOptions.parseJson(ctx.arena, try readOptions(ctx)) catch |err|
         return badOptions(ctx, err);
+    if (webauthn.rpIdFor(options.rp.id, flags.origin) == null) return ctx.fail(invalid_origin, .{});
     if (builtin.os.tag != .windows) {
         return ctx.fail(
             "passkey create needs Windows Hello; not supported on this system yet",
@@ -166,7 +169,6 @@ fn securityKeyAssert(
     options: webauthn.RequestOptions,
     flags: GetFlags,
 ) !webauthn.Assertion {
-    if (webauthn.rpIdFor(options.rp_id, flags.origin) == null) return ctx.fail(invalid_origin, .{});
     const paths = try ctap.Hidraw.list(ctx.arena, ctx.io);
     if (paths.len == 0) return ctx.fail("no FIDO security key found (in /dev/hidraw*)", .{});
     var hid = ctap.Hidraw.open(ctx.io, paths[0]) catch |err|

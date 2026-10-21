@@ -472,6 +472,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `passkey get` and `create` check the RP ID against `--origin` before anything else, on
+  every system: `create` away from Windows said it needs Windows Hello instead.
 - `ctap.getPinToken` wipes the PIN's hash, the secret shared with the key, and its
   ephemeral key on every way out, errors included; they stayed on the stack.
 - `ctap.Channel.open` waits past another program's INIT reply on the broadcast channel

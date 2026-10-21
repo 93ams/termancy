@@ -28,6 +28,9 @@ const Case = struct {
     status: u8 = 0,
 };
 
+const passkey_invalid_origin = "termancy: --origin names no host, or the options name an " ++
+    "RP ID that is not its host or a domain it is under\n";
+
 const termancy_toml_json =
     \\{
     \\  "name": "demo",
@@ -1526,6 +1529,22 @@ const cases = [_]Case{
         .args = &.{ "passkey", "create", "--origin", "https://example.com" },
         .stdin = "{\"rp\":{\"name\":\"x\"},\"challenge\":\"AA\"}",
         .stderr = "termancy: the options lack a required field\n",
+        .status = 1,
+    },
+    .{
+        .name = "passkey get refuses an RP ID its origin does not own",
+        .args = &.{ "passkey", "get", "--origin", "https://evil.example" },
+        .stdin = "{\"challenge\":\"AAAA\",\"rpId\":\"bank.example\"}",
+        .stderr = passkey_invalid_origin,
+        .status = 1,
+    },
+    .{
+        .name = "passkey create refuses an RP ID its origin does not own",
+        .args = &.{ "passkey", "create", "--origin", "https://evil.example" },
+        .stdin = "{\"rp\":{\"id\":\"bank.example\",\"name\":\"x\"}," ++
+            "\"user\":{\"id\":\"AA\",\"name\":\"n\",\"displayName\":\"d\"}," ++
+            "\"challenge\":\"AA\",\"pubKeyCredParams\":[{\"type\":\"public-key\",\"alg\":-7}]}",
+        .stderr = passkey_invalid_origin,
         .status = 1,
     },
 
