@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A GIF with an LZW minimum code size of 1 (below the spec's 2) is read as giflib and
+  Chrome read it; its codes never grew wider, so most of it came out wrong.
 - A baseline or extended JPEG scan with successive approximation (Ah or Al not 0) is
   refused, as the standard requires; it was decoded with its coefficients shifted.
 - A JPEG quantization table whose precision is neither 8 nor 16 bits is refused; it was read

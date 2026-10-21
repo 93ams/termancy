@@ -966,7 +966,8 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                     at += 3 * n;
                 }
                 if (at >= data.len) return error.InvalidImage;
-                // At most 8 (codes are bytes); larger overflowed the code table.
+                // At most 8 (codes are bytes); larger overflowed the code table. Below the
+                // spec's 2, 0 and 1 are read as giflib and Chrome's Wuffs read them.
                 if (data[at] > 8) return error.InvalidImage;
                 const min_code: u4 = @intCast(data[at]);
                 at += 1;
@@ -1081,8 +1082,10 @@ fn unlzw(gpa: Allocator, stream: []const u8, min_code: u4, count: usize) DecodeE
             suffixes[next] = out[written - (if (code >= next) len + 1 else len)];
             lengths[next] = lengths[prev] + 1;
             next += 1;
-            if (next == (@as(u16, 1) << @intCast(width)) and width < 12) width += 1;
         };
+        // Wider once the next code needs it: after a clear's first code too, which only the
+        // minimum code sizes 0 and 1 need.
+        if (next >= @as(u16, 1) << @intCast(width) and width < 12) width += 1;
         previous = code;
     }
     return out;
@@ -1811,23 +1814,29 @@ test "LZW round trips across table resets" {
     var prng: std.Random.DefaultPrng = .init(4);
     const data = try gpa.alloc(u8, 20000);
     defer gpa.free(data);
-    for (data, 0..) |*d, i| d.* = if (i % 3 == 0) prng.random().int(u8) else @truncate(i / 50);
-    var out: Writer.Allocating = .init(gpa);
-    defer out.deinit();
-    try lzw(gpa, &out.writer, data, 8);
-    // Undo the sub-blocks.
-    var stream: std.ArrayList(u8) = .empty;
-    defer stream.deinit(gpa);
-    var at: usize = 0;
-    const bytes = out.written();
-    while (at < bytes.len and bytes[at] != 0) {
-        const n: usize = bytes[at];
-        try stream.appendSlice(gpa, bytes[at + 1 ..][0..n]);
-        at += 1 + n;
+    // And from a minimum code size of 1, below the spec's 2, as giflib and Wuffs read it.
+    for ([_]u4{ 8, 1 }) |min_code| {
+        const mask: u8 = @intCast((@as(u16, 1) << min_code) - 1);
+        for (data, 0..) |*d, i| {
+            d.* = mask & if (i % 3 == 0) prng.random().int(u8) else @as(u8, @truncate(i / 50));
+        }
+        var out: Writer.Allocating = .init(gpa);
+        defer out.deinit();
+        try lzw(gpa, &out.writer, data, min_code);
+        // Undo the sub-blocks.
+        var stream: std.ArrayList(u8) = .empty;
+        defer stream.deinit(gpa);
+        var at: usize = 0;
+        const bytes = out.written();
+        while (at < bytes.len and bytes[at] != 0) {
+            const n: usize = bytes[at];
+            try stream.appendSlice(gpa, bytes[at + 1 ..][0..n]);
+            at += 1 + n;
+        }
+        const back = try unlzw(gpa, stream.items, min_code, data.len);
+        defer gpa.free(back);
+        try testing.expectEqualSlices(u8, data, back);
     }
-    const back = try unlzw(gpa, stream.items, 8, data.len);
-    defer gpa.free(back);
-    try testing.expectEqualSlices(u8, data, back);
 }
 
 /// Writes a GIF frame of `indices` in the global palette of 16 colors, after a graphic
