@@ -292,6 +292,13 @@ const cases = [_]Case{
             usage("spin"),
         .status = 2,
     },
+    // choose/filter (gum parity)
+    .{
+        .name = "choose: an item without the --label-delimiter",
+        .args = &.{ "ui", "choose", "--label-delimiter", ":", "a:1", "b" },
+        .stderr = "termancy: item \"b\" has no --label-delimiter \":\"\n",
+        .status = 1,
+    },
 };
 
 /// Cases run with no controlling terminal (under `setsid`).
@@ -371,6 +378,20 @@ const detached_cases = [_]Case{
         .args = &.{ "ui", "spin", "--", "termancy-e2e-no-such-command" },
         .stderr = "termancy: termancy-e2e-no-such-command: command not found\n",
         .status = 127,
+    },
+    // choose/filter (gum parity)
+    .{
+        // Standard input and output redirected, and no terminal at all: none is needed.
+        .name = "choose --select-if-one: the lone item's value",
+        .args = &.{ "ui", "choose", "--select-if-one", "--label-delimiter", ":" },
+        .stdin = "Only one:1\n",
+        .stdout = "1\n",
+    },
+    .{
+        .name = "filter --select-if-one: the only match of --value",
+        .args = &.{ "ui", "filter", "--select-if-one", "--value", "ban" },
+        .stdin = "apple\nbanana\ncherry\n",
+        .stdout = "banana\n",
     },
 };
 
@@ -629,6 +650,74 @@ const pty_cases = [_]PtyCase{
         .wait_for = "What now?",
         .stdout = "a = 1\n",
         .status = 1,
+    },
+    // choose/filter (gum parity)
+    .{
+        .name = "choose: $(...) captures only the result",
+        .command = "x=$(\"$TERMANCY\" ui choose a b c); echo \"got:$x\"",
+        .keys = "j\\r",
+        .stdout = "got:b\n",
+    },
+    .{
+        .name = "choose --label-delimiter: labels shown and selected, the value printed",
+        .command = "\"$TERMANCY\" ui choose --label-delimiter : --selected Green " ++
+            "Red:#f00 Green:#0f0",
+        .keys = "\\r",
+        .stdout = "#0f0\n",
+    },
+    .{
+        .name = "choose --selected '*': all, up to the limit",
+        .command = "\"$TERMANCY\" ui choose --limit 2 --selected '*' a b c",
+        .keys = "\\r",
+        .stdout = "a\nb\n",
+    },
+    .{
+        // Sorted to a b c; c chosen first, then a.
+        .name = "choose --ordered: sorted, printed in the order chosen",
+        .command = "\"$TERMANCY\" ui choose --ordered --no-limit c a b",
+        .keys = "G g \\r",
+        .stdout = "c\na\n",
+    },
+    .{
+        .name = "choose: items as arguments, the ones selected piped in",
+        .command = "printf 'c\\n' | \"$TERMANCY\" ui choose --no-limit a b c",
+        .keys = "\\r",
+        .stdout = "c\n",
+    },
+    .{
+        .name = "filter --strict: enter needs a match",
+        .command = "printf 'apple\\nbanana\\n' | \"$TERMANCY\" ui filter",
+        .keys = "kiwi\\r\\033",
+        .status = 1,
+    },
+    .{
+        .name = "filter --no-strict: the typed text",
+        .command = "printf 'apple\\nbanana\\n' | \"$TERMANCY\" ui filter --no-strict",
+        .keys = "kiwi\\r",
+        .stdout = "kiwi\n",
+    },
+    .{
+        .name = "filter --reverse: up goes to the next match",
+        .command = "printf 'apple\\nbanana\\ncherry\\n' | " ++
+            "\"$TERMANCY\" ui filter --reverse --height 5",
+        .keys = "\\033[A\\r",
+        .stdout = "banana\n",
+    },
+    .{
+        .name = "filter: --value from TERMANCY_FILTER_VALUE",
+        .command = "printf 'apple\\nbanana\\n' | \"$TERMANCY\" ui filter",
+        .keys = "\\r",
+        .env = &.{.{ "TERMANCY_FILTER_VALUE", "ban" }},
+        .stdout = "banana\n",
+    },
+    .{
+        // Labels numbered, values printed, and enter takes the item selected.
+        .name = "ACCESSIBLE: choose --label-delimiter --selected",
+        .command = "\"$TERMANCY\" ui choose --label-delimiter : --selected B A:1 B:2 C:3",
+        .keys = "\\r",
+        .env = &accessible,
+        .wait_for = "Number (1-3, enter for 2)",
+        .stdout = "2\n",
     },
 };
 

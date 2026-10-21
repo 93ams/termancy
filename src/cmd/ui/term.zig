@@ -126,14 +126,20 @@ pub const Input = struct {
 /// items.
 pub fn items(ctx: *cli.Context, input: Input) ![]const []const u8 {
     if (ctx.args.len > 0) return ctx.args;
-    const delimiter = try unescape(ctx.arena, input.delimiter);
-    if (delimiter.len == 0) return ctx.usageError("--input-delimiter must not be empty", .{});
-    var text = try readStdin(ctx) orelse
+    const found = try stdinItems(ctx, input) orelse
         return ctx.usageError("no items: give them as arguments or on standard input", .{});
-    if (input.strip_ansi) text = try stripAnsi(ctx.arena, text);
-    const found = try split(ctx.arena, text, delimiter);
     if (found.len == 0) return ctx.fail("no items to choose from", .{});
     return found;
+}
+
+/// Standard input split into items as `items` splits it (perhaps none), or null when it
+/// is a terminal.
+pub fn stdinItems(ctx: *cli.Context, input: Input) !?[]const []const u8 {
+    const delimiter = try unescape(ctx.arena, input.delimiter);
+    if (delimiter.len == 0) return ctx.usageError("--input-delimiter must not be empty", .{});
+    var text = try readStdin(ctx) orelse return null;
+    if (input.strip_ansi) text = try stripAnsi(ctx.arena, text);
+    return try split(ctx.arena, text, delimiter);
 }
 
 /// `text` without its escape sequences.
@@ -265,7 +271,8 @@ pub const Hint = Hints.Binding;
 
 /// `Inner` with what gum puts around every component: below it, after a blank line, the
 /// help line of its keys (`--show-help`); around it all, `--padding`. The component sees
-/// the terminal narrower by the padding, so it cuts its rows to fit.
+/// the terminal smaller by the padding and the help line (and no wider than `max_width`),
+/// so it cuts its rows to fit.
 pub fn Framed(comptime Inner: type) type {
     return struct {
         inner: Inner,
@@ -275,6 +282,8 @@ pub fn Framed(comptime Inner: type) type {
         padding: tui.Style.Sides = .{},
         /// The help line; none when empty (`--no-show-help`).
         hints: []const Hint = &.{},
+        /// The most columns the component gets (`--width`); null for the terminal's.
+        max_width: ?usize = null,
         /// The terminal's width less the padding, for cutting the help line.
         width: ?usize = null,
 
@@ -290,7 +299,11 @@ pub fn Framed(comptime Inner: type) type {
             if (msg != .resize) return model.inner.update(msg);
             var size = msg.resize;
             const sides = model.padding.left + model.padding.right;
-            size.width = std.math.lossyCast(u16, size.width -| sides);
+            const width = @min(size.width -| sides, model.max_width orelse std.math.maxInt(usize));
+            size.width = std.math.lossyCast(u16, width);
+            const help_rows: usize = if (model.hints.len > 0) 2 else 0;
+            const rows = model.padding.top + model.padding.bottom + help_rows;
+            size.height = std.math.lossyCast(u16, size.height -| rows);
             model.width = size.width;
             return model.inner.update(.{ .resize = size });
         }

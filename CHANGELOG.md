@@ -166,6 +166,24 @@ git history.
 
 ### Added
 
+- **`ui choose` and `ui filter` take the rest of gum's flags.** `choose`: `--ordered`,
+  `--select-if-one` (prints a lone item with no terminal at all), `--label-delimiter`
+  (labels shown, values printed), `--selected '*'`, `--cursor-prefix`, `--selected-prefix`,
+  `--unselected-prefix`, and piped standard input naming the items selected when the items
+  are arguments; `--header` is gum's `Choose:` unless given, and `a` chooses all only with
+  `--no-limit`, as in gum. `filter`: `--strict`/`--no-strict` (the typed text as an answer),
+  `--fuzzy`/`--no-fuzzy`, `--fuzzy-sort`/`--no-fuzzy-sort`, `--reverse`, `--width`,
+  `--height` (0, now the default, fills the terminal on the alternate screen),
+  `--indicator`, the prefixes, `--selected`, `--select-if-one`, `--timeout`, the shared
+  flags, style groups for each part, and `TERMANCY_FILTER_*` variables; its rows have gum's
+  look (`•` before the highlighted one, `◉`/`○` marks).
+- **Components:** `MultiSelect.order` keeps the order items were chosen in, `cursor_mark`
+  marks the highlighted one, `toggle_all` turns off a/ctrl+a, and tab and ctrl+space toggle;
+  a chosen item's text is in `styles.chosen` too. `Filter` has `strict`, `fuzzy`, `sort`,
+  `reverse`, and `fill`, shift+tab, ctrl+space, and ctrl+a (`toggleAll`), and
+  `styles.unchosen`; an empty query keeps the items' order, as documented. `List.styles`
+  has `cursor_text`, styling the highlighted text apart from its prefix (`textStyle`). A
+  `cli.flags` set with many groups no longer runs out of compile-time branches.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set

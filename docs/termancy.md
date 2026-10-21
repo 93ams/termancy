@@ -112,6 +112,29 @@ The commands share gum's conventions, each where it applies:
   splits it into items, and `--output-delimiter` separates the items printed (both `\n` by
   default, typed with escapes: `\n`, `\t`, `\0`, `\\`).
 
+`choose` and `filter` take gum's flags too:
+
+- **`choose`:** `--limit N` or `--no-limit` (space chooses, `a` chooses all), `--ordered`
+  (the items sorted, and several printed in the order chosen), `--selected` (repeated or
+  comma-separated; `*` for all, up to the limit; with `--limit 1`, the item highlighted). With
+  the items as arguments, piped standard input names the ones selected.
+  `--label-delimiter :` shows `Red` of `Red:#f00` and prints `#f00`. `--select-if-one`
+  prints a lone item without asking, no terminal needed. The marks are `--cursor-prefix`,
+  `--selected-prefix`, and `--unselected-prefix`; `--header` is `Choose:` unless given.
+- **`filter`:** fuzzy matching, best first (`--no-fuzzy-sort` keeps the items' order;
+  `--no-fuzzy` matches the typed text anywhere, ignoring case). `--strict`, the default,
+  prints only a match; `--no-strict` offers the typed text as the first row, to print as it
+  is. `--height 0`, the default, fills the terminal; `--reverse` puts the query at the bottom;
+  `--width` caps the columns. `--indicator`, `--selected-prefix`, `--unselected-prefix`,
+  `--value`, `--placeholder`, `--prompt`, `--selected`, and `--select-if-one` (on the matches
+  of `--value`) as gum's.
+
+```sh
+color=$(termancy ui choose --label-delimiter : "Red:#f00" "Green:#0f0" "Blue:#00f")
+branch=$(git branch --format='%(refname:short)' | termancy ui filter --no-strict --height 10)
+printf 'b\nc\n' | termancy ui choose --no-limit a b c d   # b and c chosen at the start
+```
+
 ## Terminal output and media
 
 | command | |

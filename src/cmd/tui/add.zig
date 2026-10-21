@@ -139,7 +139,7 @@ fn ask(ctx: *cli.Context, components: []const catalog.Component) ![]const []cons
         var session: plain.Session = undefined;
         try session.open(ctx);
         defer session.close();
-        const indexes = try session.choose(header, items, items.len) orelse
+        const indexes = try session.choose(header, items, items.len, &.{}) orelse
             return error.CommandFailed;
         for (indexes) |i| try chosen.append(ctx.arena, components[i].name);
     } else {

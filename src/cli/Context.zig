@@ -387,6 +387,8 @@ pub const FlagsError = values.Error || Allocator.Error;
 /// (before its variants' fields), and the fields of groups and of a choice's variants.
 fn flagPaths(comptime T: type, comptime prefix: []const u8) []const []const u8 {
     comptime {
+        // A set with many groups (gum's style flags) walks many fields.
+        @setEvalBranchQuota(100_000);
         var out: []const []const u8 = &.{};
         for (field.fieldNames(T), field.fieldTypes(T)) |name, F| {
             const C = field.Unwrap(F);
