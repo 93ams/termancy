@@ -115,8 +115,9 @@ The commands share gum's conventions, each where it applies:
 The output commands, as gum's:
 
 - **`style`** lays the arguments (one per line) or standard input out as a block in the
-  style flags, at the top level: `--width` wraps at spaces, `--trim` removes the
-  whitespace around each line first.
+  style flags, at the top level: `--width` wraps at spaces, `--align top|middle|bottom`
+  places the text in a `--height` taller than it, `--trim` removes the whitespace around
+  each line first.
 - **`format`** renders Markdown (in gum's `pink` style sheet where colors show, `notty`
   where not; `--theme` picks another), code (`-t code -l zig`), emoji shortcodes, or a
   template of gum's functions: `{{ Bold "x" }}` (and `Italic`, `Faint`, `Underline`,

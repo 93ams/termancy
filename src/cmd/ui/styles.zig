@@ -59,7 +59,9 @@ pub const Spacing = struct {
 
 pub const Border = enum { none, normal, rounded, thick, double, hidden, ascii };
 
-pub const Align = enum { left, center, right };
+/// Where lines narrower than the block sit (left, center, right), or the text in a taller
+/// block (top, middle, bottom: `--height`).
+pub const Align = enum { left, center, right, top, middle, bottom };
 
 /// The style of one part of a component; each field given replaces the part's default.
 pub const Styles = struct {
@@ -92,10 +94,13 @@ pub const Styles = struct {
         };
         if (s.border_foreground) |color| style.border_fg = color;
         if (s.border_background) |color| style.border_bg = color;
-        if (s.@"align") |a| style.@"align" = switch (a) {
-            .left => .start,
-            .center => .center,
-            .right => .end,
+        if (s.@"align") |a| switch (a) {
+            .left => style.@"align" = .start,
+            .center => style.@"align" = .center,
+            .right => style.@"align" = .end,
+            .top => style.valign = .start,
+            .middle => style.valign = .center,
+            .bottom => style.valign = .end,
         };
         if (s.width) |width| style.width = width;
         if (s.height) |height| style.height = height;
@@ -132,7 +137,8 @@ pub const spec: field.Spec(Styles) = .{ .fields = .{
     .border = .{ .help = "Border style: none, normal, rounded, thick, double, hidden, or ascii" },
     .border_foreground = .{ .help = "Border color" },
     .border_background = .{ .help = "Border background color" },
-    .@"align" = .{ .help = "Alignment of lines narrower than the block" },
+    .@"align" = .{ .help = "Where narrower lines sit (left, center, right), or the text " ++
+        "in a taller block (top, middle, bottom)" },
     .width = .{ .help = "Columns, padding included; longer lines are wrapped" },
     .height = .{ .help = "The fewest rows, padding included" },
     .margin = .{ .help = "Space outside the border, as --padding" },
@@ -218,6 +224,10 @@ test "Styles.over: what is given replaces the default" {
     try testing.expect(!style.bold and style.dim and style.italic);
     try testing.expectEqual(base, (Styles{}).over(base));
     try testing.expectEqual(null, (Styles{ .border = .none }).over(.{ .border = .ascii }).border);
+    // top, middle, and bottom place the text vertically, keeping the horizontal default.
+    const bottom = (Styles{ .@"align" = .bottom }).over(.{ .@"align" = .center });
+    try testing.expectEqual(tui.layout.Position.end, bottom.valign);
+    try testing.expectEqual(tui.layout.Position.center, bottom.@"align");
 }
 
 const Part = struct { cursor_style: Styles = .{}, item_style: Styles = .{} };

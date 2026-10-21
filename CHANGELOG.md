@@ -176,16 +176,17 @@ git history.
 
 - **`termancy ui style`, `format`, `join`, and `log` work as gum's:** a variable for every
   flag (`TERMANCY_STYLE_TRIM`, `TERMANCY_FORMAT_THEME`, `TERMANCY_JOIN_ALIGN`,
-  `TERMANCY_LOG_FORMATTER`); `style --trim` and `--strip-ansi`; `format --strip-ansi`, gum's
-  `pink` style sheet by default (`notty` without color, where it was `dark` or `light`),
-  and gum's template functions in all their spellings (`Color` with one color,
-  `Foreground` and `Background` with none, `Overline`); `log --structured`, `--format`
-  (printf), `--formatter`, the `none` level, gum's `--time` layout names (`kitchen`,
-  `ansic`, `rfc822`, `stampmilli`, ...), `--min-level` from `TERMANCY_LOG_LEVEL`, a status
-  of 1 after `fatal`, and a style group for each part (`--level.foreground`,
-  `--key.faint`). `sys.log` grows what that takes: `Styles`, charm's look part by part;
-  `TimeFormat`'s Go layouts (`goLayout`); `Level.charmColor`. `cli.flags`: `.env = ""`
-  gives a flag no variable under an `env_prefix`.
+  `TERMANCY_LOG_FORMATTER`); `style --trim` and `--strip-ansi`; `--align top|middle|bottom`
+  for every style group (where text sits in a taller block); `format --strip-ansi`, gum's
+  `pink` style sheet by default (`notty` without color, where it was `dark` or `light`), and
+  gum's template functions in all their spellings (`Color` with one color, `Foreground` and
+  `Background` with none, `Overline`); `log --structured`, `--format` (printf),
+  `--formatter`, the `none` level, gum's `--time` layout names (`kitchen`, `ansic`,
+  `rfc822`, `stampmilli`, ...), `--min-level` from `TERMANCY_LOG_LEVEL`, a status of 1 after
+  `fatal`, and a style group for each part (`--level.foreground`, `--key.faint`). `sys.log`
+  grows what that takes: `Styles`, charm's look part by part; `TimeFormat`'s Go layouts
+  (`goLayout`); `Level.charmColor`. `cli.flags`: `.env = ""` gives a flag no variable under
+  an `env_prefix`.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set

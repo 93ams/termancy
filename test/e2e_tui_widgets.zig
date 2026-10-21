@@ -309,6 +309,11 @@ const cases = [_]Case{
         .stdout = "red\n",
     },
     .{
+        .name = "style --height --align bottom",
+        .args = &.{ "ui", "style", "--height", "3", "--align", "bottom", "x" },
+        .stdout = " \n \nx\n",
+    },
+    .{
         .name = "format: gum's template functions",
         .args = &.{
             "ui",
