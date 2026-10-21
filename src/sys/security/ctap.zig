@@ -38,6 +38,7 @@ const HkdfSha256 = std.crypto.kdf.hkdf.HkdfSha256;
 const Aes256 = std.crypto.core.aes.Aes256;
 const P256 = std.crypto.ecc.P256;
 const cbor = @import("cbor.zig");
+const secure = @import("secure.zig");
 const webauthn = @import("webauthn.zig");
 
 /// The size of a CTAPHID report.
@@ -802,11 +803,15 @@ pub fn getPinToken(
     var out: [512]u8 = undefined;
     const agreement = try clientPin(channel, protocol, .get_key_agreement, "", 0, &out);
     const theirs = try readAgreementKey(agreement);
-    const own = P256.scalar.random(channel.io, .big);
+    // The ephemeral scalar, the secret, and the PIN's hash are wiped on every way out.
+    var own = P256.scalar.random(channel.io, .big);
+    defer secure.wipe(&own);
     const ours = P256.basePoint.mul(own, .big) catch return error.InvalidResponse;
-    const secret = agree(protocol, own, theirs) orelse return error.InvalidResponse;
+    var secret = agree(protocol, own, theirs) orelse return error.InvalidResponse;
+    defer secure.wipe(&secret.bytes);
 
     var pin_hash: [Sha256.digest_length]u8 = undefined;
+    defer secure.wipe(&pin_hash);
     Sha256.hash(pin, &pin_hash, .{});
     var encrypted: [32]u8 = undefined;
     const pin_hash_enc = secret.encrypt(channel.io, pin_hash[0..16], &encrypted);
