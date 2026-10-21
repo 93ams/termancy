@@ -639,7 +639,10 @@ test "the directory on one row: ~ for home, cut from the left" {
         .program = .{ .size = .{ .width = 12, .height = 10 } },
     });
     defer d.deinit();
-    const tail = try std.fmt.allocPrint(testing.allocator, "~/{s}\n", .{std.fs.path.basename(f.root)});
+    const tail = try std.fmt.allocPrint(testing.allocator, "~{c}{s}\n", .{
+        std.fs.path.sep,
+        std.fs.path.basename(f.root),
+    });
     defer testing.allocator.free(tail);
     // tmp dirs' names are longer than 12 columns, so the ~ goes with the cut.
     try d.expectFrameContains("…");
