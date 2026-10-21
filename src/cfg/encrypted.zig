@@ -18,12 +18,12 @@
 //! What is wiped: the derived key, always, and the plaintext buffer when decryption fails.
 //! Argon2's working memory, from which the key could be derived again, is not taken from
 //! the arena but mapped and unmapped for each derivation, so it is gone once the key is
-//! made. The plaintext `decrypt` returns belongs to the caller, who should `secureZero` it
-//! once done with it, as `Config.loadFile` does after parsing. What is not wiped: the
-//! values parsed from it (they are the configuration) and copies a parser made on the way
-//! (unescaped strings), both in the arena given; an arena does not wipe what it frees. A
-//! process that must not keep secrets in memory after use should give these an allocator
-//! that zeroes on free.
+//! made (on WASI, which cannot unmap, it is only freed). The plaintext `decrypt` returns
+//! belongs to the caller, who should `secureZero` it once done with it, as
+//! `Config.loadFile` does after parsing. What is not wiped: the values parsed from it (they
+//! are the configuration) and copies a parser made on the way (unescaped strings), both in
+//! the arena given; an arena does not wipe what it frees. A process that must not keep
+//! secrets in memory after use should give these an allocator that zeroes on free.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

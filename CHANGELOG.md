@@ -485,7 +485,8 @@ From a review before the repository went public:
   unmapped once the key is made instead of staying (64 MiB, unwiped) in the file's arena
   for as long as the `Config` lives.
 - With a profile active, the values an encrypted file holds under `profiles.<name>` are
-  redacted where the profile puts them; `cfg show --profile prod` printed them.
+  redacted where the profile puts them; `cfg show --profile prod` printed them. Those keys
+  are now secret whatever sets them, as with `--secret`.
 - `encrypted.encrypt` and `cfg encrypt --passphrase ''` refuse an empty passphrase
   (`error.EmptyPassphrase`), which made a file anyone could open.
 - Cancelling during an encrypted file's key derivation is `error.Canceled`, not
