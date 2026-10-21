@@ -166,6 +166,19 @@ git history.
 
 ### Added
 
+- **`ui pager` and `ui file` as gum's:** `pager` shows a file, the text given as the
+  argument (gum's `pager "$text"`), or standard input, in a rounded border
+  (`--border`, `--padding`, and the other top-level style flags), lines numbered
+  (`--no-show-line-numbers`) and soft-wrapped (`--no-soft-wrap` cuts them, left/right scroll
+  sideways), tabs as four spaces; `/` highlights every match (`--match.*`, the current one
+  `--match-highlight.*`) and n/N go round them; q and esc both exit 0, as gum's. `file`
+  shows permissions and sizes (`-p`/`-s`, `--no-permissions`, `--no-size`, `--file-size.*`),
+  `--directory` lets enter choose a directory (right opens it), `--no-file` only a
+  directory, `-c/--cursor`, `--header`, `--height`, the path from `TERMANCY_FILE_PATH`, and
+  styles for each part. Both take `--timeout`, `--show-help`, and `TERMANCY_PAGER_*`/
+  `TERMANCY_FILE_*` variables. The `pager` component gains `line_numbers`, `soft_wrap`, and
+  a current match; `filepicker` gains `show_permissions`, `show_size`, `allow_files`,
+  `allow_directories`, and `header`, and right/l only open a directory.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set

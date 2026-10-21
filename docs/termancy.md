@@ -112,6 +112,13 @@ The commands share gum's conventions, each where it applies:
   splits it into items, and `--output-delimiter` separates the items printed (both `\n` by
   default, typed with escapes: `\n`, `\t`, `\0`, `\\`).
 
+`ui pager [file|text]` shows a file, else the argument itself, else standard input, in a
+rounded border with numbered, wrapped lines (`--no-show-line-numbers`, `--no-soft-wrap`);
+`/` highlights every match and n/N step through them; q and Esc both exit 0. `ui file
+[path]` shows permissions and sizes (`--no-permissions`, `--no-size`) and prints the
+absolute path chosen; `--directory` lets enter choose a directory (right opens one), and
+the path can come from `TERMANCY_FILE_PATH`.
+
 ## Terminal output and media
 
 | command | |

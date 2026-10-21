@@ -280,16 +280,25 @@ const cases = [_]Case{
         .status = 2,
     },
     .{
-        .name = "pager with a missing file",
-        .args = &.{ "ui", "pager", "missing.txt" },
-        .stderr = "termancy: missing.txt: no such file\n",
-        .status = 1,
+        .name = "pager with no text",
+        .args = &.{ "ui", "pager" },
+        .stderr = "termancy: no text: give a file, the text, or standard input\n" ++
+            usage("pager"),
+        .status = 2,
     },
     .{
         .name = "spin without a command",
         .args = &.{ "ui", "spin" },
         .stderr = "termancy: \"termancy ui spin\" requires at least 1 argument, received 0\n" ++
             usage("spin"),
+        .status = 2,
+    },
+    // pager/file (gum parity)
+    .{
+        .name = "file with nothing to choose",
+        .args = &.{ "ui", "file", "--no-file" },
+        .stderr = "termancy: --no-file needs --directory: there would be nothing to choose\n" ++
+            usage("file"),
         .status = 2,
     },
 };
@@ -503,7 +512,6 @@ const pty_cases = [_]PtyCase{
         .name = "pager from standard input: esc",
         .command = "printf 'text\\n' | \"$TERMANCY\" ui pager",
         .keys = "\\033",
-        .status = 1,
     },
     .{
         // No standard stream a terminal: the keys come through the controlling terminal
@@ -511,7 +519,6 @@ const pty_cases = [_]PtyCase{
         .name = "pager with every stream redirected: esc",
         .command = "printf 'text\\n' | \"$TERMANCY\" ui pager 2>/dev/null",
         .keys = "\\033",
-        .status = 1,
     },
     .{
         .name = "spin on a terminal",
@@ -629,6 +636,65 @@ const pty_cases = [_]PtyCase{
         .wait_for = "What now?",
         .stdout = "a = 1\n",
         .status = 1,
+    },
+    // pager/file (gum parity). The driver can only wait for something to show, so a case
+    // that waits for what only the feature draws has a --timeout: were it never drawn, the
+    // timeout would end the command with 124, not 0.
+    .{
+        // Line 200 is off the first screen until the search scrolls to it, highlighted.
+        .name = "pager: search scrolls to a match",
+        .command = "seq 300 | sed 's/^200$/the needle here/' | \"$TERMANCY\" ui pager --timeout 8s",
+        .keys = "/NEEDLE\\r",
+        .then_wait_for = "needle",
+        .then_keys = "q",
+    },
+    .{
+        // Text right after the border's padding: with line numbers, the gutter (in its own
+        // style) comes between.
+        .name = "pager --no-show-line-numbers",
+        .command = "printf 'alpha\\n' | \"$TERMANCY\" ui pager --timeout 8s --no-show-line-numbers",
+        .keys = "q",
+        .wait_for = " alpha",
+    },
+    .{
+        .name = "pager --timeout",
+        .command = "sh -c '\"$TERMANCY\" ui pager --timeout 100ms notes.txt 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        // Directories come first: enter chooses env/ rather than opening it.
+        .name = "file --directory: enter chooses a directory",
+        .command = "\"$TERMANCY\" ui file --directory | sed \"s|^$PWD/||\"",
+        .keys = "\\r",
+        .stdout = "env\n",
+    },
+    .{
+        // 1234 bytes, as gum writes the size.
+        .name = "file: sizes shown",
+        .command = "(d=$(mktemp -d); head -c 1234 /dev/zero > \"$d/f\"; " ++
+            "p=$(\"$TERMANCY\" ui file --timeout 8s \"$d\"); s=$?; " ++
+            "rm -rf \"$d\"; basename \"$p\"; exit $s)",
+        .keys = "\\r",
+        .wait_for = "1.2kB",
+        .stdout = "f\n",
+    },
+    .{
+        .name = "file --timeout",
+        .command = "sh -c '\"$TERMANCY\" ui file --timeout 100ms 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        // TERMANCY_FILE_PATH stands in for the argument, as GUM_FILE_PATH does.
+        .name = "file: the path and header from TERMANCY_FILE_* variables",
+        .command = "\"$TERMANCY\" ui file | sed \"s|^$PWD/||\"",
+        .keys = "\\r",
+        .env = &.{ .{ "TERMANCY_FILE_PATH", "env" }, .{ "TERMANCY_FILE_HEADER", "Pick one" } },
+        .wait_for = "Pick one",
+        .stdout = "env/termancy.env\n",
     },
 };
 

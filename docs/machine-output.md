@@ -149,7 +149,8 @@ In text mode it prints one directory per line (*script-stable*), NUL-terminated 
 The interactive widgets (`ui choose`, `filter`, `input`, `write`, ...) print exactly the
 user's answer on stdout, one item per line (or per `--output-delimiter`), and nothing else.
 Their interface goes to the terminal, never to stdout. Cancelling (Esc) exits 1 with no
-output; Ctrl-C exits 130; `--timeout` exits 124 with `timed out` on stderr.
+output; Ctrl-C exits 130; `--timeout` exits 124 with `timed out` on stderr. `ui pager` has
+nothing to cancel: q and Esc both exit 0, as gum's.
 
 `ui spin -- <cmd>` prints the command's output when it finishes and exits with the
 command's own status.
