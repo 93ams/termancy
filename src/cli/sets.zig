@@ -17,7 +17,12 @@
 //! ```
 //!
 //! A field that is a struct is a group of flags named after it (`--public-host`; `.name`
-//! renames the prefix, and `.name = ""` drops it). A tagged union is a choice: a flag naming
+//! renames the prefix, `.name = ""` drops it, and `.separator = "."` spells it
+//! `--public.host`). A group's place (`cli.GroupPlace`) does not depend on the struct it is
+//! in, so one can be declared once and shared. `.env_prefix`, for the whole set or a group,
+//! gives every flag under it a variable: the prefix and the flag's name in SCREAMING_SNAKE
+//! (`APP_` gives `--public-host` the variable `APP_PUBLIC_HOST`), unless the flag names its
+//! own `.env`. A tagged union is a choice: a flag naming
 //! the variant (`--storage s3`), and each variant's fields as a group under it
 //! (`--storage-s3-bucket`, which also picks `s3`). A list of structs cannot be flags and
 //! must be marked `.internal`.
@@ -69,6 +74,10 @@ pub fn FlagOptions(comptime T: type) type {
     const Name = std.meta.FieldEnum(T);
     return struct {
         fields: FlagFields(T) = .{},
+        /// Read each flag from the variable named by this prefix and the flag's name in
+        /// SCREAMING_SNAKE (`APP_` gives `--dry-run` `APP_DRY_RUN`), unless it names its own
+        /// `.env`.
+        env_prefix: ?[]const u8 = null,
         /// In each group, at most one may be given.
         exclusive: []const []const Name = &.{},
         /// In each group, all or none must be given.
@@ -94,15 +103,7 @@ pub fn FlagFields(comptime T: type) type {
 pub fn FlagPlace(comptime Parent: type, comptime V: type) type {
     const C = field.Unwrap(V);
     if (C == void) return struct {};
-    if (field.isGroup(C)) return struct {
-        /// The prefix of the group's flags (`--public-host`), instead of the field's name;
-        /// `""` puts them at this level.
-        name: ?[]const u8 = null,
-        hidden: bool = false,
-        /// Not flags: the fields keep their defaults.
-        internal: bool = false,
-        fields: FlagFields(C) = .{},
-    };
+    if (field.isGroup(C)) return GroupPlace(C);
     if (field.isList(C) and field.isGroup(@typeInfo(C).pointer.child)) return struct {
         /// A list of structs cannot be flags, so it must say so.
         internal: bool = false,
@@ -147,6 +148,25 @@ pub fn FlagPlace(comptime Parent: type, comptime V: type) type {
         count: bool = false,
         /// A list field also splits each value on this byte.
         split: ?u8 = null,
+    };
+}
+
+/// The options of a field that is a group of flags, the struct `C`. It is the same type
+/// whatever struct the group is in, so a group's spelling can be declared once and shared.
+pub fn GroupPlace(comptime C: type) type {
+    return struct {
+        /// The prefix of the group's flags (`--public-host`), instead of the field's name;
+        /// `""` puts them at this level.
+        name: ?[]const u8 = null,
+        /// Between the prefix and each flag's own name: `"."` spells `--public.host`.
+        separator: []const u8 = "-",
+        /// The variables' prefix for the group's flags, instead of the enclosing prefix and
+        /// the group's name (`APP_PUBLIC_`); see `FlagOptions.env_prefix`.
+        env_prefix: ?[]const u8 = null,
+        hidden: bool = false,
+        /// Not flags: the fields keep their defaults.
+        internal: bool = false,
+        fields: FlagFields(C) = .{},
     };
 }
 
@@ -241,7 +261,8 @@ fn build(comptime T: type, comptime S: type, comptime options: FlagOptions(T)) B
     comptime {
         @setEvalBranchQuota(10_000 + 20_000 * field.fieldNames(T).len);
         var out: Built = .{ .flags = &.{}, .groups = &.{} };
-        collect(T, T, S, options.fields, "", "", null, "", false, &out);
+        const env = options.env_prefix;
+        collect(T, T, S, options.fields, "", "", null, "", false, "-", env, &out);
         // `.requires` named fields; now that every flag has its name, name the flags.
         var final: [out.flags.len]Flag = out.flags[0..out.flags.len].*;
         for (&final) |*flag| {
@@ -267,9 +288,30 @@ fn join(comptime parent: []const u8, comptime name: []const u8) []const u8 {
     return if (parent.len == 0) name else parent ++ "." ++ name;
 }
 
-fn prefixed(comptime prefix: []const u8, comptime own: []const u8) []const u8 {
+fn prefixed(
+    comptime prefix: []const u8,
+    comptime separator: []const u8,
+    comptime own: []const u8,
+) []const u8 {
     if (own.len == 0) return prefix;
-    return if (prefix.len == 0) own else prefix ++ "-" ++ own;
+    return if (prefix.len == 0) own else prefix ++ separator ++ own;
+}
+
+/// The variable prefix under `env` for a group spelled `own`: `APP_` and `public` give
+/// `APP_PUBLIC_`; none without `env`.
+fn envPrefix(comptime env: ?[]const u8, comptime own: []const u8) ?[]const u8 {
+    const prefix = env orelse return null;
+    return if (own.len == 0) prefix else prefix ++ screaming(own) ++ "_";
+}
+
+/// `dry-run` or `cursor.fg` as part of a variable's name: `DRY_RUN`, `CURSOR_FG`.
+fn screaming(comptime name: []const u8) []const u8 {
+    comptime {
+        var out: [name.len]u8 = undefined;
+        for (name, &out) |c, *o| o.* = if (c == '-' or c == '.') '_' else std.ascii.toUpper(c);
+        const final = out;
+        return &final;
+    }
 }
 
 fn collect(
@@ -282,6 +324,10 @@ fn collect(
     comptime choice: ?[]const u8,
     comptime variant: []const u8,
     comptime hidden: bool,
+    /// Between `prefix` and each flag's own name.
+    comptime separator: []const u8,
+    /// The variables' prefix here; null when the flags have none but their own `.env`.
+    comptime env: ?[]const u8,
     comptime out: *Built,
 ) void {
     const spec = S.of(T);
@@ -297,11 +343,14 @@ fn collect(
         }
         if (@hasField(@TypeOf(place), "internal") and place.internal) continue;
         const hide = hidden or place.hidden;
-        const long = prefixed(prefix, place.name orelse text.kebab(name));
+        const own = place.name orelse text.kebab(name);
+        const long = prefixed(prefix, separator, own);
         const field_spec = @field(spec.fields, name);
         if (field.isGroup(C)) {
             out.groups = out.groups ++ .{Group{ .path = sub, .prefix = long }};
-            collect(Root, C, S, place.fields, long, sub, choice, variant, hide, out);
+            const genv = place.env_prefix orelse envPrefix(env, own);
+            const sep = place.separator;
+            collect(Root, C, S, place.fields, long, sub, choice, variant, hide, sep, genv, out);
             continue;
         }
         var flag: Flag = .{
@@ -312,7 +361,7 @@ fn collect(
             .kind = .value,
             .short = place.short,
             .help = field_spec.help,
-            .env = place.env,
+            .env = place.env orelse if (env) |e| e ++ screaming(own) else null,
             .hidden = hide,
             .deprecated = field_spec.deprecated,
             .prompt = place.prompt,
@@ -334,11 +383,15 @@ fn collect(
                 if (P == void) continue;
                 const vplace = @field(place.variants, vn);
                 if (vplace.internal) continue;
-                const vprefix = prefixed(long, vplace.name orelse text.kebab(vn));
+                const vown = vplace.name orelse text.kebab(vn);
+                const vprefix = prefixed(long, "-", vown);
                 const vpath = join(sub, vn);
                 out.groups = out.groups ++ .{Group{ .path = vpath, .prefix = vprefix }};
                 const vhide = hide or vplace.hidden;
-                collect(Root, P, S, vplace.fields, vprefix, vpath, long, vn, vhide, out);
+                const venv = vplace.env_prefix orelse envPrefix(envPrefix(env, own), vown);
+                const vsep = vplace.separator;
+                const vfields = vplace.fields;
+                collect(Root, P, S, vfields, vprefix, vpath, long, vn, vhide, vsep, venv, out);
             }
             continue;
         }
@@ -603,6 +656,48 @@ test "a value's checks, as typed" {
     try testing.expectEqual(1, about.?.min.number.?);
     try testing.expectEqualStrings("must be at least 1", w.buffered());
     try testing.expectEqual(null, example.list[0].validate);
+}
+
+test "a group's separator and variables" {
+    const Colors = struct { fg: []const u8 = "", bold: bool = false };
+    const Flags = struct {
+        limit: u8 = 1,
+        dry_run: bool = false,
+        cursor_style: Colors = .{},
+        plain: Colors = .{},
+        own: Colors = .{},
+        storage: union(enum) { s3: struct { bucket: []const u8 = "" }, memory } = .memory,
+    };
+    const dotted: GroupPlace(Colors) = .{ .name = "cursor", .separator = "." };
+    const set = flags(Flags, field.none, .{
+        .env_prefix = "APP_",
+        .fields = .{
+            .dry_run = .{ .env = "DRY" },
+            .cursor_style = dotted,
+            .own = .{ .env_prefix = "MINE_", .fields = .{ .bold = .{ .env = "BOLD" } } },
+        },
+    });
+    const expected = [_][2][]const u8{
+        .{ "limit", "APP_LIMIT" },
+        .{ "dry-run", "DRY" },
+        .{ "cursor.fg", "APP_CURSOR_FG" },
+        .{ "cursor.bold", "APP_CURSOR_BOLD" },
+        .{ "plain-fg", "APP_PLAIN_FG" },
+        .{ "plain-bold", "APP_PLAIN_BOLD" },
+        .{ "own-fg", "MINE_FG" },
+        .{ "own-bold", "BOLD" },
+        .{ "storage", "APP_STORAGE" },
+        .{ "storage-s3-bucket", "APP_STORAGE_S3_BUCKET" },
+    };
+    try testing.expectEqual(expected.len, set.list.len);
+    for (expected, set.list) |e, f| {
+        try testing.expectEqualStrings(e[0], f.name);
+        try testing.expectEqualStrings(e[1], f.env.?);
+    }
+    try testing.expectEqualStrings("cursor_style.fg", set.list[2].field);
+    try testing.expectEqualStrings("cursor", set.groups[0].prefix);
+    // Without a prefix, only a flag's own `.env`.
+    try testing.expectEqual(null, example.list[0].env);
 }
 
 const Copy = struct {

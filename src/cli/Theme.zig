@@ -38,6 +38,8 @@ comment: Style = .{ .dim = true, .italic = true },
 warning: Style = .{ .fg = .yellow, .bold = true },
 /// What follows an error: "Did you mean", "Run 'app --help' for usage.".
 hint: Style = .{ .dim = true },
+/// What an interactive prompt highlights: the item under the cursor, chosen items.
+accent: Style = .{ .fg = .magenta },
 
 /// Colors, as described above.
 pub const default: Theme = .{};
@@ -54,6 +56,7 @@ pub const bold: Theme = .{
     .@"error" = .{},
     .warning = .{},
     .hint = .{},
+    .accent = .{},
 };
 
 /// Writes `text` in `style` at `level`; as plain text at `.none`.
