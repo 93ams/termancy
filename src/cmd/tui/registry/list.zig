@@ -40,7 +40,10 @@ top: usize = 0,
 styles: Styles = .{},
 
 pub const Styles = struct {
+    /// The highlighted row: its prefix, and its text unless `cursor_text` is set.
     cursor: tui.Style = .{ .fg = .{ .indexed = 212 } },
+    /// The highlighted item's text, when it differs from its prefix.
+    cursor_text: ?tui.Style = null,
     item: tui.Style = .{},
 };
 
@@ -146,6 +149,13 @@ pub fn view(list: *const List, w: *std.Io.Writer) std.Io.Writer.Error!void {
     }
 }
 
+/// The style item `index`'s text is drawn in, for models that restart it after a style of
+/// their own within the row.
+pub fn textStyle(list: *const List, index: usize) tui.Style {
+    if (index != list.cursor) return list.styles.item;
+    return list.styles.cursor_text orelse list.styles.cursor;
+}
+
 /// Writes item `index` as the list shows it, with `text` in place of the item, so
 /// models built on the list can decorate items (marks, highlights) and keep its look.
 pub fn writeRow(
@@ -156,8 +166,8 @@ pub fn writeRow(
 ) std.Io.Writer.Error!void {
     const is_cursor = index == list.cursor;
     const prefix = if (is_cursor) list.cursor_prefix else list.item_prefix;
-    const style = if (is_cursor) list.styles.cursor else list.styles.item;
-    try style.paint(w, prefix);
+    try (if (is_cursor) list.styles.cursor else list.styles.item).paint(w, prefix);
+    const style = list.textStyle(index);
     try style.writeSgr(w);
     const room = if (list.width) |width| width -| tui.width.of(prefix) else null;
     if (room) |columns| {
@@ -254,6 +264,17 @@ test "setItems keeps the cursor in range" {
     try testing.expectEqual(1, list.cursor);
     try testing.expectEqual(0, list.offset);
     try testing.expectEqual(List.Window{ .start = 0, .end = 2 }, list.window());
+}
+
+test "the cursor's prefix and text styled apart" {
+    var buffer: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    const list: List = .{
+        .items = &.{"a"},
+        .styles = .{ .cursor = .{ .bold = true }, .cursor_text = .{} },
+    };
+    try list.view(&w);
+    try testing.expectEqualStrings("\x1b[1m> \x1b[0ma", w.buffered());
 }
 
 test "the cursor row is styled" {
