@@ -1,7 +1,9 @@
 //! Leveled logging, as charm's log does it: human text (plain, or charm's colored
-//! badges), JSON lines, or logfmt; structured fields, fields every record carries
-//! (`with`), a prefix, the caller's file and line (`logAt`), time formats, a fatal level,
-//! redaction by key, and scrubbing of known secret values wherever they appear.
+//! badges, restyled with `Styles`), JSON lines, or logfmt; structured fields, fields every
+//! record carries (`with`), a prefix, the caller's file and line (`logAt`), time formats
+//! (Go's named layouts among them), a fatal level, records with no level (`none`, as
+//! charm's `Print`), redaction by key, and scrubbing of known secret values wherever they
+//! appear.
 //!
 //! ```zig
 //! var logger: log.Logger = .{ .writer = stderr, .level = try log.parseLevel("debug") };
@@ -30,6 +32,8 @@ pub const Level = enum(u3) {
     err,
     /// Logged, then the process exits with status 1 (`Logger.fatal`).
     fatal,
+    /// No level: the record carries none and is never filtered out, as charm's `Print`.
+    none,
 
     /// The upper-case label used in text output: `INFO`, `ERROR`, ...
     pub fn label(level: Level) []const u8 {
@@ -40,6 +44,7 @@ pub const Level = enum(u3) {
             .warn => "WARN",
             .err => "ERROR",
             .fatal => "FATAL",
+            .none => "",
         };
     }
 
@@ -52,6 +57,21 @@ pub const Level = enum(u3) {
             .warn => "WARN",
             .err => "ERRO",
             .fatal => "FATA",
+            .none => "",
+        };
+    }
+
+    /// charm's color for the level, of the 256: debug purple, info teal, warn yellow,
+    /// error pink, fatal magenta (and trace gray; `none` has no badge to color).
+    pub fn charmColor(level: Level) u8 {
+        return switch (level) {
+            .trace => 245,
+            .debug => 63,
+            .info => 86,
+            .warn => 192,
+            .err => 204,
+            .fatal => 134,
+            .none => 0,
         };
     }
 
@@ -111,7 +131,8 @@ pub const Style = enum {
     charm,
 };
 
-/// How timestamps are written in text records (JSON and logfmt always use RFC 3339).
+/// How timestamps are written in text records (JSON and logfmt always use RFC 3339), in
+/// UTC: these, and the rest of Go's named layouts as gum's log names them (`goLayout`).
 pub const TimeFormat = enum {
     /// `2026-10-12T10:00:00Z`
     rfc3339,
@@ -121,6 +142,75 @@ pub const TimeFormat = enum {
     time,
     /// `10:00AM`
     kitchen,
+    layout,
+    ansic,
+    unixdate,
+    rubydate,
+    rfc822,
+    rfc822z,
+    rfc850,
+    rfc1123,
+    rfc1123z,
+    rfc3339nano,
+    stamp,
+    stampmilli,
+    stampmicro,
+    stampnano,
+    datetime,
+    dateonly,
+    timeonly,
+
+    /// The format as Go spells it, with its reference time `Mon Jan 2 15:04:05 MST 2006`:
+    /// for the Go names, the `time` package's constant (`ansic` is `time.ANSIC`).
+    pub fn goLayout(format: TimeFormat) []const u8 {
+        return switch (format) {
+            .rfc3339 => "2006-01-02T15:04:05Z07:00",
+            .date_time => "2006/01/02 15:04:05",
+            .time, .timeonly => "15:04:05",
+            .kitchen => "3:04PM",
+            .layout => "01/02 03:04:05PM '06 -0700",
+            .ansic => "Mon Jan _2 15:04:05 2006",
+            .unixdate => "Mon Jan _2 15:04:05 MST 2006",
+            .rubydate => "Mon Jan 02 15:04:05 -0700 2006",
+            .rfc822 => "02 Jan 06 15:04 MST",
+            .rfc822z => "02 Jan 06 15:04 -0700",
+            .rfc850 => "Monday, 02-Jan-06 15:04:05 MST",
+            .rfc1123 => "Mon, 02 Jan 2006 15:04:05 MST",
+            .rfc1123z => "Mon, 02 Jan 2006 15:04:05 -0700",
+            .rfc3339nano => "2006-01-02T15:04:05.999999999Z07:00",
+            .stamp => "Jan _2 15:04:05",
+            .stampmilli => "Jan _2 15:04:05.000",
+            .stampmicro => "Jan _2 15:04:05.000000",
+            .stampnano => "Jan _2 15:04:05.000000000",
+            .datetime => "2006-01-02 15:04:05",
+            .dateonly => "2006-01-02",
+        };
+    }
+};
+
+/// How each part of a text record looks in charm's style (`style = .charm`, `color` on), as
+/// charm's `Styles`: the SGR sequence starting it (`"\x1b[1m"`), empty for none. The
+/// defaults are charm's look.
+pub const Styles = struct {
+    time: []const u8 = "\x1b[2m",
+    /// Empty for the level's own color, bold (`Level.charmColor`).
+    level: []const u8 = "",
+    /// charm's four letters (`ERRO`); false writes the whole name (`ERROR`), as gum's log.
+    short_levels: bool = true,
+    prefix: []const u8 = "\x1b[1m",
+    message: []const u8 = "",
+    key: []const u8 = "\x1b[2m",
+    separator: []const u8 = "\x1b[2m",
+    value: []const u8 = "",
+
+    /// No sequences at all, and whole level names: text without charm's style.
+    const none: Styles = .{
+        .time = "",
+        .short_levels = false,
+        .prefix = "",
+        .key = "",
+        .separator = "",
+    };
 };
 
 /// A field every record of a logger carries (`Logger.with`).
@@ -191,6 +281,8 @@ pub const Logger = struct {
     fields: []const Field = &.{},
     /// The look of text records with `color` on.
     style: Style = .plain,
+    /// The look of each part under `style = .charm`.
+    styles: Styles = .{},
     time_format: TimeFormat = .rfc3339,
 
     /// Whether a record at `level` would be written.
@@ -308,18 +400,24 @@ pub const Logger = struct {
     ) Io.Writer.Error!void {
         const w = logger.writer;
         const charm = logger.color and logger.style == .charm;
+        const st: Styles = if (charm) logger.styles else .none;
         if (time) |instant| {
-            if (charm) try w.writeAll("\x1b[2m");
+            try w.writeAll(st.time);
             try writeTimeAs(w, instant, logger.time_format);
-            if (charm) try w.writeAll("\x1b[0m");
+            try endStyle(w, st.time);
             try w.writeByte(' ');
         }
-        if (charm) {
-            try w.print("\x1b[{s}m{s}\x1b[0m ", .{ charmColor(level), level.short() });
-        } else if (logger.color) {
-            try w.print("\x1b[{s}m{s}\x1b[0m ", .{ levelColor(level), level.label() });
-        } else {
-            try w.print("{s} ", .{level.label()});
+        if (level != .none) {
+            const label = if (st.short_levels) level.short() else level.label();
+            if (st.level.len > 0) {
+                try w.print("{s}{s}\x1b[0m ", .{ st.level, label });
+            } else if (charm) {
+                try w.print("\x1b[1;38;5;{d}m{s}\x1b[0m ", .{ level.charmColor(), label });
+            } else if (logger.color) {
+                try w.print("\x1b[{s}m{s}\x1b[0m ", .{ levelColor(level), label });
+            } else {
+                try w.print("{s} ", .{label});
+            }
         }
         if (caller.len > 0) {
             if (charm) try w.writeAll("\x1b[2m");
@@ -327,44 +425,52 @@ pub const Logger = struct {
             if (charm) try w.writeAll("\x1b[0m");
         }
         if (logger.prefix.len > 0) {
-            if (charm) try w.writeAll("\x1b[1m");
+            try w.writeAll(st.prefix);
             try writeTextEscaped(w, logger.prefix, &.{});
             try w.writeByte(':');
-            if (charm) try w.writeAll("\x1b[0m");
+            try endStyle(w, st.prefix);
             try w.writeByte(' ');
         }
+        try w.writeAll(st.message);
         try writeTextEscaped(w, message, logger.secrets);
+        try endStyle(w, st.message);
         if (logger.scope.len > 0) {
-            try logger.writeKey(w, "scope", charm);
+            try writeKey(w, "scope", st);
+            try w.writeAll(st.value);
             try writeTextString(w, logger.scope, &.{});
+            try endStyle(w, st.value);
         }
         for (logger.fields) |field| {
-            try logger.writeKey(w, field.key, charm);
+            try writeKey(w, field.key, st);
+            try w.writeAll(st.value);
             if (logger.isRedacted(field.key))
                 try w.writeAll(redacted)
             else
                 try writeFieldValue(w, field.value, logger.secrets);
+            try endStyle(w, st.value);
         }
         inline for (@typeInfo(@TypeOf(fields)).@"struct".field_names) |key| {
-            try logger.writeKey(w, key, charm);
+            try writeKey(w, key, st);
+            try w.writeAll(st.value);
             if (logger.isRedacted(key)) {
                 try w.writeAll(redacted);
             } else {
                 try writeTextValue(w, @field(fields, key), logger.secrets);
             }
+            try endStyle(w, st.value);
         }
         try w.writeByte('\n');
     }
 
-    fn writeKey(
-        logger: *const Logger,
-        w: *Io.Writer,
-        key: []const u8,
-        charm: bool,
-    ) Io.Writer.Error!void {
-        _ = logger;
-        if (charm) return w.print(" \x1b[2m{s}=\x1b[0m", .{key});
-        try w.print(" {s}=", .{key});
+    /// ` key=`, the key and the `=` each in their style (one span when the same).
+    fn writeKey(w: *Io.Writer, key: []const u8, st: Styles) Io.Writer.Error!void {
+        try w.print(" {s}{s}", .{ st.key, key });
+        if (!std.mem.eql(u8, st.key, st.separator)) {
+            try endStyle(w, st.key);
+            try w.writeAll(st.separator);
+        }
+        try w.writeByte('=');
+        try endStyle(w, st.separator);
     }
 
     fn writeLogfmt(
@@ -381,16 +487,18 @@ pub const Logger = struct {
             try writeTimestamp(w, instant);
             try w.writeByte(' ');
         }
-        try w.print("level={s}", .{level.name()});
+        if (level != .none) try w.print("level={s} ", .{level.name()});
         if (caller.len > 0) {
-            try w.writeAll(" caller=");
+            try w.writeAll("caller=");
             try writeTextString(w, caller, &.{});
+            try w.writeByte(' ');
         }
         if (logger.prefix.len > 0) {
-            try w.writeAll(" prefix=");
+            try w.writeAll("prefix=");
             try writeTextString(w, logger.prefix, &.{});
+            try w.writeByte(' ');
         }
-        try w.writeAll(" msg=");
+        try w.writeAll("msg=");
         try writeTextString(w, message, logger.secrets);
         if (logger.scope.len > 0) {
             try w.writeAll(" scope=");
@@ -432,8 +540,10 @@ pub const Logger = struct {
             try json.writer.writeByte('"');
             json.endWriteRaw();
         }
-        try json.objectField("level");
-        try json.write(level.name());
+        if (level != .none) {
+            try json.objectField("level");
+            try json.write(level.name());
+        }
         if (caller.len > 0) {
             try json.objectField("caller");
             try json.write(caller);
@@ -470,6 +580,11 @@ pub const Logger = struct {
     }
 };
 
+/// Ends a part written in `sgr`, if it had a style.
+fn endStyle(w: *Io.Writer, sgr: []const u8) Io.Writer.Error!void {
+    if (sgr.len > 0) try w.writeAll("\x1b[0m");
+}
+
 fn checkFields(comptime Fields: type) void {
     if (@typeInfo(Fields) != .@"struct") {
         @compileError("log fields must be a struct literal such as .{ .id = 7 }");
@@ -491,18 +606,7 @@ fn levelColor(level: Level) []const u8 {
         .warn => "33",
         .err => "31;1",
         .fatal => "35;1",
-    };
-}
-
-/// charm's log colors: debug purple, info teal, warn yellow, error pink, fatal magenta.
-fn charmColor(level: Level) []const u8 {
-    return switch (level) {
-        .trace => "1;38;5;245",
-        .debug => "1;38;5;63",
-        .info => "1;38;5;86",
-        .warn => "1;38;5;192",
-        .err => "1;38;5;204",
-        .fatal => "1;38;5;134",
+        .none => "",
     };
 }
 
@@ -521,35 +625,100 @@ fn writeFieldValue(
 
 /// Writes `instant` (UTC) in `format`.
 pub fn writeTimeAs(w: *Io.Writer, instant: Io.Timestamp, format: TimeFormat) Io.Writer.Error!void {
-    if (format == .rfc3339) return writeTimestamp(w, instant);
-    const seconds: u64 = @intCast(@max(0, instant.toSeconds()));
-    const epoch: std.time.epoch.EpochSeconds = .{ .secs = seconds };
+    return writeLayout(w, instant, format.goLayout());
+}
+
+/// The parts of Go's reference time that `TimeFormat.goLayout` uses, longest first where
+/// one starts another (`Monday`, `Mon`).
+const LayoutPart = enum {
+    weekday,
+    weekday_short,
+    month_short,
+    year,
+    zone_colon,
+    zone,
+    zone_name,
+    nanos,
+    micros,
+    millis,
+    fraction,
+    pm,
+    month,
+    day,
+    day_space,
+    hour12_zero,
+    minute,
+    second,
+    year_short,
+    hour,
+    hour12,
+};
+
+const layout_parts = [_]struct { []const u8, LayoutPart }{
+    .{ "Monday", .weekday }, .{ "Mon", .weekday_short },   .{ "Jan", .month_short },
+    .{ "2006", .year },      .{ "Z07:00", .zone_colon },   .{ "-0700", .zone },
+    .{ "MST", .zone_name },  .{ ".000000000", .nanos },    .{ ".000000", .micros },
+    .{ ".000", .millis },    .{ ".999999999", .fraction }, .{ "PM", .pm },
+    .{ "01", .month },       .{ "02", .day },              .{ "_2", .day_space },
+    .{ "03", .hour12_zero }, .{ "04", .minute },           .{ "05", .second },
+    .{ "06", .year_short },  .{ "15", .hour },             .{ "3", .hour12 },
+};
+
+const months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+
+const weekdays = [_][]const u8{
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+};
+
+/// Writes `instant` in UTC as Go's `layout` spells it: each of `layout_parts` stands for
+/// that part of the instant, and anything else is written as it is.
+fn writeLayout(w: *Io.Writer, instant: Io.Timestamp, layout: []const u8) Io.Writer.Error!void {
+    const ns: u64 = @intCast(@max(0, instant.toNanoseconds()));
+    const epoch: std.time.epoch.EpochSeconds = .{ .secs = ns / std.time.ns_per_s };
+    const epoch_day = epoch.getEpochDay();
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
     const day = epoch.getDaySeconds();
-    const hours = day.getHoursIntoDay();
-    const minutes = day.getMinutesIntoHour();
-    switch (format) {
-        .rfc3339 => unreachable,
-        .time => try w.print("{d:0>2}:{d:0>2}:{d:0>2}", .{
-            hours,
-            minutes,
-            day.getSecondsIntoMinute(),
-        }),
-        .kitchen => {
-            const twelve = if (hours % 12 == 0) 12 else hours % 12;
-            try w.print("{d}:{d:0>2}{s}", .{ twelve, minutes, if (hours < 12) "AM" else "PM" });
-        },
-        .date_time => {
-            const year_day = epoch.getEpochDay().calculateYearDay();
-            const month_day = year_day.calculateMonthDay();
-            try w.print("{d:0>4}/{d:0>2}/{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-                year_day.year,
-                month_day.month.numeric(),
-                month_day.day_index + 1,
-                hours,
-                minutes,
-                day.getSecondsIntoMinute(),
-            });
-        },
+    const hour = day.getHoursIntoDay();
+    const hour12 = if (hour % 12 == 0) 12 else hour % 12;
+    const month: usize = month_day.month.numeric();
+    const nanos = ns % std.time.ns_per_s;
+    var i: usize = 0;
+    next: while (i < layout.len) {
+        for (layout_parts) |part| if (std.mem.startsWith(u8, layout[i..], part[0])) {
+            i += part[0].len;
+            switch (part[1]) {
+                // 1970-01-01 was a Thursday.
+                .weekday => try w.writeAll(weekdays[(epoch_day.day + 4) % 7]),
+                .weekday_short => try w.writeAll(weekdays[(epoch_day.day + 4) % 7][0..3]),
+                .month_short => try w.writeAll(months[3 * (month - 1) ..][0..3]),
+                .year => try w.print("{d:0>4}", .{year_day.year}),
+                .zone_colon => try w.writeByte('Z'),
+                .zone => try w.writeAll("+0000"),
+                .zone_name => try w.writeAll("UTC"),
+                .nanos => try w.print(".{d:0>9}", .{nanos}),
+                .micros => try w.print(".{d:0>6}", .{nanos / std.time.ns_per_us}),
+                .millis => try w.print(".{d:0>3}", .{nanos / std.time.ns_per_ms}),
+                .fraction => if (nanos > 0) {
+                    var digits: [9]u8 = undefined;
+                    _ = std.fmt.bufPrint(&digits, "{d:0>9}", .{nanos}) catch unreachable;
+                    try w.print(".{s}", .{std.mem.trimEnd(u8, &digits, "0")});
+                },
+                .pm => try w.writeAll(if (hour < 12) "AM" else "PM"),
+                .month => try w.print("{d:0>2}", .{month}),
+                .day => try w.print("{d:0>2}", .{month_day.day_index + 1}),
+                .day_space => try w.print("{d: >2}", .{month_day.day_index + 1}),
+                .hour12_zero => try w.print("{d:0>2}", .{hour12}),
+                .minute => try w.print("{d:0>2}", .{day.getMinutesIntoHour()}),
+                .second => try w.print("{d:0>2}", .{day.getSecondsIntoMinute()}),
+                .year_short => try w.print("{d:0>2}", .{year_day.year % 100}),
+                .hour => try w.print("{d:0>2}", .{hour}),
+                .hour12 => try w.print("{d}", .{hour12}),
+            }
+            continue :next;
+        };
+        try w.writeByte(layout[i]);
+        i += 1;
     }
 }
 
@@ -1047,6 +1216,82 @@ test "logfmt, charm's style, fields carried, prefixes, callers, and time formats
     w = .fixed(&buffer);
     try writeTimeAs(&w, test_instant, .date_time);
     try testing.expectEqualStrings("2026/10/12 10:00:00", w.buffered());
+}
+
+test "records with no level, as charm's Print" {
+    var buffer: [512]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    var logger = testLogger(&w, .text);
+    logger.level = .fatal;
+    logger.prefix = "p";
+    try logger.log(.none, "hi", .{ .n = 1 });
+    logger.format = .logfmt;
+    try logger.log(.none, "hi", .{});
+    logger.format = .json;
+    logger.clock = .none;
+    try logger.log(.none, "hi", .{});
+    try testing.expectEqualStrings("2026-10-12T10:00:00Z p: hi n=1\n" ++
+        "time=2026-10-12T10:00:00Z prefix=p msg=hi\n" ++
+        "{\"prefix\":\"p\",\"msg\":\"hi\"}\n", w.buffered());
+}
+
+test "Go's named time layouts, in UTC" {
+    // Monday 2026-10-12, 15:04:05.120 UTC.
+    const instant: Io.Timestamp = .fromNanoseconds(test_instant.toNanoseconds() +
+        (5 * std.time.s_per_hour + 4 * std.time.s_per_min + 5) * std.time.ns_per_s +
+        120 * std.time.ns_per_ms);
+    const expected = [_]struct { TimeFormat, []const u8 }{
+        .{ .kitchen, "3:04PM" },
+        .{ .layout, "10/12 03:04:05PM '26 +0000" },
+        .{ .ansic, "Mon Oct 12 15:04:05 2026" },
+        .{ .unixdate, "Mon Oct 12 15:04:05 UTC 2026" },
+        .{ .rfc822z, "12 Oct 26 15:04 +0000" },
+        .{ .rfc850, "Monday, 12-Oct-26 15:04:05 UTC" },
+        .{ .rfc1123, "Mon, 12 Oct 2026 15:04:05 UTC" },
+        .{ .rfc3339, "2026-10-12T15:04:05Z" },
+        .{ .rfc3339nano, "2026-10-12T15:04:05.12Z" },
+        .{ .stampmilli, "Oct 12 15:04:05.120" },
+        .{ .stampmicro, "Oct 12 15:04:05.120000" },
+        .{ .datetime, "2026-10-12 15:04:05" },
+        .{ .dateonly, "2026-10-12" },
+        .{ .timeonly, "15:04:05" },
+    };
+    var buffer: [64]u8 = undefined;
+    for (expected) |e| {
+        var w: Io.Writer = .fixed(&buffer);
+        try writeTimeAs(&w, instant, e[0]);
+        try testing.expectEqualStrings(e[1], w.buffered());
+    }
+    // A day of one digit is padded with a space; midnight is 12AM.
+    var w: Io.Writer = .fixed(&buffer);
+    try writeTimeAs(&w, .fromNanoseconds(0), .stamp);
+    try writeTimeAs(&w, .fromNanoseconds(0), .kitchen);
+    try writeTimeAs(&w, .fromNanoseconds(0), .rfc3339nano);
+    try testing.expectEqualStrings("Jan  1 00:00:0012:00AM1970-01-01T00:00:00Z", w.buffered());
+}
+
+test "charm's style, restyled" {
+    var buffer: [512]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    const logger: Logger = .{
+        .writer = &w,
+        .color = true,
+        .style = .charm,
+        .styles = .{
+            .time = "",
+            .level = "\x1b[1;35m",
+            .short_levels = false,
+            .prefix = "\x1b[4m",
+            .message = "\x1b[3m",
+            .key = "",
+            .separator = "\x1b[2m",
+            .value = "\x1b[32m",
+        },
+        .prefix = "p",
+    };
+    try logger.log(.err, "m", .{ .k = "v" });
+    try testing.expectEqualStrings("\x1b[1;35mERROR\x1b[0m \x1b[4mp:\x1b[0m \x1b[3mm\x1b[0m " ++
+        "k\x1b[2m=\x1b[0m\x1b[32mv\x1b[0m\n", w.buffered());
 }
 
 test "secret values are scrubbed from messages and string fields in every format" {
