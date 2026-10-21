@@ -477,6 +477,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `cfg fmt` on YAML took a `#` inside a key (`c#ounts:`) for the start of a comment and
+  declined the file, even one it had just written from `c#ounts: [3, -4]`.
 - **`cfg` encrypted files:** the Argon2 costs an envelope names are bounded (1 GiB, four
   passes over it, 16 lanes) and checked before they are paid; a file from elsewhere
   saying `m=4294967295` ran the machine out of memory, `t=4294967295` for hours.

@@ -1025,12 +1025,14 @@ fn regressions(format: Format) []const []const u8 {
         // Reformatting wrote `- -4`, then took the `-` of `-4` for an indicator; and it
         // could not find the end of a key quoted with escapes; and reading a piece at a
         // time cut before `\x9d:\x0c`, which is not a key; and it took a first piece that
-        // was a block scalar for the whole document, then added keys to it.
+        // was a block scalar for the whole document, then added keys to it; and
+        // reformatting took the `#` in a key for a comment, so declined what it wrote.
         .yaml => &.{
             "counts: [3, -4]\n",
             "\"\x19counts\":\n  - 3\n",
             "b:\x0c\n\x9d:\x0c",
             " |+\nxs: [a]\nlist:\n- 1\n",
+            "c#\xcb\xf4ounts: [3, -4]\n",
         },
         else => &.{},
     };
