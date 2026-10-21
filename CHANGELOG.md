@@ -477,6 +477,9 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `yaml.parseReader` (YAML through `Config.loadReader`) reads exactly what `yaml.parse`
+  reads: it took each piece for a document, so it accepted keys after `...` and after a
+  root that was a flow mapping or indented, and dropped a byte order mark starting a line.
 - `cfg fmt` on YAML took a `#` inside a key (`c#ounts:`) for the start of a comment and
   declined the file, even one it had just written from `c#ounts: [3, -4]`.
 - **`cfg` encrypted files:** the Argon2 costs an envelope names are bounded (1 GiB, four

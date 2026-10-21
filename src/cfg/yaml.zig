@@ -50,8 +50,8 @@ pub const ReadError = Error || error{ ReadFailed, StreamTooLong };
 /// first column, and each piece's text is freed (it lives in `scratch`) once it is part of
 /// the tree in `arena`. A piece that does not parse alone, such as a quoted value running
 /// past the cut, is joined with the next, so a document reads as `parse` reads it. A
-/// document that is not a mapping at the first column is held whole. More than
-/// `max_bytes` is `error.StreamTooLong`.
+/// document that is not a mapping at the first column is held whole, and so is what follows
+/// `...`. More than `max_bytes` is `error.StreamTooLong`.
 pub fn parseReader(
     arena: Allocator,
     scratch: Allocator,
@@ -69,6 +69,12 @@ pub fn parseReader(
     // After a piece fails, it is tried again only once it has doubled, so that a document
     // with an early error is not parsed over and over.
     var retry_at: usize = 0;
+    // Pieces are entries of a block mapping at the first column. Nothing is cut in a
+    // document whose first content is anything else, after which `parse` rejects keys at
+    // the first column that a piece alone would take; nor after `...`, which ends the
+    // document and not just a piece.
+    var started = false;
+    var whole = false;
     var total: usize = 0;
     while (true) {
         const line_start = piece.written().len;
@@ -87,7 +93,15 @@ pub fn parseReader(
         piece.writer.writeByte('\n') catch return error.OutOfMemory;
         const line = piece.written()[line_start..];
         const key = startsKey(line);
-        if (key and has_key and line_start >= retry_at) {
+        if (!started) {
+            const text = line[if (line_start == 0) bomLength(line) else 0..];
+            const content = std.mem.trimStart(u8, text, " \t\r\n");
+            started = content.len > 0 and content[0] != '#' and content[0] != '%' and
+                !std.mem.startsWith(u8, content, "---");
+            whole = started and !startsKey(text);
+        }
+        whole = whole or std.mem.startsWith(u8, line, "...");
+        if (key and has_key and !whole and line_start >= retry_at) {
             const before = piece.written()[0..line_start];
             if (try parsePiece(arena, &root, before, first_line, false, null)) {
                 // The new line starts the next piece.
@@ -156,7 +170,8 @@ fn parsePiece(
 
 /// Whether `line` starts a key at the first column: a plain key and its `:`.
 fn startsKey(line: []const u8) bool {
-    if (line.len == 0) return false;
+    // A byte order mark is dropped only where the document starts, not where a piece does.
+    if (line.len == 0 or std.mem.startsWith(u8, line, "\xef\xbb\xbf")) return false;
     switch (line[0]) {
         ' ', '\t', '\r', '\n', '#', '-', '[', ']', '{', '}', ',', '?' => return false,
         ':', '|', '>', '!', '&', '*', '%', '@', '`', '"', '\'', '.' => return false,
@@ -1830,6 +1845,8 @@ test "parseReader reads as parse does, a piece at a time" {
         "",
         "plain\n",
         "a: 1\r\nb: 2\r\n",
+        // A byte order mark starts only the first piece: later it is part of a key.
+        "a: 1\n\xef\xbb\xbfb: 2\n",
     };
     for (documents) |document| {
         // A buffer smaller than the lines.
@@ -1853,6 +1870,19 @@ test "parseReader reads as parse does, a piece at a time" {
     try std.testing.expectEqual(whole.line, diag.line);
     var long: std.Io.Reader = .fixed("a: 1\nb: 2\n");
     try std.testing.expectError(error.StreamTooLong, parseReader(a, gpa, &long, 5, null));
+    // What `parse` rejects whole is rejected, though its pieces parse alone: content after
+    // `...`, which ends the document, and keys at the first column after a root that is a
+    // flow mapping or is indented (each with a line inside that looks like a key).
+    for ([_][]const u8{
+        "a: 1\n...\nb: 2\n",
+        "{a: 1,\nb: 2}\nc: 3\n",
+        "# c\n  a: 'x\nb: y'\nc: 1\n",
+    }) |document| {
+        try std.testing.expectError(error.SyntaxError, parse(a, document, null));
+        var source: std.Io.Reader = .fixed(document);
+        const streamed = parseReader(a, gpa, &source, 1 << 20, null);
+        try std.testing.expectError(error.SyntaxError, streamed);
+    }
 }
 
 test "parse shares nothing with the source" {
