@@ -640,9 +640,12 @@ const Validator = struct {
 /// Equality for `enum` and `const`, coercing text to the other side's scalar type.
 fn sameValue(expected: Value, value: Value, options: ValidateOptions) bool {
     if (expected.eql(value)) return true;
-    // A schema's `"2024-01-01"` names the date-time `2024-01-01`.
+    // A date-time and a string match by text: `"2024-01-01"` names `2024-01-01`.
     if (expected == .string and value == .datetime) {
         return std.mem.eql(u8, expected.string, value.datetime);
+    }
+    if (expected == .datetime and value == .string) {
+        return std.mem.eql(u8, expected.datetime, value.string);
     }
     if (!options.coerce or value != .string) return false;
     return switch (expected) {
@@ -989,6 +992,11 @@ test "validate: a date-time is a string" {
     try testing.expectEqualStrings("must be at least 11 characters", problems.items[0].message);
     const inferred = try infer(a, doc);
     try testing.expectEqualStrings("string", inferred.lookup("properties.day.type").?.string);
+    // And the other way: a schema written in TOML names a string by a date-time.
+    var by_date: Value = .empty_table;
+    try by_date.put(a, "const", .{ .datetime = "2024-01-01" });
+    const text: Value = .{ .string = "2024-01-01" };
+    try testing.expect(try validate(a, by_date, text, .{ .coerce = false }, &problems));
 }
 
 test "a schema built from a struct validates what decode accepts" {
