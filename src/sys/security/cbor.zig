@@ -104,12 +104,16 @@ pub const Reader = struct {
         return r.expect(.map);
     }
 
+    /// `false` or `true`, in their one-byte form: not a float, nor a two-byte simple value.
     pub fn boolean(r: *Reader) Error!bool {
-        return switch (try r.expect(.simple)) {
-            simple_false => false,
-            simple_true => true,
-            else => error.InvalidCbor,
+        if (r.pos >= r.bytes.len) return error.InvalidCbor;
+        const value: bool = switch (r.bytes[r.pos]) {
+            0xe0 | simple_false => false,
+            0xe0 | simple_true => true,
+            else => return error.InvalidCbor,
         };
+        r.pos += 1;
+        return value;
     }
 
     fn take(r: *Reader, len: u64) Error![]const u8 {
@@ -241,4 +245,17 @@ test "skip passes nested items and refuses what it cannot read" {
     var wrong: Reader = .{ .bytes = &.{0x01} };
     try e(error.InvalidCbor, wrong.textString());
     try e(error.InvalidCbor, (Reader{ .bytes = "" }).peek());
+}
+
+test "boolean takes only false and true, not a float or a long simple value" {
+    const e = testing.expectError;
+    // A half float whose bits are 21, true's simple value; then false in two bytes.
+    for ([_][]const u8{ &.{ 0xf9, 0x00, 0x15 }, &.{ 0xf8, 0x14 }, &.{0xf6}, "" }) |bytes| {
+        var r: Reader = .{ .bytes = bytes };
+        try e(error.InvalidCbor, r.boolean());
+    }
+    var r: Reader = .{ .bytes = &.{ 0xf4, 0xf5 } };
+    try testing.expect(!try r.boolean());
+    try testing.expect(try r.boolean());
+    try testing.expect(r.atEnd());
 }

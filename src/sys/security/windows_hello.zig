@@ -8,7 +8,12 @@
 //! ```zig
 //! if (windows_hello.apiVersion() == null) return error.NoWindowsHello;
 //! const registration = try windows_hello.register(arena, creation, "https://example.com", .{});
-//! const credential = try registration.credential(); // what the relying party keeps
+//! // What the relying party keeps, once it has checked the registration.
+//! const credential = try registration.credential(arena, .{
+//!     .challenge = creation.challenge,
+//!     .origin = "https://example.com",
+//!     .rp_id = "example.com",
+//! });
 //! const assertion = try windows_hello.assert(arena, options, "https://example.com", .{});
 //! try assertion.writeJson(out);
 //! ```
@@ -33,7 +38,8 @@ pub const Error = error{
     NotAllowed,
     /// Windows refused the request for another reason.
     Failed,
-    /// The request options name no RP ID and none can be taken from `origin`.
+    /// `origin` has no host for the RP ID, or the request options name an RP ID it may not
+    /// use (`webauthn.rpIdFor`).
     InvalidOrigin,
     /// `register`: the authenticator already holds one of `exclude_credentials`.
     Excluded,
@@ -65,7 +71,8 @@ pub fn apiVersion() ?u32 {
 
 /// A whole `navigator.credentials.get()` through Windows Hello: builds clientDataJSON for
 /// `options` and `origin`, shows the system's dialog, and returns the assertion, in
-/// `arena`. Blocks until the person answers. The RP ID defaults to the host of `origin`.
+/// `arena`. Blocks until the person answers. The RP ID defaults to the host of `origin`,
+/// and must be that host or a domain it is under.
 pub fn assert(
     arena: Allocator,
     options: webauthn.RequestOptions,
@@ -74,7 +81,7 @@ pub fn assert(
 ) Error!webauthn.Assertion {
     if (!is_windows) return error.Unavailable;
     const api = load() orelse return error.Unavailable;
-    const rp_id = options.rp_id orelse hostOf(origin) orelse return error.InvalidOrigin;
+    const rp_id = webauthn.rpIdFor(options.rp_id, origin) orelse return error.InvalidOrigin;
     var client: Io.Writer.Allocating = .init(arena);
     const data: webauthn.ClientData = .{ .challenge = options.challenge, .origin = origin };
     data.writeJson(&client.writer) catch return error.OutOfMemory;
@@ -126,7 +133,7 @@ pub fn register(
 ) Error!webauthn.Registration {
     if (!is_windows) return error.Unavailable;
     const api = load() orelse return error.Unavailable;
-    const rp_id = options.rp.id orelse hostOf(origin) orelse return error.InvalidOrigin;
+    const rp_id = webauthn.rpIdFor(options.rp.id, origin) orelse return error.InvalidOrigin;
     var client: Io.Writer.Allocating = .init(arena);
     const data: webauthn.ClientData = .{ .ceremony = .create, .challenge = options.challenge, .origin = origin };
     data.writeJson(&client.writer) catch return error.OutOfMemory;
@@ -237,13 +244,6 @@ fn errorOf(status: i32) Error {
         0x8009000F => error.Excluded, // NTE_EXISTS
         else => error.Failed,
     };
-}
-
-fn hostOf(origin: []const u8) ?[]const u8 {
-    const scheme_end = std.mem.indexOf(u8, origin, "://") orelse return null;
-    const rest = origin[scheme_end + 3 ..];
-    const end = std.mem.indexOfAny(u8, rest, ":/") orelse rest.len;
-    return if (end == 0) null else rest[0..end];
 }
 
 // -- webauthn.h, the first version of each structure --------------------------------------

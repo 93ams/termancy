@@ -398,7 +398,8 @@ pub const DevicePoll = struct {
         };
         switch (failure.kind()) {
             .authorization_pending => {},
-            .slow_down => poll.interval += slow_down_step,
+            // Saturating: the server picks the interval, up to 2^32 - 1.
+            .slow_down => poll.interval +|= slow_down_step,
             .access_denied => return .denied,
             .expired_token => return .expired,
             else => return .{ .failed = failure },
@@ -665,4 +666,9 @@ test "DevicePoll: every response" {
         .interval = 0,
     }, 0);
     try expectWait(1, zero_interval.next(pending, 0));
+
+    // The longest interval a server can send, then `slow_down`: it overflowed.
+    var slowest = zero_interval;
+    slowest.interval = std.math.maxInt(u32);
+    try std.testing.expectEqual(.expired, slowest.next(pollFailure("slow_down"), 0));
 }

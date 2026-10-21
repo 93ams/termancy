@@ -38,6 +38,7 @@ const HkdfSha256 = std.crypto.kdf.hkdf.HkdfSha256;
 const Aes256 = std.crypto.core.aes.Aes256;
 const P256 = std.crypto.ecc.P256;
 const cbor = @import("cbor.zig");
+const secure = @import("secure.zig");
 const webauthn = @import("webauthn.zig");
 
 /// The size of a CTAPHID report.
@@ -52,7 +53,7 @@ pub const Device = struct {
     pub const Error = error{
         /// The device went away, or refused the read or write.
         DeviceFailed,
-        /// No report arrived in time.
+        /// No report arrived in time, or the request's deadline passed.
         Timeout,
     };
 
@@ -117,6 +118,11 @@ pub const Channel = struct {
     /// How long to wait for each report. Keys send keepalives every 100 ms or so while
     /// waiting for a touch, so this bounds silence, not the wait for the user.
     timeout_ms: u32 = 5_000,
+    /// How long one request may take in all, keepalives and other channels' reports
+    /// included, so a key that keeps sending them cannot hold us forever. WebAuthn's
+    /// recommended default for a ceremony; `assert` takes the request's
+    /// (`RequestOptions.ceremonyTimeoutMs`).
+    deadline_ms: u32 = 300_000,
 
     pub const broadcast: u32 = 0xffff_ffff;
     const init_data = report_len - 7;
@@ -130,10 +136,14 @@ pub const Channel = struct {
         io.random(&nonce);
         var probe: Channel = .{ .device = device, .cid = broadcast, .io = io };
         var reply: [max_payload]u8 = undefined;
-        const answer = try probe.transact(.init, &nonce, &reply, null);
-        if (answer.len < 17 or !std.mem.eql(u8, answer[0..8], &nonce)) {
-            return error.InvalidResponse;
-        }
+        const start: Io.Timestamp = .now(io, .awake);
+        try probe.send(.init, &nonce);
+        // Another program's INIT is answered on the broadcast channel too: not ours.
+        const answer = while (true) {
+            const got = try probe.receive(.init, &reply, null, start);
+            if (got.len >= nonce.len and std.mem.eql(u8, got[0..nonce.len], &nonce)) break got;
+        };
+        if (answer.len < 17) return error.InvalidResponse;
         const cid = std.mem.readInt(u32, answer[8..12], .big);
         if (cid == 0 or cid == broadcast) return error.InvalidResponse;
         return .{ .device = device, .cid = cid, .io = io };
@@ -148,8 +158,18 @@ pub const Channel = struct {
         out: []u8,
         keepalive: ?Keepalive,
     ) ChannelError![]u8 {
+        const start: Io.Timestamp = .now(channel.io, .awake);
         try channel.send(command, payload);
-        return channel.receive(command, out, keepalive);
+        return channel.receive(command, out, keepalive, start);
+    }
+
+    /// The next report, waiting no longer than `timeout_ms`, nor past `deadline_ms` after
+    /// `start`.
+    fn read(channel: *Channel, report: *Report, start: Io.Timestamp) Device.Error!void {
+        const waited = start.untilNow(channel.io, .awake).toMilliseconds();
+        if (waited >= channel.deadline_ms) return error.Timeout;
+        const left: u32 = @intCast(channel.deadline_ms - waited);
+        return channel.device.read(report, @min(channel.timeout_ms, left));
     }
 
     fn send(channel: *Channel, command: Command, payload: []const u8) ChannelError!void {
@@ -179,10 +199,11 @@ pub const Channel = struct {
         command: Command,
         out: []u8,
         keepalive: ?Keepalive,
+        start: Io.Timestamp,
     ) ChannelError![]u8 {
         var report: Report = undefined;
         const len = while (true) {
-            try channel.device.read(&report, channel.timeout_ms);
+            try channel.read(&report, start);
             if (!channel.ours(&report) or report[4] & 0x80 == 0) continue;
             const got: Command = @fromBackingInt(@intCast(@as(u7, @truncate(report[4]))));
             switch (got) {
@@ -198,13 +219,14 @@ pub const Channel = struct {
                 },
             }
         };
-        if (len > out.len) return error.InvalidResponse;
+        // Past `max_payload` the u7 sequence numbers run out (and `seq` overflows).
+        if (len > @min(out.len, max_payload)) return error.InvalidResponse;
         const first = @min(len, init_data);
         @memcpy(out[0..first], report[7..][0..first]);
         var filled: usize = first;
         var seq: u8 = 0;
         while (filled < len) {
-            try channel.device.read(&report, channel.timeout_ms);
+            try channel.read(&report, start);
             if (!channel.ours(&report)) continue;
             if (report[4] != seq) return error.InvalidResponse;
             const n = @min(len - filled, cont_data);
@@ -473,14 +495,19 @@ fn readId(r: *cbor.Reader) cbor.Error![]const u8 {
     var id: ?[]const u8 = null;
     const entries = try r.map();
     for (0..entries) |_| {
-        const is_id = try r.peek() == .text and std.mem.eql(u8, try r.textString(), "id");
-        if (is_id) id = try r.byteString() else try r.skip();
+        if (try r.peek() != .text) {
+            try r.skip();
+            try r.skip();
+        } else if (std.mem.eql(u8, try r.textString(), "id")) {
+            id = try r.byteString();
+        } else try r.skip();
     }
     return id orelse error.InvalidCbor;
 }
 
 pub const AssertError = CommandError || error{
-    /// The request options name no RP ID and none can be taken from `origin`.
+    /// `origin` has no host for the RP ID, or the request options name an RP ID it may not
+    /// use (`webauthn.rpIdFor`).
     InvalidOrigin,
 };
 
@@ -495,7 +522,8 @@ pub const AssertOptions = struct {
 
 /// A whole `navigator.credentials.get()` against one key: builds clientDataJSON for
 /// `options` and `origin`, asks the key, and returns the assertion, in `arena`. The RP ID
-/// defaults to the host of `origin`.
+/// defaults to the host of `origin`, and must be that host or a domain it is under. Each
+/// exchange with the key takes at most `options.ceremonyTimeoutMs()`.
 pub fn assert(
     arena: Allocator,
     channel: *Channel,
@@ -503,7 +531,10 @@ pub fn assert(
     origin: []const u8,
     how: AssertOptions,
 ) AssertError!webauthn.Assertion {
-    const rp_id = options.rp_id orelse hostOf(origin) orelse return error.InvalidOrigin;
+    const rp_id = webauthn.rpIdFor(options.rp_id, origin) orelse return error.InvalidOrigin;
+    const deadline = channel.deadline_ms;
+    defer channel.deadline_ms = deadline;
+    channel.deadline_ms = options.ceremonyTimeoutMs();
     var client: Io.Writer.Allocating = .init(arena);
     const data: webauthn.ClientData = .{ .challenge = options.challenge, .origin = origin };
     data.writeJson(&client.writer) catch return error.OutOfMemory;
@@ -555,15 +586,16 @@ const SharedSecret = struct {
     protocol: PinProtocol,
     bytes: [64]u8,
 
-    fn derive(protocol: PinProtocol, z: [32]u8) SharedSecret {
+    fn derive(protocol: PinProtocol, z: *const [32]u8) SharedSecret {
         var secret: SharedSecret = .{ .protocol = protocol, .bytes = undefined };
         switch (protocol) {
             .one => {
-                Sha256.hash(&z, secret.bytes[0..32], .{});
+                Sha256.hash(z, secret.bytes[0..32], .{});
                 secret.bytes[32..].* = secret.bytes[0..32].*;
             },
             .two => {
-                const prk = HkdfSha256.extract(&@as([32]u8, @splat(0)), &z);
+                var prk = HkdfSha256.extract(&@as([32]u8, @splat(0)), z);
+                defer secure.wipe(&prk);
                 HkdfSha256.expand(secret.bytes[0..32], "CTAP2 HMAC key", prk);
                 HkdfSha256.expand(secret.bytes[32..], "CTAP2 AES key", prk);
             },
@@ -753,10 +785,16 @@ fn writeAgreementKey(w: *Io.Writer, point: P256) Io.Writer.Error!void {
     try cbor.writeBytes(w, &affine.y.toBytes(.big));
 }
 
-/// One side of the key agreement: `own` times `theirs`, and the secret from its `x`.
-fn agree(protocol: PinProtocol, own: [32]u8, theirs: P256) ?SharedSecret {
-    const product = theirs.mul(own, .big) catch return null;
-    return .derive(protocol, product.affineCoordinates().x.toBytes(.big));
+/// One side of the key agreement: `own` times `theirs`, and the secret from its `x`. The
+/// shared point and its `x` are wiped.
+fn agree(protocol: PinProtocol, own: *const [32]u8, theirs: P256) ?SharedSecret {
+    var product = theirs.mul(own.*, .big) catch return null;
+    defer secure.wipe(std.mem.asBytes(&product));
+    var affine = product.affineCoordinates();
+    defer secure.wipe(std.mem.asBytes(&affine));
+    var z = affine.x.toBytes(.big);
+    defer secure.wipe(&z);
+    return .derive(protocol, &z);
 }
 
 /// Gets a PIN token from the key: agrees a secret, then sends the PIN's hash encrypted
@@ -773,11 +811,15 @@ pub fn getPinToken(
     var out: [512]u8 = undefined;
     const agreement = try clientPin(channel, protocol, .get_key_agreement, "", 0, &out);
     const theirs = try readAgreementKey(agreement);
-    const own = P256.scalar.random(channel.io, .big);
+    // The ephemeral scalar, the secret, and the PIN's hash are wiped on every way out.
+    var own = P256.scalar.random(channel.io, .big);
+    defer secure.wipe(&own);
     const ours = P256.basePoint.mul(own, .big) catch return error.InvalidResponse;
-    const secret = agree(protocol, own, theirs) orelse return error.InvalidResponse;
+    var secret = agree(protocol, &own, theirs) orelse return error.InvalidResponse;
+    defer secure.wipe(&secret.bytes);
 
     var pin_hash: [Sha256.digest_length]u8 = undefined;
+    defer secure.wipe(&pin_hash);
     Sha256.hash(pin, &pin_hash, .{});
     var encrypted: [32]u8 = undefined;
     const pin_hash_enc = secret.encrypt(channel.io, pin_hash[0..16], &encrypted);
@@ -798,14 +840,6 @@ pub fn getPinToken(
         return token;
     }
     return error.RequestTooLarge;
-}
-
-/// The host of an origin such as `https://example.com:8443`.
-fn hostOf(origin: []const u8) ?[]const u8 {
-    const scheme_end = std.mem.indexOf(u8, origin, "://") orelse return null;
-    const rest = origin[scheme_end + 3 ..];
-    const end = std.mem.indexOfAny(u8, rest, ":/") orelse rest.len;
-    return if (end == 0) null else rest[0..end];
 }
 
 /// Whether a HID report descriptor declares the FIDO usage page (0xF1D0) and the CTAPHID
@@ -950,6 +984,8 @@ const FakeKey = struct {
     /// This side of the last key agreement.
     agreement: [32]u8 = undefined,
     token: [32]u8 = @splat(0x5a),
+    /// Answers another program's INIT on the broadcast channel first.
+    foreign_init: bool = false,
 
     fn device(key: *FakeKey) Device {
         return .{ .context = key, .vtable = &.{ .write = write, .read = read } };
@@ -988,6 +1024,11 @@ const FakeKey = struct {
                 @memcpy(reply[0..8], payload[0..8]);
                 std.mem.writeInt(u32, reply[8..12], key.cid, .big);
                 @memcpy(reply[12..], &[_]u8{ 2, 5, 4, 0, 0x04 });
+                if (key.foreign_init) {
+                    var other = reply;
+                    other[0] ^= 0xff;
+                    key.queue(Channel.broadcast, .init, &other);
+                }
                 key.queue(Channel.broadcast, .init, &reply);
             },
             .ping => key.queue(key.cid, .ping, payload),
@@ -1103,7 +1144,7 @@ const FakeKey = struct {
             @backingInt(PinCommand.get_pin_token) => {
                 const pin = key.pin orelse return w.writeByte(0x35);
                 if (key.retries == 0) return w.writeByte(0x32);
-                const secret = agree(protocol, key.agreement, platform.?).?;
+                const secret = agree(protocol, &key.agreement, platform.?).?;
                 var plain: [32]u8 = undefined;
                 const given = secret.decrypt(pin_hash_enc, &plain) orelse return w.writeByte(0x11);
                 var want: [Sha256.digest_length]u8 = undefined;
@@ -1178,7 +1219,99 @@ test "Channel: INIT, then messages over many packets both ways" {
     // Nothing answers: the read times out.
     key.out_len = 0;
     key.out_read = 0;
-    try testing.expectError(error.Timeout, channel.receive(.ping, &out, null));
+    const now: Io.Timestamp = .now(testing.io, .awake);
+    try testing.expectError(error.Timeout, channel.receive(.ping, &out, null, now));
+}
+
+test "Channel: a reply longer than CTAPHID allows is refused, whatever the buffer" {
+    // A key that announces 65535 bytes, then sends continuation packets forever.
+    const Endless = struct {
+        sent: usize = 0,
+
+        fn read(context: *anyopaque, report: *Report, _: u32) Device.Error!void {
+            const endless: *@This() = @ptrCast(@alignCast(context));
+            report.* = @splat(0);
+            std.mem.writeInt(u32, report[0..4], 7, .big);
+            if (endless.sent == 0) {
+                report[4] = 0x80 | @as(u8, @backingInt(Command.ping));
+                std.mem.writeInt(u16, report[5..7], 0xffff, .big);
+            } else report[4] = @truncate(endless.sent - 1);
+            endless.sent += 1;
+        }
+
+        fn write(_: *anyopaque, _: *const Report) Device.Error!void {}
+    };
+    var endless: Endless = .{};
+    const vtable: Device.VTable = .{ .read = Endless.read, .write = Endless.write };
+    var channel: Channel = .{
+        .device = .{ .context = &endless, .vtable = &vtable },
+        .cid = 7,
+        .io = testing.io,
+    };
+    const out = try testing.allocator.alloc(u8, 0xffff);
+    defer testing.allocator.free(out);
+    const now: Io.Timestamp = .now(testing.io, .awake);
+    try testing.expectError(error.InvalidResponse, channel.receive(.ping, out, null, now));
+}
+
+/// A key that sends keepalives, and reports for another channel, until the test gives up
+/// on the deadline.
+const Chatty = struct {
+    reads: usize = 0,
+
+    const cid = 7;
+
+    fn device(chatty: *Chatty) Device {
+        return .{ .context = chatty, .vtable = &.{ .write = write, .read = read } };
+    }
+
+    fn read(context: *anyopaque, report: *Report, _: u32) Device.Error!void {
+        const chatty: *Chatty = @ptrCast(@alignCast(context));
+        chatty.reads += 1;
+        if (chatty.reads > 50_000_000) return error.DeviceFailed;
+        report.* = @splat(0);
+        std.mem.writeInt(u32, report[0..4], if (chatty.reads % 2 == 0) cid else 9, .big);
+        report[4] = 0x80 | @as(u8, @backingInt(Command.keepalive));
+        report[6] = 1;
+        report[7] = @backingInt(KeepaliveStatus.user_presence_needed);
+    }
+
+    fn write(_: *anyopaque, _: *const Report) Device.Error!void {}
+};
+
+test "Channel: a key that keeps sending keepalives meets the deadline" {
+    var chatty: Chatty = .{};
+    var channel: Channel = .{
+        .device = chatty.device(),
+        .cid = Chatty.cid,
+        .io = testing.io,
+        .deadline_ms = 20,
+    };
+    var out: [Channel.max_payload]u8 = undefined;
+    try testing.expectError(error.Timeout, channel.transact(.ping, "", &out, null));
+}
+
+test "assert takes the request's timeout as a hint: 0 is the default" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var key: FakeKey = .{ .pair = .generate(testing.io) };
+    var channel: Channel = try .open(testing.io, key.device());
+    channel.deadline_ms = 1234;
+    for ([_]?u32{ 0, 1, null }) |timeout| {
+        const options: webauthn.RequestOptions = .{
+            .challenge = "0123456789abcdef",
+            .timeout_ms = timeout,
+            .allow_credentials = &.{.{ .id = key.credential_id }},
+        };
+        _ = try assert(arena.allocator(), &channel, options, "https://example.com", .{});
+        try testing.expectEqual(1234, channel.deadline_ms);
+    }
+}
+
+test "Channel.open waits past another program's INIT" {
+    var key: FakeKey = .{ .pair = .generate(testing.io), .foreign_init = true };
+    const channel: Channel = try .open(testing.io, key.device());
+    try testing.expectEqual(key.cid, channel.cid);
 }
 
 test "getInfo" {
@@ -1230,6 +1363,11 @@ test "assert: an assertion from the key verifies with webauthn.verify" {
     };
     try testing.expectError(error.NoCredentials, assert(a, &channel, unknown, origin, .{}));
     try testing.expectError(error.InvalidOrigin, assert(a, &channel, unknown, "example", .{}));
+    // The key holds a credential for another RP: an origin may not ask for its ID.
+    var phish = options;
+    phish.rp_id = "example.com";
+    const evil = "https://evil.example";
+    try testing.expectError(error.InvalidOrigin, assert(a, &channel, phish, evil, .{}));
 }
 
 test "assert with a PIN, over either protocol" {
@@ -1294,18 +1432,21 @@ test "PIN protocol one encrypts with AES-256-CBC (NIST SP 800-38A, F.2.5)" {
     try testing.expectEqualSlices(u8, &plain, &back);
 }
 
+test "readId skips whole entries, whatever their key" {
+    // {1: "id", h'bb': 0}: a key that is not text skipped alone made its value the next key.
+    var r: cbor.Reader = .{ .bytes = &.{ 0xa2, 0x01, 0x62, 'i', 'd', 0x41, 0xbb, 0x00 } };
+    try testing.expectError(error.InvalidCbor, readId(&r));
+    // {1: 2, "id": h'aa'}
+    r = .{ .bytes = &.{ 0xa2, 0x01, 0x02, 0x62, 'i', 'd', 0x41, 0xaa } };
+    try testing.expectEqualSlices(u8, &.{0xaa}, try readId(&r));
+    try testing.expect(r.atEnd());
+}
+
 test statusError {
     try testing.expectEqual(error.PinRequired, statusError(0x36));
     try testing.expectEqual(error.PinInvalid, statusError(0x31));
     try testing.expectEqual(error.PinBlocked, statusError(0x32));
     try testing.expectEqual(error.AuthenticatorError, statusError(0x7f));
-}
-
-test hostOf {
-    try testing.expectEqualStrings("example.com", hostOf("https://example.com").?);
-    try testing.expectEqualStrings("a.example", hostOf("https://a.example:8443/x").?);
-    try testing.expectEqual(null, hostOf("https://"));
-    try testing.expectEqual(null, hostOf("example.com"));
 }
 
 test isFido {

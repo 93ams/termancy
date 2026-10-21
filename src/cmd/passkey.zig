@@ -84,6 +84,8 @@ pub const command = cli.command(.{
 fn runGet(ctx: *cli.Context, flags: GetFlags) !void {
     const options = webauthn.RequestOptions.parseJson(ctx.arena, try readOptions(ctx)) catch |err|
         return badOptions(ctx, err);
+    // Before any authenticator is asked, on every system.
+    if (webauthn.rpIdFor(options.rp_id, flags.origin) == null) return ctx.fail(invalid_origin, .{});
     const assertion = switch (builtin.os.tag) {
         .windows => windows_hello.assert(ctx.arena, options, flags.origin, .{
             .attachment = attachmentOf(flags.authenticator),
@@ -98,6 +100,7 @@ fn runGet(ctx: *cli.Context, flags: GetFlags) !void {
 fn runCreate(ctx: *cli.Context, flags: CreateFlags) !void {
     const options = webauthn.CreationOptions.parseJson(ctx.arena, try readOptions(ctx)) catch |err|
         return badOptions(ctx, err);
+    if (webauthn.rpIdFor(options.rp.id, flags.origin) == null) return ctx.fail(invalid_origin, .{});
     if (builtin.os.tag != .windows) {
         return ctx.fail(
             "passkey create needs Windows Hello; not supported on this system yet",
@@ -142,6 +145,9 @@ fn attachmentOf(authenticator: Authenticator) windows_hello.Attachment {
     };
 }
 
+const invalid_origin = "--origin names no host, or the options name an RP ID that is not " ++
+    "its host or a domain it is under";
+
 fn helloFailed(ctx: *cli.Context, err: windows_hello.Error) error{ CommandFailed, OutOfMemory } {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
@@ -151,7 +157,7 @@ fn helloFailed(ctx: *cli.Context, err: windows_hello.Error) error{ CommandFailed
             "this authenticator already has a credential for the account",
             .{},
         ),
-        error.InvalidOrigin => ctx.fail("--origin names no host, and the options no RP ID", .{}),
+        error.InvalidOrigin => ctx.fail(invalid_origin, .{}),
         error.Unavailable => ctx.fail("Windows Hello is not available here (webauthn.dll)", .{}),
         error.Failed => ctx.fail("Windows Hello refused the request", .{}),
     };
