@@ -166,6 +166,21 @@ git history.
 
 ### Added
 
+- **`termancy ui spin` and `ui table` work as gum's.** `spin` takes `--show-output`,
+  `--show-stdout`, `--show-stderr`, and `--show-error` (where standard output is a terminal
+  the command's output is now hidden unless they ask for it; elsewhere it goes straight
+  through), gum's spinner names at gum's pace (`dot`, now the default, `minidot`, `jump`,
+  `monkey`, `meter`, `hamburger`, and the rest; the older names still work), `--align`,
+  `--timeout`, `--padding`, and `--spinner.*` and `--title.*` styles; Ctrl-C and `--timeout`
+  stop the command's whole process group, and standard input reaches the command. `table`
+  takes `--file`, `--return-column`, `--hide-count` (the row count leads the help line),
+  `--lazy-quotes` and `--fields-per-record` (CSV is read as Go's `encoding/csv` reads it, so
+  a stray quote or a short line is now an error), `--height` counting the table's lines (`0`,
+  the default, fits the terminal), `-b` for `--border`, `--timeout`, `--padding`, and
+  `--header.*`, `--cell.*`, `--selected.*`, and `--border.*` styles over the theme's colors.
+  Both read their flags from `TERMANCY_SPIN_*` and `TERMANCY_TABLE_*` variables.
+- `term.live.frames.dot`, gum's `dot` spinner. The `table` component fits the terminal's
+  height when it has no `height`, leaving `reserved` rows to the rest of the view.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set

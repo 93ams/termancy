@@ -151,8 +151,10 @@ user's answer on stdout, one item per line (or per `--output-delimiter`), and no
 Their interface goes to the terminal, never to stdout. Cancelling (Esc) exits 1 with no
 output; Ctrl-C exits 130; `--timeout` exits 124 with `timed out` on stderr.
 
-`ui spin -- <cmd>` prints the command's output when it finishes and exits with the
-command's own status.
+`ui spin -- <cmd>` exits with the command's own status. Where stdout is not a terminal, the
+command's stdout goes straight to it and its stderr to stderr once the spinner is gone; where
+stdout is a terminal, the output is printed only as `--show-output`, `--show-stdout`,
+`--show-stderr`, and `--show-error` ask, as gum does.
 
 `tui diff` follows diff(1): exit 0 when identical, 1 when different, unified diff on stdout.
 

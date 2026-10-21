@@ -112,6 +112,24 @@ The commands share gum's conventions, each where it applies:
   splits it into items, and `--output-delimiter` separates the items printed (both `\n` by
   default, typed with escapes: `\n`, `\t`, `\0`, `\\`).
 
+**`ui spin -- <command>`** runs the command under a spinner and exits with its status, as
+gum's does. Where standard output is a terminal, the command's output stays hidden:
+`--show-output` (or `--show-stdout`, `--show-stderr`) shows it under the spinner as it comes
+and prints it if the command succeeds, and `--show-error` prints it if the command fails.
+Elsewhere (`x=$(termancy ui spin -- cmd)`) its standard output goes straight through and its
+standard error follows the spinner. `--spinner` takes gum's names (`dot`, the default,
+`line`, `minidot`, `jump`, `pulse`, `points`, `globe`, `moon`, `monkey`, `meter`,
+`hamburger`), at gum's pace; `--align right` puts it after the title. Ctrl-C and
+`--timeout` stop the command's whole process group.
+
+**`ui table`** reads CSV from standard input or `--file` as gum does, with Go's
+`encoding/csv` rules: every line has as many fields as the first (`--fields-per-record`
+says otherwise; `-1` allows any), and a quote in an unquoted field, or a lone one in a quoted
+field, is an error unless `--lazy-quotes`. Enter prints the chosen row as CSV, or with
+`--return-column n` its nth field. `--height` counts the table's lines, header and border
+included (`0`, the default, fits the terminal); the row count leads the help line unless
+`--hide-count`; `--print` writes the whole table to standard output instead.
+
 ## Terminal output and media
 
 | command | |

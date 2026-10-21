@@ -265,7 +265,8 @@ pub const Hint = Hints.Binding;
 
 /// `Inner` with what gum puts around every component: below it, after a blank line, the
 /// help line of its keys (`--show-help`); around it all, `--padding`. The component sees
-/// the terminal narrower by the padding, so it cuts its rows to fit.
+/// the terminal narrower by the padding, so it cuts its rows to fit. An `Inner` with
+/// background work (`Message` and `work`, see `tui.Cmd.work`) keeps it.
 pub fn Framed(comptime Inner: type) type {
     return struct {
         inner: Inner,
@@ -275,10 +276,15 @@ pub fn Framed(comptime Inner: type) type {
         padding: tui.Style.Sides = .{},
         /// The help line; none when empty (`--no-show-help`).
         hints: []const Hint = &.{},
+        /// Written on the help line before the keys, as gum's table writes `2/10 • `.
+        status: ?*const fn (inner: *const Inner, w: *Io.Writer) Io.Writer.Error!void = null,
         /// The terminal's width less the padding, for cutting the help line.
         width: ?usize = null,
 
         const Self = @This();
+        pub const Message = if (@hasDecl(Inner, "Message")) Inner.Message else void;
+        // The program runs `work` only when `Message` is not void.
+        pub const work = if (@hasDecl(Inner, "work")) Inner.work else {};
 
         pub fn start(model: *Self) tui.Cmd {
             return if (@hasDecl(Inner, "start")) model.inner.start() else .none;
@@ -286,7 +292,7 @@ pub fn Framed(comptime Inner: type) type {
 
         // shortcut: mouse rows are not shifted by the padding; offset them when a
         // command runs a framed component with the mouse on.
-        pub fn update(model: *Self, msg: tui.Msg) tui.Cmd {
+        pub fn update(model: *Self, msg: tui.Message(Message)) tui.Cmd {
             if (msg != .resize) return model.inner.update(msg);
             var size = msg.resize;
             const sides = model.padding.left + model.padding.right;
@@ -304,8 +310,12 @@ pub fn Framed(comptime Inner: type) type {
             if (std.mem.endsWith(u8, text, "\n")) body.shrinkRetainingCapacity(text.len - 1);
             if (model.hints.len > 0) {
                 try body.writer.writeAll("\n\n");
+                const line = body.written().len;
+                if (model.status) |status| try status(&model.inner, &body.writer);
+                const used = tui.width.of(body.written()[line..]);
                 const hints: Hints = .{ .bindings = model.hints };
-                try hints.writeHelp(&body.writer, .{ .width = model.width });
+                const width = if (model.width) |width| width -| used else null;
+                try hints.writeHelp(&body.writer, .{ .width = width });
             }
             if (std.meta.eql(model.padding, .{})) return w.writeAll(body.written());
             const style: tui.Style = .{ .padding = model.padding };
