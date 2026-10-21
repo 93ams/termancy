@@ -158,9 +158,8 @@ fn startJob(ctx: *cli.Context, caught: bool, size: tui.Size) !Job {
     // The keys come from a terminal on standard input; the command gets nothing there.
     const keys = try Io.File.stdin().isTty(io);
     if (comptime builtin.os.tag != .windows and Pty.supported) pty: {
-        const os = sys.process.native;
-        if (try sys.process.which(ctx.arena, io, ctx.environ, os, ctx.args[0]) == null) {
-            return spawnFailed(ctx, error.FileNotFound);
+        if (try unrunnable(ctx.arena, io, ctx.environ, ctx.args[0])) |status| {
+            return spawnFailed(ctx, if (status == 127) error.FileNotFound else error.AccessDenied);
         }
         const stdin: ?Io.File = if (!keys)
             Io.File.stdin()
@@ -185,6 +184,20 @@ fn startJob(ctx: *cli.Context, caught: bool, size: tui.Size) !Job {
         .stdout = if (caught) .pipe else .inherit,
         .stderr = .pipe,
     }) catch |err| return spawnFailed(ctx, err);
+}
+
+/// Why a shell could not run `name`, before trying: 127 when it is missing, 126 when it
+/// names a file that is not executable; null when it can be found.
+fn unrunnable(
+    arena: Allocator,
+    io: Io,
+    environ: *const std.process.Environ.Map,
+    name: []const u8,
+) !?u8 {
+    if (try sys.process.which(arena, io, environ, sys.process.native, name) != null) return null;
+    if (std.mem.indexOfScalar(u8, name, '/') == null) return 127;
+    Io.Dir.cwd().access(io, name, .{}) catch return 127;
+    return 126;
 }
 
 /// With no terminal: the command runs on termancy's own streams, `--timeout` still
@@ -596,6 +609,20 @@ test "Job: the streams caught, and the status" {
     try testing.expectEqualStrings("out" ++ eol, job.stdout.items);
     try testing.expectEqualStrings("err" ++ eol, job.stderr.items);
     try testing.expectEqual(2 * ("out" ++ eol).len, job.both.items.len);
+}
+
+test "unrunnable: 127 for a missing command, 126 for a file that does not run" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    try environ.put("PATH", "/usr/bin:/bin");
+    const a = arena.allocator();
+    try testing.expectEqual(null, try unrunnable(a, testing.io, &environ, "sh"));
+    try testing.expectEqual(127, try unrunnable(a, testing.io, &environ, "termancy-no-such"));
+    try testing.expectEqual(127, try unrunnable(a, testing.io, &environ, "/termancy/no/such"));
+    try testing.expectEqual(126, try unrunnable(a, testing.io, &environ, "/etc/passwd"));
 }
 
 test "Job: a missing command" {
