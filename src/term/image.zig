@@ -928,11 +928,12 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
     // From a graphic control extension, for the frame after it only.
     var transparent: ?u8 = null;
     var disposal: u8 = 0;
-    while (at < data.len) {
+    // Cut short or followed by junk, the frames before are kept, as browsers keep them.
+    const malformed = blocks: while (at < data.len) {
         switch (data[at]) {
-            0x3b => break,
+            0x3b => break :blocks false,
             0x21 => {
-                if (at + 2 > data.len) return error.InvalidImage;
+                if (at + 2 > data.len) break :blocks true;
                 const label = data[at + 1];
                 at += 2;
                 if (label == 0xf9 and at + 5 <= data.len and data[at] == 4) {
@@ -943,7 +944,7 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 at += 1;
             },
             0x2c => {
-                if (at + 10 > data.len) return error.InvalidImage;
+                if (at + 10 > data.len) break :blocks true;
                 const fx = std.mem.readInt(u16, data[at + 1 ..][0..2], .little);
                 const fy = std.mem.readInt(u16, data[at + 3 ..][0..2], .little);
                 const fw = std.mem.readInt(u16, data[at + 5 ..][0..2], .little);
@@ -953,11 +954,11 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 if (@as(usize, fw) * fh > max_pixels) return error.UnsupportedImage;
                 // Frames past `max_pixels` in all are dropped.
                 budget += @max(canvas.pixels.len, @as(usize, fw) * fh);
-                if (budget > max_pixels) break;
+                if (budget > max_pixels) break :blocks false;
                 var palette = global;
                 if (flags & 0x80 != 0) {
                     const n = @as(usize, 2) << @intCast(flags & 7);
-                    if (at + 3 * n > data.len) return error.InvalidImage;
+                    if (at + 3 * n > data.len) break :blocks true;
                     for (0..n) |i| palette[i] = .{
                         .r = data[at + 3 * i],
                         .g = data[at + 3 * i + 1],
@@ -965,22 +966,26 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                     };
                     at += 3 * n;
                 }
-                if (at >= data.len) return error.InvalidImage;
+                if (at >= data.len) break :blocks true;
                 // At most 8 (codes are bytes); larger overflowed the code table. Below the
                 // spec's 2, 0 and 1 are read as giflib and Chrome's Wuffs read them.
-                if (data[at] > 8) return error.InvalidImage;
+                if (data[at] > 8) break :blocks true;
                 const min_code: u4 = @intCast(data[at]);
                 at += 1;
                 var stream: std.ArrayList(u8) = .empty;
                 defer stream.deinit(gpa);
                 while (at < data.len and data[at] != 0) {
                     const n: usize = data[at];
-                    if (at + 1 + n > data.len) return error.InvalidImage;
+                    if (at + 1 + n > data.len) break :blocks true;
                     try stream.appendSlice(gpa, data[at + 1 ..][0..n]);
                     at += 1 + n;
                 }
                 at += 1;
-                const indices = try unlzw(gpa, stream.items, min_code, @as(usize, fw) * fh);
+                const indices = unlzw(gpa, stream.items, min_code, @as(usize, fw) * fh) catch |err|
+                    switch (err) {
+                        error.InvalidImage => break :blocks true,
+                        else => |e| return e,
+                    };
                 defer gpa.free(indices);
                 var before: ?Image = if (disposal == 3) try canvas.clone(gpa) else null;
                 defer if (before) |*b| b.deinit(gpa);
@@ -1012,9 +1017,10 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 transparent = null;
                 disposal = 0;
             },
-            else => return error.InvalidImage,
+            else => break :blocks true,
         }
-    }
+    } else false;
+    if (malformed and frames.items.len == 0) return error.InvalidImage;
     return frames.toOwnedSlice(gpa);
 }
 
@@ -1892,6 +1898,34 @@ test "GIF: frames larger than the screen count toward max_pixels" {
         gpa.free(frames);
     }
     try testing.expectEqual(1, frames.len);
+}
+
+test "GIF: cut short or followed by junk, the frames before are kept" {
+    const gpa = testing.allocator;
+    var out: Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    const w = &out.writer;
+    try w.writeAll("GIF89a\x01\x00\x01\x00\x83\x00\x00");
+    for (0..16) |i| try w.writeAll(&.{ @intCast(i * 10), 0, 0 });
+    const header = out.written().len;
+    try testGifFrame(w, null, .{ 0, 0, 1, 1 }, 0, &.{5});
+    // A frame whose sub-block runs past the end, or junk where a block starts.
+    const cut = "\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x04\x05\x00";
+    for ([_][]const u8{ cut, "junk" }) |tail| {
+        const data = try std.mem.concat(gpa, u8, &.{ out.written(), tail });
+        defer gpa.free(data);
+        const frames = try readGif(gpa, data);
+        defer {
+            for (frames) |*f| f.deinit(gpa);
+            gpa.free(frames);
+        }
+        try testing.expectEqual(1, frames.len);
+        try testing.expectEqual(50, frames[0].at(0, 0).r);
+    }
+    // With no frame before, it is no GIF.
+    const data = try std.mem.concat(gpa, u8, &.{ out.written()[0..header], cut });
+    defer gpa.free(data);
+    try testing.expectError(error.InvalidImage, readGif(gpa, data));
 }
 
 /// Decodes testdata/jpeg/`name`.jpg and compares it with the pixels libjpeg-turbo decodes

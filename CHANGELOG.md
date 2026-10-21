@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A GIF cut short, or followed by junk, keeps the frames before the damage, as browsers
+  show them; the whole file was refused. One with no whole frame still is.
 - A GIF with an LZW minimum code size of 1 (below the spec's 2) is read as giflib and
   Chrome read it; its codes never grew wider, so most of it came out wrong.
 - A baseline or extended JPEG scan with successive approximation (Ah or Al not 0) is
