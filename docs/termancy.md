@@ -91,6 +91,27 @@ element in JSON, say) is rewritten whole, losing its comments, with a warning.
 `format`, `join`, `log`: in the spirit of [gum](https://github.com/charmbracelet/gum).
 `ACCESSIBLE=1` asks with plain lines.
 
+The commands share gum's conventions, each where it applies:
+
+- **Variables:** every flag can come from `TERMANCY_<COMMAND>_<FLAG>`, its name in
+  SCREAMING_SNAKE: `TERMANCY_CHOOSE_HEIGHT=5`, `TERMANCY_CHOOSE_CURSOR_FOREGROUND=212`. The
+  command line wins.
+- **`--timeout <duration>`** (`500ms`, `5s`, `1m30s`; `0`, the default, waits forever): ends
+  with status 124 and `timed out` on stderr, unless the command's help says what a timeout
+  answers instead.
+- **Style groups:** `--<part>.<style>` styles one part of a component, such as
+  `--cursor.foreground 212`, `--header.bold`, `--header.border rounded`. The styles are
+  `ui style`'s flags: `foreground`, `background`, `border`, `border-foreground`,
+  `border-background`, `align`, `width`, `height`, `margin`, `padding`, `bold`, `faint`,
+  `italic`, `strikethrough`, `underline`. Colors are 0-255, `#rrggbb`, or a name. Help lists
+  each part's colors; the rest work without being listed, as in gum. Unset, a part keeps the
+  theme's look: the accent for the cursor and chosen items, the heading style for headers.
+- **`--show-help`** (on; `--no-show-help` turns it off): the keys, under the component.
+- **`--padding`:** space around the whole component: `1`, `1 2`, or `1 2 1 2`.
+- **Standard input:** `--strip-ansi` (on) removes escape sequences, `--input-delimiter`
+  splits it into items, and `--output-delimiter` separates the items printed (both `\n` by
+  default, typed with escapes: `\n`, `\t`, `\0`, `\\`).
+
 ## Terminal output and media
 
 | command | |

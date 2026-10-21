@@ -24,6 +24,14 @@
 //! lines instead, numbered choices and typed answers, for screen readers (plain.zig).
 //! `style`, `format`, and `table --print` write escapes only where
 //! standard output shows them, honoring `NO_COLOR` and `FORCE_COLOR`. See term.zig.
+//!
+//! gum's shared flags, each where it applies (term.zig and styles.zig hold them):
+//! `TERMANCY_<COMMAND>_<FLAG>` variables for every flag (`.env_prefix` on the flag set);
+//! `--timeout <duration>`, which ends with status 124 and `timed out` on stderr unless the
+//! command takes it as an answer; style groups per part (`--cursor.foreground`,
+//! `--header.bold`; help lists only the colors), defaulting to `cli.Theme`'s look;
+//! `--show-help` and `--padding` around the component (`term.Framed`); and `--strip-ansi`,
+//! `--input-delimiter`, and `--output-delimiter` (`term.items`, `term.writeJoined`).
 
 const std = @import("std");
 
@@ -69,6 +77,7 @@ pub const command = cli.command(.{
 test {
     std.testing.refAllDecls(demo);
     std.testing.refAllDecls(@import("term.zig"));
+    std.testing.refAllDecls(@import("styles.zig"));
     std.testing.refAllDecls(@import("plain.zig"));
     std.testing.refAllDecls(choose_zig);
     std.testing.refAllDecls(confirm_zig);

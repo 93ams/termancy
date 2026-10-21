@@ -50,7 +50,7 @@ pub const command = cli.command(.{
 
 fn run(ctx: *cli.Context, flags: Flags) !void {
     if (flags.limit == 0) return ctx.usageError("--limit must be at least 1", .{});
-    var model = try build(ctx.gpa, try term.items(ctx), flags);
+    var model = try build(ctx.gpa, try term.items(ctx, .{}), flags);
     defer model.deinit();
     if (try term.run(ctx, Filter, &model, term.inline_options)) return term.exitInterrupted(ctx);
     if (model.status != .submitted) return error.CommandFailed;

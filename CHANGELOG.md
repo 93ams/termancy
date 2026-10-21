@@ -166,6 +166,20 @@ git history.
 
 ### Added
 
+- **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
+  any flags struct, so one can be shared) takes `.separator` (`"."` spells
+  `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set
+  a variable, the prefix and the flag's name in SCREAMING_SNAKE (`APP_` gives
+  `--cursor.foreground` `APP_CURSOR_FOREGROUND`), unless it names its own `.env`.
+  `tui.Options.timeout` ends a program after a while, as Ctrl-C does, with
+  `Outcome.timed_out` set; `cli.Theme.accent` is what interactive prompts highlight.
+- **`termancy ui` takes gum's shared flags** (`choose` first): `--timeout 500ms` (a
+  `cfg.Duration`: status 124 and `timed out` on stderr), `--show-help`/`--no-show-help` (the
+  keys under the component), `--padding` around it, `--strip-ansi`, `--input-delimiter`, and
+  `--output-delimiter` (typed with escapes: `\n`, `\t`, `\0`); style groups for each part
+  (`--cursor.foreground 212`, `--header.bold`, `--selected.background`) with the theme's
+  colors as defaults; and every flag from a variable, `TERMANCY_CHOOSE_HEIGHT`,
+  `TERMANCY_CHOOSE_CURSOR_FOREGROUND`.
 - `Config.initFor(X, gpa)`: a configuration that knows its settings type, and its defaults,
   from the start. `field.Reason`, a writer that keeps the template and arguments a check gave
   `field.fail`. `input.Report.cursor` and `ansi.queryCursorPosition` (DECXCPR), and

@@ -265,6 +265,21 @@ const cases = [_]Case{
         .status = 2,
     },
     .{
+        // The variable is read as the flag would be, before any terminal.
+        .name = "choose: TERMANCY_CHOOSE_LIMIT=0",
+        .args = &.{ "ui", "choose", "a" },
+        .env = &.{.{ "TERMANCY_CHOOSE_LIMIT", "0" }},
+        .stderr = "termancy: --limit must be at least 1\n" ++ usage("choose"),
+        .status = 2,
+    },
+    .{
+        .name = "choose --timeout that is not a duration",
+        .args = &.{ "ui", "choose", "--timeout", "soon", "a" },
+        .stderr = "termancy: invalid value \"soon\" for flag --timeout: expected duration\n" ++
+            usage("choose"),
+        .status = 2,
+    },
+    .{
         .name = "pager with a missing file",
         .args = &.{ "ui", "pager", "missing.txt" },
         .stderr = "termancy: missing.txt: no such file\n",
@@ -409,6 +424,34 @@ const pty_cases = [_]PtyCase{
         .command = "\"$TERMANCY\" ui choose --limit 2 a b c",
         .keys = " jj \\r",
         .stdout = "a\nc\n",
+    },
+    .{
+        // gum's timeout: nothing chosen, `timed out` on stderr, status 124. (The inner
+        // shell puts stderr where the driver puts stdout.)
+        .name = "choose --timeout",
+        .command = "sh -c '\"$TERMANCY\" ui choose --timeout 100ms a b c 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        .name = "choose: flags from TERMANCY_CHOOSE_* variables",
+        .command = choose_abc,
+        .keys = "\\r",
+        .env = &.{
+            .{ "TERMANCY_CHOOSE_HEADER", "Pick one" },
+            .{ "TERMANCY_CHOOSE_SELECTED", "c" },
+        },
+        .wait_for = "Pick one",
+        .stdout = "c\n",
+    },
+    .{
+        // Escapes go from standard input, and the delimiters are typed with escapes.
+        .name = "choose: --input-delimiter, --output-delimiter, --strip-ansi",
+        .command = "printf 'x,\\033[31my\\033[0m\\n' | " ++
+            "\"$TERMANCY\" ui choose --input-delimiter , --output-delimiter '\\t' --no-limit",
+        .keys = "a\\r",
+        .stdout = "x\ty\n",
     },
     .{ .name = "confirm: y", .command = "\"$TERMANCY\" ui confirm Sure?", .keys = "y" },
     .{ .name = "confirm: n", .command = "\"$TERMANCY\" ui confirm", .keys = "n", .status = 1 },
