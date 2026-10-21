@@ -152,6 +152,9 @@ git history.
   reached by prefix; typed in full they still run, with their warning.
 - `cfg.encrypted.Decrypted.plaintext` is `[]u8` (it is wiped), and diagnostics no longer
   quote lines of encrypted files.
+- `webauthn.Registration.credential` takes `arena` and the relying party's `Expected`
+  (`.credential(arena, .{ .challenge, .origin, .rp_id })`), which it checks the
+  registration against.
 
 ### Added
 
@@ -474,10 +477,10 @@ From a review before the repository went public:
   requires.
 - `oauth.DevicePoll.next` no longer overflows when a server that sent an `interval` near
   2^32 then answers `slow_down`; the interval stops at its largest.
-- `webauthn.Registration.credential(arena, expected)` makes the registration checks
-  `verifyAssertion` makes for a sign-in (client data of type `webauthn.create`, challenge,
-  origin, RP ID hash, user presence, and verification when required): it read the key of a
-  credential made for any RP, without the user's touch.
+- `webauthn.Registration.credential` makes the registration checks `verifyAssertion` makes
+  for a sign-in (client data of type `webauthn.create`, challenge, origin, RP ID hash, user
+  presence, and verification when required): it read the key of a credential made for any
+  RP, without the user's touch.
 - `passkey get` and `create`, `ctap.assert`, and `windows_hello.assert` and `register` refuse
   an RP ID that is not the host of `--origin` or a domain it is under (WebAuthn's client
   check): options from `https://evil.example` naming `rpId` `bank.example` were signed for
