@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A JPEG quantization table whose precision is neither 8 nor 16 bits is refused; it was read
+  as 16 bits.
 - Interlaced GIFs are read with their rows in place; they came out scrambled.
 - `image.readGif` clears or puts back a frame as its disposal method says, and a graphic
   control extension's transparent color applies to the frame after it only, not every one.

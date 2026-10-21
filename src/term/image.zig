@@ -1395,7 +1395,8 @@ const Jpeg = struct {
             const wide = rest[0] >> 4 != 0;
             const index = rest[0] & 15;
             const size: usize = if (wide) 128 else 64;
-            if (index > 3 or rest.len < 1 + size) return error.InvalidImage;
+            // Precision 0 is 8 bits, 1 is 16; the rest are not JPEG's.
+            if (rest[0] >> 4 > 1 or index > 3 or rest.len < 1 + size) return error.InvalidImage;
             for (0..64) |k| j.quant[index][zigzag[k]] = if (wide)
                 std.mem.readInt(u16, rest[1 + 2 * k ..][0..2], .big)
             else
@@ -2002,4 +2003,22 @@ test "JPEG: blocks past the end of a scan's data are left blank" {
     var img = try readJpeg(gpa, original[0 .. sos + 20]);
     defer img.deinit(gpa);
     for (0..img.width) |x| try testing.expect(img.at(x, 16).eql(.{ .r = 128, .g = 128, .b = 128 }));
+}
+
+test "JPEG: a quantization table of a precision not 8 or 16 bits is refused" {
+    const gpa = testing.allocator;
+    // 8 by 8 progressive grayscale with a 16-bit table, its AC table one code; one scan.
+    var data: std.ArrayList(u8) = .empty;
+    defer data.deinit(gpa);
+    try data.appendSlice(gpa, "\xff\xd8\xff\xdb\x00\x83\x10");
+    for (0..64) |_| try data.appendSlice(gpa, "\x00\x01");
+    try data.appendSlice(gpa, "\xff\xc2\x00\x0b\x08\x00\x08\x00\x08\x01\x01\x11\x00");
+    try data.appendSlice(gpa, "\xff\xc4\x00\x14\x10\x01");
+    try data.appendNTimes(gpa, 0, 15);
+    try data.appendSlice(gpa, "\x01\xff\xda\x00\x08\x01\x01\x00\x01\x3f\x00\xff\xd9");
+    var img = try readJpeg(gpa, data.items);
+    img.deinit(gpa);
+    // Precision 2, read as 16 bits.
+    data.items[6] = 0x20;
+    try testing.expectError(error.InvalidImage, readJpeg(gpa, data.items));
 }
