@@ -128,14 +128,20 @@ fn answer(ctx: *cli.Context, flags: Flags, prompt: []const u8, yes: bool) !void 
 
 /// The model for `prompt`, `default` highlighted, in the flags' styles over the theme's.
 pub fn build(prompt: []const u8, default: bool, flags: Flags, theme: *const cli.Theme) Confirm {
+    // gum's layout: the prompt a column in, each button padded 3 and a column apart from
+    // its neighbors.
     const button: tui.Style.Sides = .symmetric(0, 3);
+    const margin: tui.Style.Sides = .symmetric(0, 1);
+    var heading = theme.heading;
+    heading.margin = .{ .left = 1 };
     return .{
         .prompt = prompt,
         .affirmative = flags.affirmative,
         .negative = flags.negative,
         .value = default,
+        .gap = "",
         .styles = .{
-            .prompt = flags.prompt_style.over(theme.heading),
+            .prompt = flags.prompt_style.over(heading),
             // Bold and underlined as well, so it stands out under `NO_COLOR`.
             .selected = flags.selected_style.over(.{
                 .fg = .{ .basic = 15 },
@@ -143,11 +149,13 @@ pub fn build(prompt: []const u8, default: bool, flags: Flags, theme: *const cli.
                 .bold = true,
                 .underline = true,
                 .padding = button,
+                .margin = margin,
             }),
             .unselected = flags.unselected_style.over(.{
                 .fg = theme.note.fg,
                 .dim = theme.note.dim,
                 .padding = button,
+                .margin = margin,
             }),
         },
     };
@@ -164,7 +172,13 @@ const Driver = tui.testing.Driver(Confirm);
 
 fn plainBuild(prompt: []const u8, default: bool, flags: Flags) Confirm {
     var model = build(prompt, default, flags, &cli.Theme.bold);
-    model.styles = .{ .prompt = .{}, .selected = .{}, .unselected = .{} };
+    // The layout without the colors.
+    const s = model.styles;
+    model.styles = .{
+        .prompt = .{ .margin = s.prompt.margin },
+        .selected = .{ .margin = s.selected.margin, .padding = s.selected.padding },
+        .unselected = .{ .margin = s.unselected.margin, .padding = s.unselected.padding },
+    };
     return model;
 }
 
@@ -183,7 +197,8 @@ test "yes, with custom labels" {
         .{},
     );
     defer d.deinit();
-    try d.expectFrame("Are you sure?\n\nShip  Wait");
+    // gum's margins: the prompt a column in, the buttons a column apart on each side.
+    try d.expectFrame(" Are you sure?\n\n    Ship        Wait    ");
     try d.press("y");
     try testing.expect(accepted(d.model().*, false));
 }
@@ -222,11 +237,11 @@ test "framed: the padding, and the help line with the labels" {
     };
     var d: tui.testing.Driver(term.Framed(Confirm)) = try .init(testing.allocator, model, .{});
     defer d.deinit();
-    try d.expectFrame(" Go?                \n" ++
-        "                    \n" ++
-        " Ship  No           \n" ++
-        "                    \n" ++
-        " ←/→ toggle • y Ship");
+    try d.expectFrame("  Go?                  \n" ++
+        "                       \n" ++
+        "     Ship        No    \n" ++
+        "                       \n" ++
+        " ←/→ toggle • y Ship   ");
 }
 
 test "the style flags reach the buttons, over the theme" {

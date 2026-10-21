@@ -108,7 +108,8 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
             else => |e| ctx.fail("{s}: {s}", .{ path, @errorName(e) }),
         };
     };
-    look(ctx.arena, &picker, flags, ctx.theme) catch |err| {
+    const home = ctx.environ.get("HOME") orelse ctx.environ.get("USERPROFILE") orelse "";
+    look(ctx.arena, &picker, flags, ctx.theme, home) catch |err| {
         picker.deinit();
         return err;
     };
@@ -132,12 +133,13 @@ const hints = [_]term.Hint{
     .{ .keys = &.{"enter"}, .action = .hint, .help = "select" },
 };
 
-/// The picker's cursor, height, header, and styles: the theme's, with the flags over them.
+/// The picker's cursor, height, header, home (shown as `~`), and styles: the theme's, with the flags over them.
 fn look(
     arena: std.mem.Allocator,
     picker: *FilePicker,
     flags: Flags,
     theme: *const cli.Theme,
+    home: []const u8,
 ) !void {
     // A space after the cursor, as gum's, and as much before every other entry.
     const cursor = try std.fmt.allocPrint(arena, "{s} ", .{flags.cursor});
@@ -151,6 +153,7 @@ fn look(
     picker.list.item_prefix = blank;
     picker.list.styles = .{ .cursor = flags.cursor_style.over(theme.accent), .item = .{} };
     picker.header = try styles.render(arena, flags.header_style.over(theme.heading), flags.header);
+    picker.home = home;
     picker.size_width = flags.file_size_style.width orelse 8;
     picker.styles = .{
         .path = theme.note,
@@ -177,7 +180,7 @@ test "gum's columns, cursor, and header, framed" {
     defer arena.deinit();
     const flags: Flags = .{ .header = "Pick", .cursor = "→", .permissions = false };
     var picker: FilePicker = try .init(testing.allocator, io, root, .{ .show_size = true });
-    try look(arena.allocator(), &picker, flags, &cli.Theme.default);
+    try look(arena.allocator(), &picker, flags, &cli.Theme.default, "");
     var d: tui.testing.Driver(term.Framed(FilePicker)) = try .init(testing.allocator, .{
         .inner = picker,
         .gpa = testing.allocator,

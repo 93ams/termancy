@@ -57,6 +57,8 @@ allow_files: bool = true,
 allow_directories: bool = false,
 /// Written above the directory, already styled.
 header: []const u8 = "",
+/// The home directory, shown as `~` at the start of the directory; empty for none.
+home: []const u8 = "",
 /// The chosen file's absolute path, once `status` is `submitted`.
 chosen: ?[]u8 = null,
 status: Status = .active,
@@ -353,7 +355,7 @@ pub fn view(picker: *const FilePicker, w: *Writer) Writer.Error!void {
         try w.writeAll(picker.header);
         try w.writeByte('\n');
     }
-    try picker.styles.path.paint(w, picker.dir.items);
+    try picker.writeDirectory(w);
     try w.writeByte('\n');
     if (picker.entries.items.len == 0) {
         try picker.styles.path.paint(w, "  (empty)");
@@ -368,6 +370,26 @@ pub fn view(picker: *const FilePicker, w: *Writer) Writer.Error!void {
         try w.writeByte('\n');
         try picker.styles.message.paint(w, picker.message);
     }
+}
+
+/// The directory on one row: the home directory as `~`, and a path too long for the width
+/// cut from the left.
+fn writeDirectory(picker: *const FilePicker, w: *Writer) Writer.Error!void {
+    const dir = picker.dir.items;
+    const home = picker.home;
+    const under_home = home.len > 0 and std.mem.startsWith(u8, dir, home) and
+        (dir.len == home.len or std.fs.path.isSep(dir[home.len]));
+    const rest = if (under_home) dir[home.len..] else dir;
+    const tilde: []const u8 = if (under_home) "~" else "";
+    const style = picker.styles.path;
+    try style.writeSgr(w);
+    const width = picker.list.width orelse std.math.maxInt(usize);
+    if (tui.width.of(rest) + tilde.len <= width) {
+        try w.print("{s}{s}", .{ tilde, rest });
+    } else {
+        try tui.width.truncateLeft(w, rest, width, "…");
+    }
+    if (style.hasSgr()) try w.writeAll(tui.ansi.reset);
 }
 
 /// Entry `index`: the cursor (or as much space), the permissions and size when shown,
@@ -606,6 +628,23 @@ test "no more entries than the terminal has rows for" {
     try d.expectFrameContains("\n> src/\n  README.md");
     try d.resize(.{ .width = 40, .height = 30 });
     try testing.expectEqual(10, d.model().list.height);
+}
+
+test "the directory on one row: ~ for home, cut from the left" {
+    var f: Fixture = try .init();
+    defer f.deinit();
+    var picker = try styledPicker(testing.io, f.root);
+    picker.home = std.fs.path.dirname(f.root).?;
+    var d: tui.testing.Driver(FilePicker) = try .init(testing.allocator, picker, .{
+        .program = .{ .size = .{ .width = 12, .height = 10 } },
+    });
+    defer d.deinit();
+    const tail = try std.fmt.allocPrint(testing.allocator, "~/{s}\n", .{std.fs.path.basename(f.root)});
+    defer testing.allocator.free(tail);
+    // tmp dirs' names are longer than 12 columns, so the ~ goes with the cut.
+    try d.expectFrameContains("…");
+    try d.resize(.{ .width = 80, .height = 10 });
+    try d.expectFrameContains(tail);
 }
 
 test formatSize {

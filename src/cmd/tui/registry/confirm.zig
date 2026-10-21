@@ -23,6 +23,8 @@ affirmative: []const u8 = "Yes",
 negative: []const u8 = "No",
 /// The highlighted button: true for `affirmative`. Its starting value is the default.
 value: bool = true,
+/// Between the buttons; gum's command leaves it empty, spacing them with margins.
+gap: []const u8 = "  ",
 /// The screen row this is drawn from, for mouse clicks.
 top: usize = 0,
 status: Status = .active,
@@ -78,7 +80,8 @@ fn click(model: *Confirm, mouse: tui.input.Mouse) tui.Cmd {
     if (mouse.x < first) return model.answer(true);
     if (model.negative.len == 0) return .none;
     const second = buttonWidth(model, model.negative, !model.value);
-    if (mouse.x >= first + 2 and mouse.x < first + 2 + second) return model.answer(false);
+    const gap = tui.width.of(model.gap);
+    if (mouse.x >= first + gap and mouse.x < first + gap + second) return model.answer(false);
     return .none;
 }
 
@@ -99,11 +102,11 @@ fn answer(model: *Confirm, value: bool) tui.Cmd {
 }
 
 pub fn view(model: *const Confirm, w: *std.Io.Writer) std.Io.Writer.Error!void {
-    try model.styles.prompt.paint(w, model.prompt);
+    try model.styles.prompt.render(w, model.prompt);
     try w.writeAll("\n\n");
     try model.button(w, model.affirmative, model.value);
     if (model.negative.len == 0) return;
-    try w.writeAll("  ");
+    try w.writeAll(model.gap);
     try model.button(w, model.negative, !model.value);
 }
 

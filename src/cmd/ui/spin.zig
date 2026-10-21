@@ -525,12 +525,20 @@ pub fn writeTail(
     try tui.width.truncate(w, body[last..], rows * columns, "…");
 }
 
+/// bubbles' dot frames, which end in a space: gum draws two between them and the title.
+const dot = blk: {
+    var frames: [live.frames.dot.len][]const u8 = undefined;
+    for (&frames, live.frames.dot) |*frame, glyph| frame.* = glyph ++ " ";
+    const final = frames;
+    break :blk final;
+};
+
 /// The spinner `name` names, with its frames and pace: gum's, for gum's names.
 pub fn spinnerOf(name: Name) Spinner {
     const f = live.frames;
     const frames: []const []const u8, const ms: i64 = switch (name) {
         .line => .{ &f.line, 100 },
-        .dot => .{ &f.dot, 100 },
+        .dot => .{ &dot, 100 },
         .minidot, .dots => .{ &f.dots, 83 },
         .jump => .{ &f.jump, 100 },
         .pulse => .{ &f.pulse, 125 },
@@ -550,7 +558,7 @@ pub fn spinnerOf(name: Name) Spinner {
 const testing = std.testing;
 
 test spinnerOf {
-    try testing.expectEqualStrings("⣾", spinnerOf(.dot).frames[0]);
+    try testing.expectEqualStrings("⣾ ", spinnerOf(.dot).frames[0]);
     try testing.expectEqualStrings("🙈", spinnerOf(.monkey).frames[0]);
     try testing.expectEqual(333, spinnerOf(.hamburger).interval.toMilliseconds());
     // termancy's older names: dots is gum's minidot.
