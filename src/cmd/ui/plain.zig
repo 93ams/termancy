@@ -131,6 +131,34 @@ pub const Session = struct {
         }
     }
 
+    /// Lines of text, until an empty line twice in a row or the end of input (Ctrl-D at
+    /// the start of a line): easy to type and to hear, with no key but enter and Ctrl-D.
+    /// With nothing typed, `value`.
+    pub fn text(
+        session: *Session,
+        header: []const u8,
+        placeholder: []const u8,
+        value: []const u8,
+    ) ![]const u8 {
+        const w = session.out();
+        if (header.len > 0) try w.print("{s}\n", .{header});
+        if (placeholder.len > 0) try w.print("({s})\n", .{placeholder});
+        try w.writeAll("Type the text; an empty line twice, or Ctrl-D, ends it.\n");
+        if (value.len > 0) try w.print("With nothing typed, it is:\n{s}\n", .{value});
+        try w.flush();
+        var lines: std.ArrayList(u8) = .empty;
+        var empty_before = false;
+        while (try session.reader.interface.takeDelimiter('\n')) |raw| {
+            const line = std.mem.trimEnd(u8, raw, "\r");
+            if (line.len == 0 and empty_before) break;
+            empty_before = line.len == 0;
+            try lines.appendSlice(session.ctx.arena, line);
+            try lines.append(session.ctx.arena, '\n');
+        }
+        const typed = std.mem.trimEnd(u8, lines.items, "\n");
+        return if (typed.len == 0) value else typed;
+    }
+
     /// A line of text, hidden when `secret`; an empty answer is `value`. Null when the
     /// input ends.
     pub fn input(

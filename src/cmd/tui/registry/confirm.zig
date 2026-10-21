@@ -6,9 +6,10 @@
 //! if (confirm.status == .submitted and confirm.value) deleteIt();
 //! ```
 //!
-//! Keys: left/right, h/l, and tab move between the buttons; enter answers with the one
-//! highlighted; y and n answer directly; esc cancels. The answer is `value` once `status`
-//! is `.submitted`.
+//! Keys: left/right, h/l, tab, and ctrl+n/ctrl+p move between the buttons; enter answers
+//! with the one highlighted; y answers yes and n (or q) no directly; esc cancels. The
+//! answer is `value` once `status` is `.submitted`. An empty `negative` hides its button:
+//! the question then has one answer, or none but esc.
 
 const std = @import("std");
 const tui = @import("tui");
@@ -51,12 +52,13 @@ pub fn update(model: *Confirm, msg: tui.Msg) tui.Cmd {
         else => return .none,
     };
     if (key.matches("left") or key.matches("right") or key.matches("tab") or
-        key.matches("shift+tab") or key.matches("h") or key.matches("l"))
+        key.matches("shift+tab") or key.matches("h") or key.matches("l") or
+        key.matches("ctrl+n") or key.matches("ctrl+p"))
     {
-        model.value = !model.value;
+        if (model.negative.len > 0) model.value = !model.value;
     } else if (key.matches("y") or key.matches("Y")) {
         return model.answer(true);
-    } else if (key.matches("n") or key.matches("N")) {
+    } else if (key.matches("n") or key.matches("N") or key.matches("q")) {
         return model.answer(false);
     } else if (key.matches("enter")) {
         return model.answer(model.value);
@@ -74,6 +76,7 @@ fn click(model: *Confirm, mouse: tui.input.Mouse) tui.Cmd {
     if (mouse.y != model.top + 2) return .none;
     const first = buttonWidth(model, model.affirmative, model.value);
     if (mouse.x < first) return model.answer(true);
+    if (model.negative.len == 0) return .none;
     const second = buttonWidth(model, model.negative, !model.value);
     if (mouse.x >= first + 2 and mouse.x < first + 2 + second) return model.answer(false);
     return .none;
@@ -99,6 +102,7 @@ pub fn view(model: *const Confirm, w: *std.Io.Writer) std.Io.Writer.Error!void {
     try model.styles.prompt.paint(w, model.prompt);
     try w.writeAll("\n\n");
     try model.button(w, model.affirmative, model.value);
+    if (model.negative.len == 0) return;
     try w.writeAll("  ");
     try model.button(w, model.negative, !model.value);
 }
@@ -153,6 +157,23 @@ test "the arrows toggle, esc cancels" {
     try d.press("esc");
     try testing.expect(d.done());
     try testing.expectEqual(Status.canceled, d.model().status);
+}
+
+test "q answers no; an empty negative hides its button and cannot be toggled to" {
+    var d: Driver = try .init(testing.allocator, .{}, .{});
+    defer d.deinit();
+    try d.press("ctrl+n");
+    try testing.expect(!d.model().value);
+    try d.press("q");
+    try testing.expect(d.done() and !d.model().value);
+
+    var one: Driver = try .init(testing.allocator, .{ .prompt = "OK?", .negative = "" }, .{});
+    defer one.deinit();
+    try one.expectFrame("OK?\n\n   Yes   ");
+    try one.press("right");
+    try testing.expect(one.model().value);
+    try one.send(.{ .mouse = .{ .x = 20, .y = 2, .button = .left, .action = .press } });
+    try testing.expect(!one.done());
 }
 
 test "the highlighted button is styled" {

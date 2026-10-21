@@ -161,6 +161,14 @@ The output commands, as gum's:
   with no level; `fatal` ends with status 1. `--level.*`, `--time.*`, `--prefix.*`,
   `--message.*`, `--key.*`, `--value.*`, and `--separator.*` style the parts.
 
+`ui input` and `ui write` start from `--value`, or else from standard input when it is
+piped; their cursor is the terminal's own (`--cursor.mode blink`, `static`, or `hide`).
+`write` submits with enter, starts a line with ctrl+j (or alt+enter), and opens the text in
+`$VISUAL` or `$EDITOR` with ctrl+e; with `ACCESSIBLE=1` it reads plain lines until an empty
+line twice or Ctrl-D. `ui confirm` answers with its status (0 yes, 1 no);
+`--show-output` prints the question and the answer, `--default` takes `yes`/`no` or gum's
+`--default=false`, and `--timeout` takes the highlighted answer instead of failing.
+
 ## Terminal output and media
 
 | command | |

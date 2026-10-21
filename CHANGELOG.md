@@ -9,6 +9,11 @@ git history.
 
 ### Breaking
 
+- **A line feed is ctrl+j, not enter:** `term.input` decodes LF (0x0a) as ctrl+j, as Bubble
+  Tea and crossterm do; enter is CR, which every terminal sends in raw mode (Windows
+  consoles with virtual terminal input too). The textarea takes ctrl+j as enter.
+- **`termancy ui write` submits with enter**, as gum's: ctrl+j (or alt+enter) starts a line.
+  Ctrl-D still submits.
 - **`termancy ui log` takes its arguments as gum's `log` does:** they are one message,
   joined by spaces, and key value pairs need `-s`/`--structured`. `-f`/`--format` is gum's
   printf switch (the first argument formats the rest), so the output format moved to
@@ -174,6 +179,20 @@ git history.
 
 ### Added
 
+- **`termancy ui input`, `write`, and `confirm` work as gum's:** `input` takes `--width`
+  (text wider scrolls sideways), `--cursor.mode blink|static|hide` (the terminal's own
+  cursor), and its value from standard input when piped; `write` opens the text in `$EDITOR`
+  with ctrl+e, wraps lines between words at `--width`, asks with plain lines under
+  `ACCESSIBLE=1`, and takes `--show-line-numbers`, `--show-cursor-line`, `--max-lines`, and
+  a value from standard input; `confirm` takes `--show-output`, `--timeout` (the highlighted
+  answer, not an error), `--default=false` and `--no-default` beside `--default no`, an
+  empty `--negative` for one button, and `q` for no. All three take `--header`, `--padding`,
+  `--show-help`, style groups (`--cursor.foreground`, `--selected.background`,
+  `--line-number.foreground`), and `TERMANCY_INPUT_*`, `TERMANCY_WRITE_*`, and
+  `TERMANCY_CONFIRM_*` variables. Components: `input`'s `width` and `scroll`; `textarea`'s
+  `width` (lines wrap between words, up and down move by rows), `max_lines`,
+  `end_of_buffer`, `cursor_line` styles, and `cursorPosition`; `confirm`'s ctrl+n/ctrl+p,
+  `q`, and an empty `negative`. `sys.process.editText` takes `.at`.
 - **`sys.timezone`: the local time zone,** its offset and abbreviation at any instant,
   from `TZ` (a POSIX rule such as `CET-1CEST,M3.5.0,M10.5.0/3`, or a zone name read from
   zoneinfo), else `/etc/localtime`, else on Windows the system's zone; TZif versions 1 to 3
