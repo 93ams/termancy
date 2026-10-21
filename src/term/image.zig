@@ -1453,7 +1453,7 @@ const Jpeg = struct {
         if (j.progressive) {
             if (ss > se or se > 63 or (ss == 0 and se != 0) or (ss > 0 and n != 1) or
                 ah > 13 or al > 13) return error.InvalidImage;
-        } else if (ss != 0 or se != 63) return error.InvalidImage;
+        } else if (ss != 0 or se != 63 or ah != 0 or al != 0) return error.InvalidImage;
         for (in_scan[0..n]) |c| {
             if (ss == 0 and ah == 0 and !j.dc[c.dc_table].defined) return error.InvalidImage;
             if (se > 0 and !j.ac[c.ac_table].defined) return error.InvalidImage;
@@ -2021,4 +2021,16 @@ test "JPEG: a quantization table of a precision not 8 or 16 bits is refused" {
     // Precision 2, read as 16 bits.
     data.items[6] = 0x20;
     try testing.expectError(error.InvalidImage, readJpeg(gpa, data.items));
+}
+
+test "JPEG: a sequential scan with successive approximation is refused" {
+    const gpa = testing.allocator;
+    var data = @embedFile("testdata/jpeg/rgb_33x17_444.jpg").*;
+    const sos = std.mem.indexOf(u8, &data, "\xff\xda").?;
+    const end = sos + 2 + std.mem.readInt(u16, data[sos + 2 ..][0..2], .big);
+    // Ah, then Al: both 0 outside progressive JPEG.
+    for ([_]u8{ 0x10, 0x01 }) |approximation| {
+        data[end - 1] = approximation;
+        try testing.expectError(error.InvalidImage, readJpeg(gpa, &data));
+    }
 }

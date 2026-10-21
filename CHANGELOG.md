@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- A baseline or extended JPEG scan with successive approximation (Ah or Al not 0) is
+  refused, as the standard requires; it was decoded with its coefficients shifted.
 - A JPEG quantization table whose precision is neither 8 nor 16 bits is refused; it was read
   as 16 bits.
 - Interlaced GIFs are read with their rows in place; they came out scrambled.
