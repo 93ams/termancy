@@ -184,7 +184,11 @@ pub const current_profile_key = "current_profile";
 /// The profile `termancy cfg profile use` chose, if any.
 pub fn currentProfile(config: *cfg.Config) !?[]const u8 {
     const value = try config.get(current_profile_key) orelse return null;
-    return if (value == .string) value.string else null;
+    // A name that reads like a date was written bare before `cfg set` quoted strings.
+    return switch (value) {
+        .string, .datetime => |name| name,
+        else => null,
+    };
 }
 
 pub fn hasProfile(config: *cfg.Config, profile: []const u8) bool {

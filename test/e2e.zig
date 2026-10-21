@@ -1846,6 +1846,26 @@ const edit_chains = [_]EditChain{
         ,
     },
     .{
+        .name = "a profile named like a date, recorded bare, is still the one in use",
+        .seed = "profiled_by_date",
+        .file = "profiled_by_date.toml",
+        .steps = &.{
+            .{ .args = &.{ "profile", "list" }, .stdout = "* 2024-01-01\n" },
+            .{ .args = &.{ "get", "server.host" }, .stdout = "example.com\n" },
+        },
+        .content =
+        \\current_profile = 2024-01-01
+        \\
+        \\[server]
+        \\host = "localhost"
+        \\
+        \\[profiles."2024-01-01".server]
+        \\host = "example.com"
+        \\
+        \\
+        ,
+    },
+    .{
         .name = "fmt --sort sorts every table",
         .seed = "unsorted",
         .file = "unsorted.toml",

@@ -69,6 +69,16 @@ host = "localhost"
 host = "example.com"
 """
 
+profiled_by_date = """
+current_profile = 2024-01-01
+
+[server]
+host = "localhost"
+
+[profiles."2024-01-01".server]
+host = "example.com"
+"""
+
 sort_commented = """
 # Settings.
 zeta = 1 # last
