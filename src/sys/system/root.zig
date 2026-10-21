@@ -28,6 +28,9 @@ pub const daemon = @import("daemon.zig");
 pub const proctitle = @import("proctitle.zig");
 /// Loading shared libraries and hot-reloading them on request.
 pub const dynlib = @import("dynlib.zig");
+/// The local time zone: offset and abbreviation at an instant, from `TZ`, zoneinfo, or
+/// Windows.
+pub const timezone = @import("timezone.zig");
 
 test {
     // `refAllDecls` is shallow, so every file is named here; a file missing from this list
@@ -42,4 +45,5 @@ test {
     std.testing.refAllDecls(daemon);
     std.testing.refAllDecls(proctitle);
     std.testing.refAllDecls(dynlib);
+    std.testing.refAllDecls(timezone);
 }

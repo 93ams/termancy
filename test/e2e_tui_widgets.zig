@@ -25,6 +25,8 @@ const Case = struct {
     stdin: ?[]const u8 = null,
     stdout: []const u8 = "",
     stderr: []const u8 = "",
+    /// Checked instead of `stderr` when set: a part standard error must hold (around a time).
+    stderr_match: ?[]const u8 = null,
     status: u8 = 0,
 };
 
@@ -183,9 +185,9 @@ const cases = [_]Case{
         .name = "format, FORCE_COLOR",
         .args = &.{ "ui", "format", "# T", "*i* `c`" },
         .env = &force_color,
-        .stdout = "\n  \x1b[1;38;5;228;48;5;63m \x1b[0m\x1b[1;38;5;228;48;5;63mT\x1b[0m" ++
-            "\x1b[1;38;5;228;48;5;63m \x1b[0m\n\n  \x1b[3;38;5;252mi\x1b[0m\x1b[38;5;252m " ++
-            "\x1b[0m\x1b[38;5;203;48;5;236m c \x1b[0m\n",
+        // gum's default style sheet, pink.
+        .stdout = "\n  \x1b[1;4;38;5;212mT\x1b[0m\n\n  \x1b[3;38;5;212mi\x1b[0m " ++
+            "\x1b[38;5;212mc\x1b[0m\n",
     },
     // table --print
     .{
@@ -298,6 +300,126 @@ const cases = [_]Case{
         .args = &.{ "ui", "choose", "--label-delimiter", ":", "a:1", "b" },
         .stderr = "termancy: item \"b\" has no --label-delimiter \":\"\n",
         .status = 1,
+    },
+    // style/format/join/log (gum parity)
+    .{
+        .name = "style --trim",
+        .args = &.{ "ui", "style", "--trim", "--border", "normal" },
+        .stdin = "  a  \n\t bb\n",
+        .stdout = "┌──┐\n│a │\n│bb│\n└──┘\n",
+    },
+    .{
+        .name = "style: TERMANCY_STYLE_TRIM, escapes stripped from standard input",
+        .args = &.{ "ui", "style" },
+        .env = &.{ .{ "TERMANCY_STYLE_TRIM", "1" }, .{ "FORCE_COLOR", "3" } },
+        .stdin = "  \x1b[31mred\x1b[0m \n",
+        .stdout = "red\n",
+    },
+    .{
+        .name = "style --height --align bottom",
+        .args = &.{ "ui", "style", "--height", "3", "--align", "bottom", "x" },
+        .stdout = " \n \nx\n",
+    },
+    .{
+        .name = "format: gum's template functions",
+        .args = &.{
+            "ui",
+            "format",
+            "-t",
+            "template",
+            "{{ Color \"99\" \"0\" \" Gum \" }}{{ \"x\" | Bold | Foreground \"212\" }}" ++
+                "{{ Color \"1\" \"y\" }}{{ Overline \"o\" }}",
+        },
+        .env = &force_color,
+        .stdout = "\x1b[38;5;99;40m Gum \x1b[0m\x1b[38;5;212m\x1b[1mx\x1b[0m\x1b[0m" ++
+            "\x1b[31my\x1b[0mo\n",
+    },
+    .{
+        .name = "format: a template on standard input, TERMANCY_FORMAT_TYPE",
+        .args = &.{ "ui", "format" },
+        .env = &.{.{ "TERMANCY_FORMAT_TYPE", "template" }},
+        .stdin = "{{ Italic \"hi\" }} there\n",
+        .stdout = "hi there\n",
+    },
+    .{
+        .name = "format --type code",
+        .args = &.{ "ui", "format", "--type", "code", "-l", "zig", "--theme", "ansi" },
+        .env = &force_color,
+        .stdin = "const x = 1;\n",
+        .stdout = "\x1b[35mconst\x1b[0m x = \x1b[36m1\x1b[0m;\n",
+    },
+    .{
+        .name = "format --type emoji",
+        .args = &.{ "ui", "format", "--type", "emoji", ":rocket: shipped :tada:" },
+        .stdout = "🚀 shipped 🎉\n",
+    },
+    .{
+        .name = "join side by side, at the bottom",
+        .args = &.{ "ui", "join", "--align", "bottom", "a\nb\nc", "x" },
+        .stdout = "a \nb \ncx\n",
+    },
+    .{
+        .name = "join side by side, in the middle by TERMANCY_JOIN_ALIGN",
+        .args = &.{ "ui", "join", "a\nb\nc", "x" },
+        .env = &.{.{ "TERMANCY_JOIN_ALIGN", "middle" }},
+        .stdout = "a \nbx\nc \n",
+    },
+    .{
+        .name = "join stacked, centered",
+        .args = &.{ "ui", "join", "--vertical", "--align", "center", "a", "bbb" },
+        .stdout = " a \nbbb\n",
+    },
+    .{
+        .name = "log: the arguments as one message, no level",
+        .args = &.{ "ui", "log", "two", "words" },
+        .stderr = "two words\n",
+    },
+    .{
+        .name = "log --structured",
+        .args = &.{ "ui", "log", "-s", "-l", "warn", "disk", "used", "93%", "path", "/var log" },
+        .stderr = "WARN disk used=93% path=\"/var log\"\n",
+    },
+    .{
+        .name = "log -f, as printf",
+        .args = &.{ "ui", "log", "-f", "%s took %ds", "build", "42" },
+        .stderr = "build took 42s\n",
+    },
+    .{
+        .name = "log --formatter json",
+        .args = &.{
+            "ui",           "log", "--formatter", "json", "-l", "info", "--prefix", "app",
+            "--structured", "up",  "port",        "80",
+        },
+        .stderr = "{\"level\":\"info\",\"prefix\":\"app\",\"msg\":\"up\",\"port\":\"80\"}\n",
+    },
+    .{
+        .name = "log: TERMANCY_LOG_LEVEL leaves out lower levels",
+        .args = &.{ "ui", "log", "-l", "info", "left out" },
+        .env = &.{.{ "TERMANCY_LOG_LEVEL", "warn" }},
+    },
+    .{
+        .name = "log: TERMANCY_LOG_LEVEL lets the rest through",
+        .args = &.{ "ui", "log", "-l", "error", "written" },
+        .env = &.{.{ "TERMANCY_LOG_LEVEL", "warn" }},
+        .stderr = "ERROR written\n",
+    },
+    .{
+        .name = "log --time kitchen",
+        .args = &.{ "ui", "log", "-t", "kitchen", "-l", "info", "hi" },
+        .stderr_match = "M INFO hi\n",
+    },
+    .{
+        .name = "log --level fatal ends with status 1",
+        .args = &.{ "ui", "log", "-l", "fatal", "boom" },
+        .stderr = "FATAL boom\n",
+        .status = 1,
+    },
+    .{
+        .name = "log: --format is printf's switch, not the formatter",
+        .args = &.{ "ui", "log", "--format=json", "x" },
+        .stderr = "termancy: invalid value \"json\" for flag --format: expected true or false\n" ++
+            usage("log"),
+        .status = 2,
     },
 };
 
@@ -834,7 +956,7 @@ fn addCase(b: *std.Build, step: *std.Build.Step, run: *std.Build.Step.Run, case:
     if (case.stdin) |bytes| run.setStdIn(.{ .bytes = bytes });
     run.addArgs(case.args);
     run.expectStdOutEqual(case.stdout);
-    run.expectStdErrEqual(case.stderr);
+    if (case.stderr_match) |part| run.expectStdErrMatch(part) else run.expectStdErrEqual(case.stderr);
     run.expectExitCode(case.status);
     step.dependOn(&run.step);
 }

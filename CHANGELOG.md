@@ -9,6 +9,14 @@ git history.
 
 ### Breaking
 
+- **`termancy ui log` takes its arguments as gum's `log` does:** they are one message,
+  joined by spaces, and key value pairs need `-s`/`--structured`. `-f`/`--format` is gum's
+  printf switch (the first argument formats the rest), so the output format moved to
+  `--formatter text|json|logfmt`. `--format json` is not kept: as a switch, `--format`
+  would take `json` for the message, so `--format=json` is refused rather than misread.
+  The default level is `none` (no level written), and `--min-level` reads
+  `TERMANCY_LOG_LEVEL` instead of `GUM_LOG_LEVEL`. `sys.log.Level` has a `none` variant
+  (charm's `Print`), so an exhaustive `switch` over it needs a `.none` arm.
 - **`cfg.Value` has a date-time kind:** `.datetime` holds the text of a TOML offset
   date-time, local date-time, local date, or local time, and `toml.parse` gives one where it
   gave a `.string`. An exhaustive `switch` over a `cfg.Value` needs a `.datetime` arm. TOML
@@ -166,6 +174,25 @@ git history.
 
 ### Added
 
+- **`sys.timezone`: the local time zone,** its offset and abbreviation at any instant,
+  from `TZ` (a POSIX rule such as `CET-1CEST,M3.5.0,M10.5.0/3`, or a zone name read from
+  zoneinfo), else `/etc/localtime`, else on Windows the system's zone; TZif versions 1 to 3
+  with their footer rule; UTC when nothing can be read. `sys.log.Logger.zone` writes times
+  in it (`writeTimeAs` takes the offset), and `termancy ui log --time` uses the local zone,
+  as gum's does.
+- **`termancy ui style`, `format`, `join`, and `log` work as gum's:** a variable for every
+  flag (`TERMANCY_STYLE_TRIM`, `TERMANCY_FORMAT_THEME`, `TERMANCY_JOIN_ALIGN`,
+  `TERMANCY_LOG_FORMATTER`); `style --trim` and `--strip-ansi`; `--align top|middle|bottom`
+  for every style group (where text sits in a taller block); `format --strip-ansi`, gum's
+  `pink` style sheet by default (`notty` without color, where it was `dark` or `light`), and
+  gum's template functions in all their spellings (`Color` with one color, `Foreground` and
+  `Background` with none, `Overline`); `log --structured`, `--format` (printf),
+  `--formatter`, the `none` level, gum's `--time` layout names (`kitchen`, `ansic`,
+  `rfc822`, `stampmilli`, ...), `--min-level` from `TERMANCY_LOG_LEVEL`, a status of 1 after
+  `fatal`, and a style group for each part (`--level.foreground`, `--key.faint`). `sys.log`
+  grows what that takes: `Styles`, charm's look part by part; `TimeFormat`'s Go layouts
+  (`goLayout`); `Level.charmColor`. `cli.flags`: `.env = ""` gives a flag no variable under
+  an `env_prefix`.
 - **`ui choose` and `ui filter` take the rest of gum's flags.** `choose`: `--ordered`,
   `--select-if-one` (prints a lone item with no terminal at all), `--label-delimiter`
   (labels shown, values printed), `--selected '*'`, `--cursor-prefix`, `--selected-prefix`,

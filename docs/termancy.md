@@ -136,6 +136,31 @@ branch=$(git branch --format='%(refname:short)' | termancy ui filter --no-strict
 printf 'b\nc\n' | termancy ui choose --no-limit a b c d   # b and c chosen at the start
 ```
 
+The output commands, as gum's:
+
+- **`style`** lays the arguments (one per line) or standard input out as a block in the
+  style flags, at the top level: `--width` wraps at spaces, `--align top|middle|bottom`
+  places the text in a `--height` taller than it, `--trim` removes the whitespace around
+  each line first.
+- **`format`** renders Markdown (in gum's `pink` style sheet where colors show, `notty`
+  where not; `--theme` picks another), code (`-t code -l zig`), emoji shortcodes, or a
+  template of gum's functions: `{{ Bold "x" }}` (and `Italic`, `Faint`, `Underline`,
+  `CrossOut`, `Blink`, `Reverse`, `Overline`), `{{ Color "fg" "x" }}`,
+  `{{ Color "fg" "bg" "x" }}`, `Foreground`, `Background`, and pipes:
+  `{{ "x" | Bold | Color "212" }}`. Arguments are double-quoted strings; Go's `if`,
+  `range`, variables, and parentheses are not there.
+- **`join`** puts blocks side by side, shorter ones at the `--align` `top`, `middle`, or
+  `bottom` (`left`, `center`, `right` say the same), or stacked with `--vertical`,
+  narrower ones `left`, `center`, or `right`.
+- **`log`** writes one record on standard error: the arguments joined by spaces; with
+  `-s`, a message and `key value` pairs; with `-f`, a printf format (`%s`, `%d`, `%v`, a
+  width such as `%-8s`, `%%`) and its arguments. `--level none` (the default) writes no
+  level; `--formatter text|json|logfmt`; `--time` takes Go's layout names, as gum's
+  (`kitchen`, `rfc3339`, `datetime`, `stampmilli`, ...), in local time (`TZ`, else the
+  system's zone), and JSON and logfmt keep RFC 3339; `--min-level` or `TERMANCY_LOG_LEVEL` leaves out lower levels, never a record
+  with no level; `fatal` ends with status 1. `--level.*`, `--time.*`, `--prefix.*`,
+  `--message.*`, `--key.*`, `--value.*`, and `--separator.*` style the parts.
+
 ## Terminal output and media
 
 | command | |
