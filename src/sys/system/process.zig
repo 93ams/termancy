@@ -244,6 +244,8 @@ pub const EditTextOptions = struct {
     dir: ?[]const u8 = null,
     /// `error.StreamTooLong` when the edited text is longer.
     limit: Io.Limit = .limited(16 * 1024 * 1024),
+    /// Where the editor puts the cursor (see `editAt`).
+    at: ?Position = null,
 };
 
 /// Errors from `editText`.
@@ -288,7 +290,7 @@ pub fn editText(
         try file.writeStreamingAll(io, initial);
     }
     defer cwd.deleteFile(io, file_path) catch {};
-    const term = try edit(gpa, io, environ, file_path);
+    const term = try editAt(gpa, io, environ, file_path, options.at);
     if (!term.success()) return error.EditorFailed;
     return cwd.readFileAlloc(io, file_path, gpa, files.inclusiveLimit(options.limit));
 }

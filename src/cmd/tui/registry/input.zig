@@ -28,6 +28,9 @@
 //! length should not show either); `password` shows `mask` for each character.
 //! `cursorColumn` is where a real terminal cursor goes (`tui.Cursor`).
 //!
+//! With `width`, the input takes at most that many columns, prompt included: longer text
+//! scrolls sideways to keep the cursor in view (`offset` is where the view starts).
+//!
 //! The cursor moves by grapheme cluster (see `tui.width`), so it never splits a character.
 //! The text grows with `gpa`; a keystroke that needs memory that is not there is dropped.
 
@@ -55,6 +58,11 @@ password: bool = false,
 mask: []const u8 = "•",
 /// The most characters (grapheme clusters) the text may hold.
 char_limit: ?usize = null,
+/// The most columns the input takes, prompt and cursor included; longer text scrolls.
+/// Null: as wide as the text. Call `scroll` after changing it.
+width: ?usize = null,
+/// Byte offset in `text` of the first character shown, when `width` cuts the text.
+offset: usize = 0,
 validate: ?Validator = null,
 /// Whether the cursor is drawn; a model holding several inputs focuses one.
 focused: bool = true,
@@ -129,14 +137,53 @@ pub fn acceptSuggestion(input: *Input) bool {
 
 /// The column of the cursor in the view: after the prompt and the text before it.
 pub fn cursorColumn(input: *const Input) usize {
-    const before = input.value()[0..input.cursor];
-    const typed = if (input.hidden)
-        0
-    else if (input.password)
-        clusterCount(before) * tui.width.of(input.mask)
+    const before = input.value()[input.offset..input.cursor];
+    return tui.width.of(input.prompt) + input.shownWidth(before);
+}
+
+/// The columns `text` takes as shown: masked, hidden, or as it is.
+fn shownWidth(input: *const Input, text: []const u8) usize {
+    if (input.hidden) return 0;
+    if (input.password) return clusterCount(text) * tui.width.of(input.mask);
+    return tui.width.of(text);
+}
+
+/// The columns `width` leaves for the text after the prompt, the cursor's included.
+fn textColumns(input: *const Input) ?usize {
+    const width = input.width orelse return null;
+    return @max(width -| tui.width.of(input.prompt), 1);
+}
+
+/// Moves `offset` so the cursor shows within `width`, keeping as much text in view as
+/// fits.
+pub fn scroll(input: *Input) void {
+    const columns = input.textColumns() orelse {
+        input.offset = 0;
+        return;
+    };
+    const text = input.value();
+    const at_end = input.cursor == text.len;
+    // The cursor takes the character under it, or a column after the text.
+    const under = if (at_end)
+        1
     else
-        tui.width.of(before);
-    return tui.width.of(input.prompt) + typed;
+        input.shownWidth(text[input.cursor..nextBoundary(text, input.cursor)]);
+    input.offset = @min(input.offset, input.cursor);
+    var shown = input.shownWidth(text[input.offset..input.cursor]);
+    while (input.offset < input.cursor and shown + under > columns) {
+        const next = nextBoundary(text, input.offset);
+        shown -= input.shownWidth(text[input.offset..next]);
+        input.offset = next;
+    }
+    // Room to spare: bring back text from the left.
+    var tail = input.shownWidth(text[input.offset..]) + @intFromBool(at_end);
+    while (input.offset > 0) {
+        const before = previousBoundary(text, input.offset);
+        const columns_before = input.shownWidth(text[before..input.offset]);
+        if (tail + columns_before > columns) break;
+        tail += columns_before;
+        input.offset = before;
+    }
 }
 
 /// Frees the text and the undo history.
@@ -160,6 +207,7 @@ pub fn setValue(input: *Input, text: []const u8) Allocator.Error!void {
     input.remember(.other);
     input.text.clearRetainingCapacity();
     input.cursor = 0;
+    input.offset = 0;
     try input.insertAs(text, .none);
 }
 
@@ -189,6 +237,7 @@ fn insertAs(input: *Input, text: []const u8, kind: Edit) Allocator.Error!void {
     try input.text.insertSlice(input.gpa, input.cursor, clean.items);
     input.cursor += clean.items.len;
     input.edit_end = input.cursor;
+    input.scroll();
 }
 
 /// Records the text before an edit of `kind`, unless it continues the last edit (the
@@ -232,6 +281,8 @@ fn swapStep(input: *Input, from: *std.ArrayList(Snapshot), to: *std.ArrayList(Sn
     input.cursor = step.cursor;
     input.last_edit = .none;
     input.message = null;
+    input.offset = 0;
+    input.scroll();
     return true;
 }
 
@@ -278,6 +329,7 @@ pub fn check(input: *Input) bool {
 /// Applies an editing or movement key; returns whether the key was one. Enter and esc
 /// are not: the caller decides what they mean.
 pub fn handleKey(input: *Input, key: tui.input.Key) bool {
+    defer input.scroll();
     if (input.suggestions.len > 0) {
         const at_end = input.cursor == input.text.items.len;
         if (key.matches("tab") or (at_end and key.matches("right"))) {
@@ -361,10 +413,25 @@ pub fn view(input: *const Input, w: *Writer) Writer.Error!void {
 }
 
 fn writePlaceholder(input: *const Input, w: *Writer) Writer.Error!void {
-    if (!input.focused) return input.styles.placeholder.paint(w, input.placeholder);
-    const first = nextBoundary(input.placeholder, 0);
-    try input.styles.cursor.paint(w, if (first == 0) " " else input.placeholder[0..first]);
-    try input.styles.placeholder.paint(w, input.placeholder[first..]);
+    const columns = input.textColumns() orelse std.math.maxInt(usize);
+    const placeholder = fitting(input.placeholder, columns);
+    if (!input.focused) return input.styles.placeholder.paint(w, placeholder);
+    const first = nextBoundary(placeholder, 0);
+    try input.styles.cursor.paint(w, if (first == 0) " " else placeholder[0..first]);
+    try input.styles.placeholder.paint(w, placeholder[first..]);
+}
+
+/// The longest start of `text` whose whole characters take at most `columns`.
+fn fitting(text: []const u8, columns: usize) []const u8 {
+    var it: tui.width.Iterator = .init(text);
+    var used: usize = 0;
+    var end: usize = 0;
+    while (it.next()) |cluster| {
+        if (used + cluster.width > columns) break;
+        used += cluster.width;
+        end = it.index;
+    }
+    return text[0..end];
 }
 
 fn writeText(input: *const Input, w: *Writer) Writer.Error!void {
@@ -373,10 +440,15 @@ fn writeText(input: *const Input, w: *Writer) Writer.Error!void {
         if (input.focused) try input.styles.cursor.paint(w, " ");
         return;
     }
-    var it: tui.width.Iterator = .init(text);
-    var start: usize = 0;
+    // With a width, what fits from `offset`, and the cursor's column after it.
+    var left = input.textColumns() orelse std.math.maxInt(usize);
+    var it: tui.width.Iterator = .{ .bytes = text, .index = input.offset };
+    var start = input.offset;
     while (it.next()) |cluster| : (start = it.index) {
         const shown = if (input.password) input.mask else cluster.bytes;
+        const columns = tui.width.of(shown);
+        if (columns > left) break;
+        left -= columns;
         const style = if (input.focused and start == input.cursor)
             input.styles.cursor
         else
@@ -384,7 +456,7 @@ fn writeText(input: *const Input, w: *Writer) Writer.Error!void {
         try style.paint(w, shown);
     }
     // The rest of the suggestion on offer, its first character under the cursor.
-    const rest = if (input.offered()) |choice| choice[text.len..] else "";
+    const rest = fitting(if (input.offered()) |choice| choice[text.len..] else "", left);
     if (input.focused and input.cursor == text.len) {
         const first = nextBoundary(rest, 0);
         try input.styles.cursor.paint(w, if (first == 0) " " else rest[0..first]);
@@ -454,6 +526,33 @@ test "suggestions show, cycle, and are taken with tab" {
     try d.press("tab");
     try testing.expectEqualStrings("apricot", d.model().value());
     try testing.expectEqual(7, d.model().cursorColumn());
+}
+
+test "width scrolls the text sideways to keep the cursor in view" {
+    var d: Driver = try .init(testing.allocator, .{
+        .gpa = testing.allocator,
+        .width = 7,
+        .placeholder = "Type something",
+        .styles = .{ .cursor = .{}, .prompt = .{}, .placeholder = .{} },
+    }, .{});
+    defer d.deinit();
+    try d.expectFrame("> Type ");
+    try d.typeText("abcdefg");
+    // Five columns after the prompt: four letters and the cursor.
+    try d.expectFrame("> defg ");
+    try testing.expectEqual(6, d.model().cursorColumn());
+    try d.press("home");
+    try d.expectFrame("> abcde");
+    try testing.expectEqual(2, d.model().cursorColumn());
+    try d.press("end");
+    try d.press("backspace");
+    // Room again: the text moves back into view.
+    try d.expectFrame("> cdef ");
+    // Off the end, the cursor needs no column of its own.
+    d.model().password = true;
+    try d.press("left");
+    try d.expectFrame("> •••••");
+    try testing.expectEqual(6, d.model().cursorColumn());
 }
 
 test "hidden input shows nothing" {

@@ -22,6 +22,11 @@
 //! `undo_limit` steps are kept, each a copy of the whole text; 0 turns undo off. A
 //! `tui.Program` with `suspend_on_ctrl_z` on stops the process on ctrl+z instead.
 //!
+//! With `width`, a line longer than a row continues on the next (between characters),
+//! and up and down move by rows. `max_lines` bounds the lines; `end_of_buffer` fills the
+//! rows below the text up to `height`, as an editor marks them. `cursorPosition` is where a
+//! real terminal cursor goes (`tui.Cursor`).
+//!
 //! The text grows with `gpa`; a keystroke that needs memory that is not there is dropped.
 
 const std = @import("std");
@@ -43,9 +48,17 @@ prompt: []const u8 = "┃ ",
 placeholder: []const u8 = "",
 /// The most characters (grapheme clusters, line breaks included) the text may hold.
 char_limit: ?usize = null,
-/// The most lines shown; null shows them all.
+/// The most lines (rows, with `width`) shown; null shows them all.
 height: ?usize = null,
-/// The first line shown.
+/// The most columns a row takes, prompt and line number included: longer lines wrap.
+/// Null: lines are as long as they are. Call `scroll` after changing it.
+width: ?usize = null,
+/// The most lines the text may have: what is typed or pasted stops at a line break past
+/// them.
+max_lines: ?usize = null,
+/// With `height`, the rows below the text are filled to it, each the prompt and this.
+end_of_buffer: ?[]const u8 = null,
+/// The first row shown.
 offset: usize = 0,
 /// The column up and down aim for: where the cursor was before it met a shorter line.
 goal: ?usize = null,
@@ -78,6 +91,11 @@ pub const Styles = struct {
     placeholder: tui.Style = .{ .fg = .{ .indexed = 240 } },
     cursor: tui.Style = .{ .reverse = true },
     line_number: tui.Style = .{ .fg = .{ .indexed = 240 } },
+    /// The line the cursor is on, instead of `text`; null: as the others.
+    cursor_line: ?tui.Style = null,
+    /// The number of the line the cursor is on; null: as the others.
+    cursor_line_number: ?tui.Style = null,
+    end_of_buffer: tui.Style = .{ .fg = .{ .indexed = 240 } },
 };
 
 /// Frees the text and the undo history.
@@ -116,6 +134,8 @@ fn insertAs(area: *Textarea, text: []const u8, kind: Edit) Allocator.Error!void 
     var clean: std.ArrayList(u8) = .empty;
     defer clean.deinit(area.gpa);
     var room = if (area.char_limit) |limit| limit -| clusterCount(area.value()) else null;
+    const lines = std.mem.count(u8, area.value(), "\n") + 1;
+    var breaks = if (area.max_lines) |limit| limit -| lines else null;
     var it: tui.width.Iterator = .init(text);
     while (it.next()) |cluster| {
         if (room) |left| {
@@ -126,6 +146,10 @@ fn insertAs(area: *Textarea, text: []const u8, kind: Edit) Allocator.Error!void 
             continue;
         }
         const bytes = sanitize(cluster) orelse continue;
+        if (bytes[0] == '\n') if (breaks) |*left| {
+            if (left.* == 0) break;
+            left.* -= 1;
+        };
         try clean.appendSlice(area.gpa, bytes);
         if (room) |*left| left.* -= 1;
     }
@@ -286,93 +310,233 @@ fn erase(area: *Textarea, from: usize, to: usize, kind: Edit) void {
 
 const Direction = enum { up, down };
 
-/// Moves to the line above or below, as near the goal column as that line allows. On
-/// the first (last) line, up (down) goes to its start (end).
+/// Moves to the row above or below, as near the goal column as that row allows. On the
+/// first (last) row, up (down) goes to the start (end) of the text.
 fn moveLine(area: *Textarea, direction: Direction) void {
     const text = area.value();
-    const here = lineOf(text, area.cursor);
+    var it = area.viewRows();
+    var above: ?Row = null;
+    const here = while (it.next()) |row| {
+        if (row.has(area.cursor)) break row;
+        above = row;
+    } else return;
     const column = area.goal orelse tui.width.of(text[here.start..area.cursor]);
     area.goal = column;
     const target = switch (direction) {
-        .up => if (here.start == 0) {
+        .up => above orelse {
             area.cursor = 0;
             return;
-        } else lineOf(text, here.start - 1),
-        .down => if (here.end == text.len) {
+        },
+        .down => it.next() orelse {
             area.cursor = text.len;
             return;
-        } else lineOf(text, here.end + 1),
+        },
     };
-    area.cursor = target.start + offsetAtColumn(text[target.start..target.end], column);
+    var at = target.start + offsetAtColumn(text[target.start..target.end], column);
+    // The end of a row that wraps is the start of the next: stay on this one.
+    if (!target.last and at == target.end and at > target.start) {
+        at = previousBoundary(text, at);
+    }
+    area.cursor = at;
 }
 
-/// Scrolls so the cursor's line is shown.
-fn scroll(area: *Textarea) void {
+/// Scrolls so the cursor's row is shown.
+pub fn scroll(area: *Textarea) void {
     const height = area.height orelse return;
-    const row = std.mem.count(u8, area.value()[0..area.cursor], "\n");
+    const row = area.cursorRow();
     if (row < area.offset) area.offset = row;
     if (row >= area.offset + height) area.offset = row + 1 - @max(height, 1);
 }
 
-pub fn view(area: *const Textarea, w: *Writer) Writer.Error!void {
-    try area.styles.prompt.paint(w, area.prompt);
-    if (area.text.items.len == 0) {
-        try area.writeNumber(w, 0);
-        return area.writePlaceholder(w);
+/// One row of the view: a line, or with `width` the part of one that fits.
+pub const Row = struct {
+    start: usize,
+    end: usize,
+    /// It starts a line, so it shows the line's number.
+    first: bool,
+    /// It ends a line, so the cursor at its end is on it.
+    last: bool,
+
+    /// Whether the cursor at `index` is on this row.
+    pub fn has(row: Row, index: usize) bool {
+        return row.start <= index and (index < row.end or (index == row.end and row.last));
     }
+};
+
+/// The rows of the text, in order.
+pub const Rows = struct {
+    text: []const u8,
+    columns: usize,
+    index: usize = 0,
+    done: bool = false,
+
+    pub fn next(it: *Rows) ?Row {
+        if (it.done) return null;
+        const text = it.text;
+        const start = it.index;
+        const line_end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
+        const end = rowEnd(text[0..line_end], start, it.columns);
+        const row: Row = .{
+            .start = start,
+            .end = end,
+            .first = start == 0 or text[start - 1] == '\n',
+            .last = end == line_end,
+        };
+        it.done = row.last and line_end == text.len;
+        it.index = if (row.last) line_end + 1 else end;
+        return row;
+    }
+};
+
+/// The end of a row from `start`: as many characters as fit in `columns`, at least one.
+fn rowEnd(line: []const u8, start: usize, columns: usize) usize {
+    var it: tui.width.Iterator = .{ .bytes = line, .index = start };
+    var used: usize = 0;
+    var end = start;
+    while (it.next()) |cluster| {
+        if (used + cluster.width > columns and end > start) break;
+        used += cluster.width;
+        end = it.index;
+    }
+    return end;
+}
+
+/// The rows of the text as the view shows them.
+pub fn viewRows(area: *const Textarea) Rows {
+    return .{ .text = area.value(), .columns = area.textColumns() };
+}
+
+/// The columns a row has for text: `width` less the prompt, the line number, and a column
+/// for the cursor at the end of a full row.
+fn textColumns(area: *const Textarea) usize {
+    const width = area.width orelse return std.math.maxInt(usize);
+    return @max(width -| tui.width.of(area.prompt) -| area.gutter() -| 1, 1);
+}
+
+/// The columns the line numbers take, a space after them included.
+fn gutter(area: *const Textarea) usize {
+    if (!area.line_numbers) return 0;
+    var digits: usize = 1;
+    var n = std.mem.count(u8, area.value(), "\n") + 1;
+    while (n >= 10) : (n /= 10) digits += 1;
+    return digits + 1;
+}
+
+/// The row the cursor is on, from the first.
+fn cursorRow(area: *const Textarea) usize {
+    var it = area.viewRows();
+    var index: usize = 0;
+    while (it.next()) |row| : (index += 1) {
+        if (row.has(area.cursor)) return index;
+    }
+    return index -| 1;
+}
+
+/// A place in the view: a row from the first shown, and a column.
+pub const Position = struct { row: usize, column: usize };
+
+/// Where the cursor is in the view, the prompt and line number counted.
+pub fn cursorPosition(area: *const Textarea) Position {
+    const text = area.value();
+    var it = area.viewRows();
+    var index: usize = 0;
+    const start = while (it.next()) |row| : (index += 1) {
+        if (row.has(area.cursor)) break row.start;
+    } else 0;
+    const before = tui.width.of(text[start..area.cursor]);
+    return .{
+        .row = index -| area.offset,
+        .column = tui.width.of(area.prompt) + area.gutter() + before,
+    };
+}
+
+pub fn view(area: *const Textarea, w: *Writer) Writer.Error!void {
     const text = area.value();
     const last = if (area.height) |height| area.offset + height else std.math.maxInt(usize);
-    var start: usize = 0;
-    var row: usize = 0;
-    while (row < last) : (row += 1) {
-        const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
-        if (row >= area.offset) {
-            if (row > area.offset) try area.styles.prompt.paint(w, area.prompt);
-            try area.writeNumber(w, row);
-            try area.writeLine(w, text, start, end);
-            if (end < text.len and row + 1 < last) try w.writeByte('\n');
+    const line = lineOf(text, area.cursor);
+    var it = area.viewRows();
+    var index: usize = 0;
+    var number: usize = 0;
+    var shown: usize = 0;
+    while (it.next()) |row| : (index += 1) {
+        if (row.first) number += 1;
+        if (index >= last) break;
+        if (index < area.offset) continue;
+        if (shown > 0) try w.writeByte('\n');
+        shown += 1;
+        const on_line = area.focused and row.start >= line.start and row.end <= line.end;
+        try area.styles.prompt.paint(w, area.prompt);
+        try area.writeNumber(w, if (row.first) number else null, on_line);
+        if (text.len == 0) {
+            try area.writePlaceholder(w);
+        } else {
+            try area.writeRow(w, row, on_line);
         }
-        if (end == text.len) break;
-        start = end + 1;
+    }
+    const filler = area.end_of_buffer orelse return;
+    const height = area.height orelse return;
+    while (shown < height) : (shown += 1) {
+        try w.writeByte('\n');
+        try area.styles.prompt.paint(w, area.prompt);
+        try area.writeNumber(w, null, false);
+        try area.styles.end_of_buffer.paint(w, filler);
     }
 }
 
-/// The number of line `row` (from 0), right-aligned to the widest, when
-/// `line_numbers` is on.
-fn writeNumber(area: *const Textarea, w: *Writer, row: usize) Writer.Error!void {
-    if (!area.line_numbers) return;
-    const lines = std.mem.count(u8, area.value(), "\n") + 1;
-    var widest: usize = 1;
-    var n = lines;
-    while (n >= 10) : (n /= 10) widest += 1;
-    var buffer: [24]u8 = undefined;
-    const number = std.fmt.bufPrint(&buffer, "{d: >[1]} ", .{ row + 1, widest }) catch "";
-    try area.styles.line_number.paint(w, number);
+/// Line `number` (from 1), right-aligned to the widest, when `line_numbers` is on;
+/// blank for a row that continues a line (null).
+fn writeNumber(
+    area: *const Textarea,
+    w: *Writer,
+    number: ?usize,
+    on_line: bool,
+) Writer.Error!void {
+    const columns = area.gutter();
+    if (columns == 0) return;
+    var buffer: [24]u8 = @splat(' ');
+    const text = if (number) |n|
+        std.fmt.bufPrint(&buffer, "{d: >[1]} ", .{ n, columns - 1 }) catch ""
+    else
+        buffer[0..@min(columns, buffer.len)];
+    const style = (if (on_line) area.styles.cursor_line_number else null) orelse
+        area.styles.line_number;
+    try style.paint(w, text);
 }
 
 fn writePlaceholder(area: *const Textarea, w: *Writer) Writer.Error!void {
-    if (!area.focused) return area.styles.placeholder.paint(w, area.placeholder);
-    const first = nextBoundary(area.placeholder, 0);
-    try area.styles.cursor.paint(w, if (first == 0) " " else area.placeholder[0..first]);
-    try area.styles.placeholder.paint(w, area.placeholder[first..]);
+    const placeholder = area.placeholder[0..rowEnd(area.placeholder, 0, area.textColumns())];
+    if (!area.focused) return area.styles.placeholder.paint(w, placeholder);
+    const first = nextBoundary(placeholder, 0);
+    try area.styles.cursor.paint(w, if (first == 0) " " else placeholder[0..first]);
+    try area.styles.placeholder.paint(w, placeholder[first..]);
 }
 
-/// Writes `text[start..end]`, with the cursor if it is on this line.
-fn writeLine(
-    area: *const Textarea,
-    w: *Writer,
-    text: []const u8,
-    start: usize,
-    end: usize,
-) Writer.Error!void {
-    var it: tui.width.Iterator = .{ .bytes = text[0..end], .index = start };
-    var at = start;
+/// Writes `row`, with the cursor if it is on it; on the cursor's line, in
+/// `cursor_line`'s style, to the full width when there is one.
+fn writeRow(area: *const Textarea, w: *Writer, row: Row, on_line: bool) Writer.Error!void {
+    const text = area.value();
+    const line_style = if (on_line) area.styles.cursor_line else null;
+    const base = line_style orelse area.styles.text;
+    var it: tui.width.Iterator = .{ .bytes = text[0..row.end], .index = row.start };
+    var at = row.start;
+    var used: usize = 0;
     while (it.next()) |cluster| : (at = it.index) {
         const on_cursor = area.focused and at == area.cursor;
-        const style = if (on_cursor) area.styles.cursor else area.styles.text;
-        try style.paint(w, cluster.bytes);
+        try (if (on_cursor) area.styles.cursor else base).paint(w, cluster.bytes);
+        used += cluster.width;
     }
-    if (area.focused and area.cursor == end) try area.styles.cursor.paint(w, " ");
+    if (area.focused and row.last and area.cursor == row.end) {
+        try area.styles.cursor.paint(w, " ");
+        used += 1;
+    }
+    if (line_style == null or area.width == null) return;
+    const spaces: [64]u8 = @splat(' ');
+    var left = (area.textColumns() + 1) -| used;
+    while (left > 0) {
+        const n = @min(left, spaces.len);
+        try base.paint(w, spaces[0..n]);
+        left -= n;
+    }
 }
 
 /// The bounds of the line holding `index`: its first byte and its `\n` (or the end).
@@ -581,6 +745,69 @@ test "line numbers line up" {
     try area.view(&out.writer);
     try testing.expect(std.mem.startsWith(u8, out.written(), " 1 a\n 2 b"));
     try testing.expect(std.mem.endsWith(u8, out.written(), "10 j"));
+}
+
+test "width wraps long lines; up and down move by rows" {
+    var d: Driver = try .init(testing.allocator, .{
+        .gpa = testing.allocator,
+        .prompt = "> ",
+        .width = 6,
+        .styles = .{ .cursor = .{}, .prompt = .{} },
+    }, .{});
+    defer finish(&d);
+    // Six columns: the prompt, three characters, and one for the cursor.
+    try d.typeText("abcdefg");
+    try d.press("enter");
+    try d.typeText("hi");
+    try d.expectFrame("> abc\n> def\n> g\n> hi ");
+    try testing.expectEqual(Position{ .row = 3, .column = 4 }, d.model().cursorPosition());
+    try d.press("up");
+    try testing.expectEqual(Position{ .row = 2, .column = 3 }, d.model().cursorPosition());
+    try d.press("up");
+    try d.press("left");
+    try testing.expectEqual(4, d.model().cursor);
+    try d.press("down");
+    try testing.expectEqual(7, d.model().cursor);
+}
+
+test "max_lines stops the text at a line break past it" {
+    var d: Driver = try .init(testing.allocator, .{
+        .gpa = testing.allocator,
+        .max_lines = 2,
+    }, .{});
+    defer finish(&d);
+    try d.paste("a\nb\nc");
+    try testing.expectEqualStrings("a\nb", d.model().value());
+    try d.press("enter");
+    try d.typeText("x");
+    try testing.expectEqualStrings("a\nbx", d.model().value());
+}
+
+test "end_of_buffer fills the rows to height; the cursor's line has its own styles" {
+    var area: Textarea = .{
+        .gpa = testing.allocator,
+        .prompt = "|",
+        .height = 3,
+        .line_numbers = true,
+        .end_of_buffer = "~",
+        .styles = .{
+            .prompt = .{},
+            .cursor = .{},
+            .line_number = .{},
+            .end_of_buffer = .{},
+            .cursor_line = .{ .bold = true },
+            .cursor_line_number = .{ .italic = true },
+        },
+    };
+    defer area.deinit();
+    try area.setValue("a\nb");
+    var out: Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try area.view(&out.writer);
+    try testing.expectEqualStrings(
+        "|1 a\n|\x1b[3m2 \x1b[0m\x1b[1mb\x1b[0m \n|  ~",
+        out.written(),
+    );
 }
 
 test "undo and redo across lines, a word at a time, cursor included" {
