@@ -4,14 +4,14 @@
 //! | command   | does                                              | prints              |
 //! |-----------|---------------------------------------------------|---------------------|
 //! | `choose`  | pick from arguments or stdin lines                | the chosen items    |
-//! | `confirm` | ask yes/no                                        | nothing (status)    |
+//! | `confirm` | ask yes/no (`--show-output` prints the answer)    | nothing (status)    |
 //! | `input`   | read a line (`--password`)                        | the line            |
-//! | `write`   | read several lines (Ctrl-D submits)               | the text            |
+//! | `write`   | read several lines (enter submits, ctrl+j breaks) | the text            |
 //! | `filter`  | fuzzy-find among stdin lines                      | the chosen lines    |
 //! | `spin`    | run a command behind a spinner                    | the command's output|
 //! | `table`   | show CSV/TSV, pick a row (`--print` to render)    | the chosen row      |
-//! | `pager`   | scroll through a file or stdin                    | nothing             |
-//! | `file`    | browse directories, choose a file                 | its absolute path   |
+//! | `pager`   | scroll and search a file, text, or stdin          | nothing (status 0)  |
+//! | `file`    | browse directories, choose a file or directory    | its absolute path   |
 //! | `style`   | style text: colors, border, padding, alignment    | the styled text     |
 //! | `format`  | Markdown, code, emoji, or a template              | the rendered text   |
 //! | `join`    | blocks side by side or stacked                    | the joined text     |
@@ -19,8 +19,9 @@
 //!
 //! Interactive commands draw on the terminal (`/dev/tty` when stdio is redirected) and
 //! print results to standard output, so they compose in `$(...)` and pipes. Without any
-//! terminal they fail at once with status 2. Esc ends with status 1 and Ctrl-C with 130,
-//! printing nothing. With `ACCESSIBLE=1`, `choose`, `confirm`, `input`, and `write` ask
+//! terminal they fail at once with status 2. Esc ends with status 1 (the pager's with 0)
+//! and Ctrl-C with 130, printing nothing. With `ACCESSIBLE=1`, `choose`, `filter`,
+//! `confirm`, `input`, and `write` ask
 //! with plain lines instead, numbered choices and typed answers, for screen readers
 //! (plain.zig).
 //! `style`, `format`, and `table --print` write escapes only where
