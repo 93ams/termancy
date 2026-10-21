@@ -477,6 +477,25 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `termancy image` (`image.decode`) reads a GIF's first frame only; it read every frame to
+  keep the first, so a long animation was slow and a bad later frame refused the file.
+- A GIF cut short, or followed by junk, keeps the frames before the damage, as browsers
+  show them; the whole file was refused. One with no whole frame still is.
+- A GIF with an LZW minimum code size of 1 (below the spec's 2) is read as giflib and
+  Chrome read it; its codes never grew wider, so most of it came out wrong.
+- A baseline or extended JPEG scan with successive approximation (Ah or Al not 0) is
+  refused, as the standard requires; it was decoded with its coefficients shifted.
+- A JPEG quantization table whose precision is neither 8 nor 16 bits is refused; it was read
+  as 16 bits.
+- Interlaced GIFs are read with their rows in place; they came out scrambled.
+- `image.readGif` clears or puts back a frame as its disposal method says, and a graphic
+  control extension's transparent color applies to the frame after it only, not every one.
+- A JPEG of more than 100 scans is refused, and blocks past the end of a scan's data are left
+  blank (as libjpeg leaves them) instead of decoded from zeros: 8 KB of empty scans took 19 s.
+- A JPEG of more than `image.max_pixels` (8192 by 8192) is refused, as a PNG or GIF is: a
+  file of a few megabytes claiming 32768 by 32768 allocated gigabytes.
+- A GIF's frames larger than its screen count toward `image.max_pixels`: a few kilobytes of
+  8192 by 8192 frames on a 1 by 1 screen took most of a minute to read.
 - `cfg fmt` on YAML took a `#` inside a key (`c#ounts:`) for the start of a comment and
   declined the file, even one it had just written from `c#ounts: [3, -4]`.
 - **`cfg` encrypted files:** the Argon2 costs an envelope names are bounded (1 GiB, four
