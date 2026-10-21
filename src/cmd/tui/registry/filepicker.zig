@@ -50,6 +50,8 @@ show_permissions: bool = false,
 show_size: bool = false,
 /// Columns the size takes, right-aligned.
 size_width: usize = 8,
+/// The most entries shown; fewer when the terminal is too short for them.
+height: usize = 10,
 /// What enter chooses: files, and directories (which it otherwise opens).
 allow_files: bool = true,
 allow_directories: bool = false,
@@ -152,6 +154,14 @@ fn handle(picker: *FilePicker, msg: tui.Msg) !tui.Cmd {
                 try picker.load(keep);
             } else _ = picker.list.handleKey(key);
         },
+        .resize => |size| {
+            // The header, the directory, and a message take a row each.
+            const header = if (picker.header.len > 0) std.mem.count(u8, picker.header, "\n") + 1 else 0;
+            const room = @as(usize, size.height) -| (header + 2);
+            picker.list.height = @max(1, @min(picker.height, room));
+            picker.list.moveTo(picker.list.cursor);
+            _ = picker.list.update(msg);
+        },
         else => _ = picker.list.update(msg),
     }
     return .none;
@@ -232,7 +242,7 @@ fn load(picker: *FilePicker, select: ?[]const u8) !void {
         if (picker.show_permissions or picker.show_size) {
             const lstat: Io.Dir.StatFileOptions = .{ .follow_symlinks = false };
             if (dir.statFile(picker.io, entry.name, lstat)) |stat| {
-                item.permissions = permissionsOf(stat);
+                item.permissions = permissionsOf(stat, entry.name);
                 item.size = stat.size;
             } else |_| {}
         }
@@ -274,8 +284,8 @@ fn wanted(picker: *const FilePicker, name: []const u8) bool {
 }
 
 /// `ls -l`'s mode column: the kind, then read, write, and execute for the owner, the
-/// group, and others; on Windows, which has no such bits, `rw-` for each.
-fn permissionsOf(stat: Io.File.Stat) [10]u8 {
+/// group, and others; on Windows, what its attributes and `name` imply (`windowsBits`).
+fn permissionsOf(stat: Io.File.Stat, name: []const u8) [10]u8 {
     var mode: [10]u8 = "-rwxrwxrwx".*;
     mode[0] = switch (stat.kind) {
         .directory => 'd',
@@ -289,12 +299,26 @@ fn permissionsOf(stat: Io.File.Stat) [10]u8 {
     const Permissions = Io.File.Permissions;
     const bits: u32 = if (@hasDecl(Permissions, "toMode"))
         @intCast(stat.permissions.toMode() & 0o777)
+    else if (@hasDecl(Permissions, "toAttributes"))
+        // The attributes themselves; bit 0 is FILE_ATTRIBUTE_READONLY.
+        windowsBits(@backingInt(stat.permissions) & 1 != 0, stat.kind == .directory, name)
     else
         0o666;
     for (mode[1..], 0..) |*c, i| {
         if (bits & (@as(u32, 0o400) >> @intCast(i)) == 0) c.* = '-';
     }
     return mode;
+}
+
+/// What Windows implies for every class: read, write unless read-only, and execute for
+/// a directory or a program (`.exe`, `.bat`, `.cmd`, `.com`).
+fn windowsBits(read_only: bool, directory: bool, name: []const u8) u32 {
+    var bits: u32 = if (read_only) 0o444 else 0o666;
+    const program = for ([_][]const u8{ ".exe", ".bat", ".cmd", ".com" }) |extension| {
+        if (std.ascii.endsWithIgnoreCase(name, extension)) break true;
+    } else false;
+    if (directory or program) bits |= 0o111;
+    return bits;
 }
 
 /// `bytes` as gum's file picker shows a size (go-humanize's, without the space): powers
@@ -560,6 +584,28 @@ test "choosing a directory, or only directories" {
     const expected = try std.fs.path.join(testing.allocator, &.{ f.root, "src" });
     defer testing.allocator.free(expected);
     try testing.expectEqualStrings(expected, d.model().chosen.?);
+}
+
+test windowsBits {
+    try testing.expectEqual(0o666, windowsBits(false, false, "notes.txt"));
+    try testing.expectEqual(0o555, windowsBits(true, false, "SETUP.EXE"));
+    try testing.expectEqual(0o777, windowsBits(false, true, "src"));
+}
+
+test "no more entries than the terminal has rows for" {
+    var f: Fixture = try .init();
+    defer f.deinit();
+    var picker = try styledPicker(testing.io, f.root);
+    picker.header = "Pick";
+    var d: tui.testing.Driver(FilePicker) = try .init(testing.allocator, picker, .{
+        .program = .{ .size = .{ .width = 40, .height = 5 } },
+    });
+    defer d.deinit();
+    // Five rows: the header, the directory, two entries, and one for a message.
+    try testing.expectEqual(2, d.model().list.height);
+    try d.expectFrameContains("\n> src/\n  README.md");
+    try d.resize(.{ .width = 40, .height = 30 });
+    try testing.expectEqual(10, d.model().list.height);
 }
 
 test formatSize {

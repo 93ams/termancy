@@ -9,6 +9,15 @@ git history.
 
 ### Breaking
 
+- **`ui pager` follows gum:** esc exits 0, as q does (it exited 1: there is nothing to
+  cancel); an argument that names no file is shown as the text itself (it failed with "no
+  such file"); and empty standard input is a usage error, status 2 (it showed an empty
+  pager).
+- **`pager` and `filepicker` components:** `Pager.rows` holds `Pager.Row`s (`bytes`,
+  `line`, `pen`) rather than strings, and are slices of `Pager.plain`, the text without
+  its escape sequences; `Pager.current` is an index into `matches`. In the file picker,
+  right and l only open a directory, no longer choosing a file (enter chooses), and the
+  highlighted row is bold (`styles.selected`).
 - **`cfg.Value` has a date-time kind:** `.datetime` holds the text of a TOML offset
   date-time, local date-time, local date, or local time, and `toml.parse` gives one where it
   gave a `.string`. An exhaustive `switch` over a `cfg.Value` needs a `.datetime` arm. TOML
@@ -167,18 +176,21 @@ git history.
 ### Added
 
 - **`ui pager` and `ui file` as gum's:** `pager` shows a file, the text given as the
-  argument (gum's `pager "$text"`), or standard input, in a rounded border
-  (`--border`, `--padding`, and the other top-level style flags), lines numbered
-  (`--no-show-line-numbers`) and soft-wrapped (`--no-soft-wrap` cuts them, left/right scroll
-  sideways), tabs as four spaces; `/` highlights every match (`--match.*`, the current one
-  `--match-highlight.*`) and n/N go round them; q and esc both exit 0, as gum's. `file`
-  shows permissions and sizes (`-p`/`-s`, `--no-permissions`, `--no-size`, `--file-size.*`),
-  `--directory` lets enter choose a directory (right opens it), `--no-file` only a
-  directory, `-c/--cursor`, `--header`, `--height`, the path from `TERMANCY_FILE_PATH`, and
+  argument (gum's `pager "$text"`), or standard input, in a rounded border (the top-level
+  style flags: `--border`, `--padding`, `--foreground` for the text, `--width`/`--height` up
+  to the terminal's), lines numbered (`--no-show-line-numbers`) and soft-wrapped
+  (`--no-soft-wrap` cuts them, left/right scroll sideways), colored input keeping its
+  colors, tabs as four spaces; `/` searches for a regular expression (smart case; one that
+  does not compile is searched for as typed), highlighting every match (`--match.*`, the
+  current one `--match-highlight.*`), and n/N go round them. `file` shows permissions and
+  sizes (`-p`/`-s`, `--no-permissions`, `--no-size`, `--file-size.*`), `--directory` lets
+  enter choose a directory (right opens it), `--no-file` only a directory, `-c/--cursor`,
+  `--header`, `--height` (at most the terminal's), the path from `TERMANCY_FILE_PATH`, and
   styles for each part. Both take `--timeout`, `--show-help`, and `TERMANCY_PAGER_*`/
-  `TERMANCY_FILE_*` variables. The `pager` component gains `line_numbers`, `soft_wrap`, and
-  a current match; `filepicker` gains `show_permissions`, `show_size`, `allow_files`,
-  `allow_directories`, and `header`, and right/l only open a directory.
+  `TERMANCY_FILE_*` variables. The `pager` component gains `line_numbers`, `soft_wrap`,
+  regular-expression search, colored text, and `styles.text`; `filepicker` gains
+  `show_permissions`, `show_size`, `allow_files`, `allow_directories`, `header`, and
+  `height`. `term.Regex.searchFrom` searches on from an offset.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set

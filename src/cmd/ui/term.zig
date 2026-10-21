@@ -265,7 +265,7 @@ pub const Hint = Hints.Binding;
 
 /// `Inner` with what gum puts around every component: below it, after a blank line, the
 /// help line of its keys (`--show-help`); around it all, `--padding`. The component sees
-/// the terminal narrower by the padding, so it cuts its rows to fit.
+/// the terminal smaller by the padding and the help line, so it cuts its rows to fit.
 pub fn Framed(comptime Inner: type) type {
     return struct {
         inner: Inner,
@@ -291,6 +291,9 @@ pub fn Framed(comptime Inner: type) type {
             var size = msg.resize;
             const sides = model.padding.left + model.padding.right;
             size.width = std.math.lossyCast(u16, size.width -| sides);
+            const help_rows: usize = if (model.hints.len > 0) 2 else 0;
+            const rows = model.padding.top + model.padding.bottom + help_rows;
+            size.height = std.math.lossyCast(u16, size.height -| rows);
             model.width = size.width;
             return model.inner.update(.{ .resize = size });
         }

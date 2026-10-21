@@ -38,20 +38,25 @@ pub const command = cli.command(.{
     .description =
     \\Show text full screen in a rounded border, its lines numbered and wrapped to the
     \\terminal's width. The argument is a file to show, or else the text itself (as gum's
-    \\`pager "$text"`); with no argument, standard input. Tabs become four spaces, and an
-    \\overstruck character (one, backspace, another, as `man` writes bold) the last one.
+    \\`pager "$text"`); with no argument, standard input. Colors in the text stay (`git
+    \\diff --color`); other escape sequences go. Tabs become four spaces, and an overstruck
+    \\character (one, backspace, another, as `man` writes bold) the last one.
     \\
     \\Keys: j/k or up/down scroll a line, space/b or pgdown/pgup a screen, d/u half a
     \\screen, g/G or home/end jump to either end, and with --no-soft-wrap left/right
-    \\scroll sideways. / searches (ignoring case): every match is highlighted, and n and N
-    \\go to the next and previous one, round from either end. v opens the file in $VISUAL
-    \\or $EDITOR and shows it again when the editor exits. q or esc quits with status 0,
-    \\as there is nothing to cancel; Ctrl-C ends with 130, --timeout with 124.
+    \\scroll sideways. / searches for a regular expression, ignoring case unless it has a
+    \\capital letter (one that is not a regular expression is searched for as typed):
+    \\every match is highlighted, and n and N go to the next and previous one, round from
+    \\either end. v opens the file in $VISUAL or $EDITOR and shows it again when the editor
+    \\exits. q or esc quits with status 0, as there is nothing to cancel; Ctrl-C ends with
+    \\130, --timeout with 124.
     \\
-    \\The border and its padding are the top-level style flags (--border, --padding,
-    \\--border-foreground, ...); --line-number.*, --match.*, and --match-highlight.* (the
-    \\current match) style the rest. Every flag can come from a variable:
-    \\TERMANCY_PAGER_SHOW_LINE_NUMBERS=false, TERMANCY_PAGER_BORDER=none.
+    \\The box is the top-level style flags: --border, --padding, --border-foreground,
+    \\--foreground and the other colors and attributes for the text, and --width and
+    \\--height for its size (padding included), at most the terminal's. --line-number.*,
+    \\--match.*, and --match-highlight.* (the current match) style the rest. Every flag
+    \\can come from a variable: TERMANCY_PAGER_SHOW_LINE_NUMBERS=false,
+    \\TERMANCY_PAGER_BORDER=none.
     ,
     .flags = flags_flags,
     .args = .{ .max = 1, .usage = "[file|text]" },
@@ -75,7 +80,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
         .hints = hintsFor(flags),
     };
     defer model.pager.deinit();
-    look(&model.pager, flags, ctx.theme);
+    look(&model.pager, flags, ctx.theme, model.box);
     const options = term.timed(.{ .alt_screen = true }, flags.timeout);
     // q and esc both just close the pager, as gum's: there is no answer to cancel.
     if (try term.run(ctx, Viewer, &model, options)) return term.exitInterrupted(ctx);
@@ -89,15 +94,13 @@ fn boxStyle(flags: Flags, theme: *const cli.Theme) tui.Style {
         .border_fg = theme.accent.fg,
         .padding = .symmetric(0, 1),
     };
-    var style = flags.style.over(base);
-    // The terminal sets the size.
-    style.width = null;
-    style.height = null;
-    return style;
+    return flags.style.over(base);
 }
 
-/// The pager's options and styles: the theme's, with the flags over them.
-fn look(pager: *Pager, flags: Flags, theme: *const cli.Theme) void {
+/// The pager's options and styles: the theme's, with the flags over them, all over the
+/// box's colors.
+fn look(pager: *Pager, flags: Flags, theme: *const cli.Theme, box: tui.Style) void {
+    pager.styles.text = box;
     pager.line_numbers = flags.show_line_numbers;
     pager.soft_wrap = flags.soft_wrap;
     var match = theme.accent;
@@ -121,6 +124,7 @@ const quit: term.Hint = .{ .keys = &.{"q"}, .action = .hint, .help = "quit" };
 const search: term.Hint = .{ .keys = &.{"/"}, .action = .hint, .help = "search" };
 const next: term.Hint = .{ .keys = &.{"n"}, .action = .hint, .help = "next match" };
 const previous: term.Hint = .{ .keys = &.{"N"}, .action = .hint, .help = "previous match" };
+// n and N last, left out until there is a search, as gum's.
 const wrapped_hints = [_]term.Hint{ navigate, quit, search, next, previous };
 const sideways_hints = [_]term.Hint{ navigate, scroll, quit, search, next, previous };
 
@@ -132,12 +136,14 @@ const Viewer = struct {
     ctx: *cli.Context,
     /// The file shown; null for text, which cannot be edited.
     path: ?[]const u8,
-    /// Around the pager.
+    /// Around the pager; its width and height, if set, are the most it takes.
     box: tui.Style,
     /// The help line; none when empty (`--no-show-help`).
     hints: []const term.Hint,
     /// The terminal's width, from the last resize.
     width: usize = 80,
+    /// The box's width, padding included, from the last resize.
+    box_width: usize = 78,
 
     pub fn update(viewer: *Viewer, msg: tui.Msg) tui.Cmd {
         switch (msg) {
@@ -159,17 +165,20 @@ const Viewer = struct {
         return box.margin.left + box.margin.right + border;
     }
 
-    /// The terminal less the box around the pager and the help line under it.
-    fn inside(viewer: *const Viewer, size: tui.Size) tui.Size {
+    /// The size inside the box, which takes the terminal (or `--width` and `--height`
+    /// of it) less the help line under it.
+    fn inside(viewer: *Viewer, size: tui.Size) tui.Size {
         const box = viewer.box;
         const border: usize = if (box.border != null) 2 else 0;
         const help: usize = if (viewer.hints.len > 0) 2 else 0;
-        const columns = viewer.edges() + box.padding.left + box.padding.right;
-        const rows = box.margin.top + box.margin.bottom + box.padding.top +
-            box.padding.bottom + border + help;
+        const across = size.width -| viewer.edges();
+        viewer.box_width = @min(box.width orelse across, across);
+        const down = size.height -| (box.margin.top + box.margin.bottom + border + help);
+        const tall = @min(box.height orelse down, down);
+        const padding = box.padding;
         return .{
-            .width = std.math.lossyCast(u16, size.width -| columns),
-            .height = std.math.lossyCast(u16, size.height -| rows),
+            .width = std.math.lossyCast(u16, viewer.box_width -| (padding.left + padding.right)),
+            .height = std.math.lossyCast(u16, tall -| (padding.top + padding.bottom)),
         };
     }
 
@@ -195,13 +204,24 @@ const Viewer = struct {
         var body: std.Io.Writer.Allocating = .init(viewer.gpa);
         defer body.deinit();
         try viewer.pager.view(&body.writer);
+        // Rows cut to the box, so a long status line cannot wrap and push it taller.
+        var rows: std.Io.Writer.Allocating = .init(viewer.gpa);
+        defer rows.deinit();
+        var lines = std.mem.splitScalar(u8, body.written(), '\n');
+        var first = true;
+        while (lines.next()) |line| : (first = false) {
+            if (!first) try rows.writer.writeByte('\n');
+            try tui.width.truncate(&rows.writer, line, viewer.pager.size.width, "…");
+        }
         var box = viewer.box;
-        // The width counts the padding but not the border and margin.
-        box.width = viewer.width -| viewer.edges();
-        try box.render(w, body.written());
+        box.width = viewer.box_width;
+        box.height = null; // the pager fills it
+        try box.render(w, rows.written());
         if (viewer.hints.len == 0) return;
         try w.writeAll("\n\n");
-        const help: term.Hints = .{ .bindings = viewer.hints };
+        const hints = viewer.hints;
+        const shown = if (viewer.pager.searched()) hints else hints[0 .. hints.len - 2];
+        const help: term.Hints = .{ .bindings = shown };
         try help.writeHelp(w, .{ .width = viewer.width });
     }
 };
@@ -259,8 +279,12 @@ test clean {
     try testing.expectEqualStrings("bold é_x\n\x08", try clean(a, "b\x08bo\x08old é\x08é_x\n\x08"));
 }
 
-/// A viewer of `text` with `flags`, on a 24 by 7 terminal.
+/// A viewer of `text` with `flags`, on a 24 by 7 terminal (or `width` wide).
 fn startViewer(d: *tui.testing.Driver(Viewer), text: []const u8, flags: Flags) !void {
+    try startSized(d, text, flags, 24);
+}
+
+fn startSized(d: *tui.testing.Driver(Viewer), text: []const u8, flags: Flags, width: u16) !void {
     var model: Viewer = .{
         .pager = try .init(testing.allocator, text),
         .gpa = testing.allocator,
@@ -269,9 +293,9 @@ fn startViewer(d: *tui.testing.Driver(Viewer), text: []const u8, flags: Flags) !
         .box = boxStyle(flags, &cli.Theme.default),
         .hints = hintsFor(flags),
     };
-    look(&model.pager, flags, &cli.Theme.default);
+    look(&model.pager, flags, &cli.Theme.default, model.box);
     d.* = try .init(testing.allocator, model, .{
-        .program = .{ .size = .{ .width = 24, .height = 7 }, .alt_screen = true },
+        .program = .{ .size = .{ .width = width, .height = 7 }, .alt_screen = true },
     });
 }
 
@@ -316,12 +340,39 @@ test "no border, numbers, wrapping, or help" {
     try d.expectFrame("o three four five six se\n" ++ blank ++ tail);
 }
 
-test "search highlights in the match styles" {
+test "search highlights in the match styles, and n and N show up in the help" {
     var d: tui.testing.Driver(Viewer) = undefined;
-    try startViewer(&d, "ab ab", .{ .match_style = .{ .underline = true } });
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try startSized(&d, "ab ab", .{
+        .show_line_numbers = false,
+        .match_style = .{ .underline = true },
+    }, 80);
     defer stopViewer(&d);
+    try testing.expect(!std.mem.endsWith(u8, try d.frameText(arena.allocator()), "match"));
     try d.press("/");
-    try d.typeText("AB");
+    try d.typeText("ab");
     try d.press("enter");
     try testing.expect(std.mem.indexOf(u8, d.frameBytes(), "\x1b[1;7;35mab\x1b[0m \x1b[1;4;35mab") != null);
+    try d.expectFrameContains("/ search • n next match • N previous match");
+}
+
+test "--width and --height size the box, at most the terminal; its colors survive" {
+    var d: tui.testing.Driver(Viewer) = undefined;
+    try startViewer(&d, "one\ntwo\nthree", .{
+        .show_line_numbers = false,
+        .show_help = false,
+        .style = .{ .width = 12, .height = 9, .foreground = .blue },
+    });
+    defer stopViewer(&d);
+    // Twelve columns with the padding; nine rows would not fit in seven.
+    try d.expectFrame("╭────────────╮\n" ++
+        "│ one        │\n" ++
+        "│ two        │\n" ++
+        "│ three      │\n" ++
+        "│            │\n" ++
+        "│ 1-3 of 3 … │\n" ++
+        "╰────────────╯");
+    // The status line blue and dim, then blue again.
+    try testing.expect(std.mem.indexOf(u8, d.frameBytes(), "\x1b[34m \x1b[2m1-3 of 3 …\x1b[0;34m") != null);
 }

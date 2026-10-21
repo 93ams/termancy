@@ -641,10 +641,11 @@ const pty_cases = [_]PtyCase{
     // that waits for what only the feature draws has a --timeout: were it never drawn, the
     // timeout would end the command with 124, not 0.
     .{
-        // Line 200 is off the first screen until the search scrolls to it, highlighted.
+        // Line 200 is off the first screen until the search, a regular expression,
+        // scrolls to it, highlighted.
         .name = "pager: search scrolls to a match",
         .command = "seq 300 | sed 's/^200$/the needle here/' | \"$TERMANCY\" ui pager --timeout 8s",
-        .keys = "/NEEDLE\\r",
+        .keys = "/ne+dle\\r",
         .then_wait_for = "needle",
         .then_keys = "q",
     },
@@ -655,6 +656,12 @@ const pty_cases = [_]PtyCase{
         .command = "printf 'alpha\\n' | \"$TERMANCY\" ui pager --timeout 8s --no-show-line-numbers",
         .keys = "q",
         .wait_for = " alpha",
+    },
+    .{
+        .name = "pager: colored input keeps its colors",
+        .command = "printf 'say \\033[31mhello\\033[0m\\n' | \"$TERMANCY\" ui pager --timeout 8s",
+        .keys = "q",
+        .wait_for = "\x1b[31mhello",
     },
     .{
         .name = "pager --timeout",

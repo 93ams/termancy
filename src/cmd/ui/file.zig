@@ -145,7 +145,8 @@ fn look(
     @memset(blank, ' ');
     var selected = theme.accent;
     selected.bold = true;
-    picker.list.height = @max(flags.height, 1);
+    picker.height = @max(flags.height, 1);
+    picker.list.height = picker.height;
     picker.list.cursor_prefix = cursor;
     picker.list.item_prefix = blank;
     picker.list.styles = .{ .cursor = flags.cursor_style.over(theme.accent), .item = .{} };
