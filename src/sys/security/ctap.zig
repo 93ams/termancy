@@ -52,7 +52,7 @@ pub const Device = struct {
     pub const Error = error{
         /// The device went away, or refused the read or write.
         DeviceFailed,
-        /// No report arrived in time.
+        /// No report arrived in time, or the request's deadline passed.
         Timeout,
     };
 
@@ -117,6 +117,10 @@ pub const Channel = struct {
     /// How long to wait for each report. Keys send keepalives every 100 ms or so while
     /// waiting for a touch, so this bounds silence, not the wait for the user.
     timeout_ms: u32 = 5_000,
+    /// How long one request may take in all, keepalives and other channels' reports
+    /// included, so a key that keeps sending them cannot hold us forever. WebAuthn's
+    /// recommended default for a ceremony; `assert` takes the request's `timeout_ms`.
+    deadline_ms: u32 = 300_000,
 
     pub const broadcast: u32 = 0xffff_ffff;
     const init_data = report_len - 7;
@@ -130,10 +134,14 @@ pub const Channel = struct {
         io.random(&nonce);
         var probe: Channel = .{ .device = device, .cid = broadcast, .io = io };
         var reply: [max_payload]u8 = undefined;
-        const answer = try probe.transact(.init, &nonce, &reply, null);
-        if (answer.len < 17 or !std.mem.eql(u8, answer[0..8], &nonce)) {
-            return error.InvalidResponse;
-        }
+        const start: Io.Timestamp = .now(io, .awake);
+        try probe.send(.init, &nonce);
+        // Another program's INIT is answered on the broadcast channel too: not ours.
+        const answer = while (true) {
+            const got = try probe.receive(.init, &reply, null, start);
+            if (got.len >= nonce.len and std.mem.eql(u8, got[0..nonce.len], &nonce)) break got;
+        };
+        if (answer.len < 17) return error.InvalidResponse;
         const cid = std.mem.readInt(u32, answer[8..12], .big);
         if (cid == 0 or cid == broadcast) return error.InvalidResponse;
         return .{ .device = device, .cid = cid, .io = io };
@@ -148,8 +156,18 @@ pub const Channel = struct {
         out: []u8,
         keepalive: ?Keepalive,
     ) ChannelError![]u8 {
+        const start: Io.Timestamp = .now(channel.io, .awake);
         try channel.send(command, payload);
-        return channel.receive(command, out, keepalive);
+        return channel.receive(command, out, keepalive, start);
+    }
+
+    /// The next report, waiting no longer than `timeout_ms`, nor past `deadline_ms` after
+    /// `start`.
+    fn read(channel: *Channel, report: *Report, start: Io.Timestamp) Device.Error!void {
+        const waited = start.untilNow(channel.io, .awake).toMilliseconds();
+        if (waited >= channel.deadline_ms) return error.Timeout;
+        const left: u32 = @intCast(channel.deadline_ms - waited);
+        return channel.device.read(report, @min(channel.timeout_ms, left));
     }
 
     fn send(channel: *Channel, command: Command, payload: []const u8) ChannelError!void {
@@ -179,10 +197,11 @@ pub const Channel = struct {
         command: Command,
         out: []u8,
         keepalive: ?Keepalive,
+        start: Io.Timestamp,
     ) ChannelError![]u8 {
         var report: Report = undefined;
         const len = while (true) {
-            try channel.device.read(&report, channel.timeout_ms);
+            try channel.read(&report, start);
             if (!channel.ours(&report) or report[4] & 0x80 == 0) continue;
             const got: Command = @fromBackingInt(@intCast(@as(u7, @truncate(report[4]))));
             switch (got) {
@@ -205,7 +224,7 @@ pub const Channel = struct {
         var filled: usize = first;
         var seq: u8 = 0;
         while (filled < len) {
-            try channel.device.read(&report, channel.timeout_ms);
+            try channel.read(&report, start);
             if (!channel.ours(&report)) continue;
             if (report[4] != seq) return error.InvalidResponse;
             const n = @min(len - filled, cont_data);
@@ -501,7 +520,8 @@ pub const AssertOptions = struct {
 
 /// A whole `navigator.credentials.get()` against one key: builds clientDataJSON for
 /// `options` and `origin`, asks the key, and returns the assertion, in `arena`. The RP ID
-/// defaults to the host of `origin`, and must be that host or a domain it is under.
+/// defaults to the host of `origin`, and must be that host or a domain it is under. Each
+/// exchange with the key takes at most the request's `timeout_ms`, when it has one.
 pub fn assert(
     arena: Allocator,
     channel: *Channel,
@@ -510,6 +530,9 @@ pub fn assert(
     how: AssertOptions,
 ) AssertError!webauthn.Assertion {
     const rp_id = webauthn.rpIdFor(options.rp_id, origin) orelse return error.InvalidOrigin;
+    const deadline = channel.deadline_ms;
+    defer channel.deadline_ms = deadline;
+    if (options.timeout_ms) |ms| channel.deadline_ms = ms;
     var client: Io.Writer.Allocating = .init(arena);
     const data: webauthn.ClientData = .{ .challenge = options.challenge, .origin = origin };
     data.writeJson(&client.writer) catch return error.OutOfMemory;
@@ -948,6 +971,8 @@ const FakeKey = struct {
     /// This side of the last key agreement.
     agreement: [32]u8 = undefined,
     token: [32]u8 = @splat(0x5a),
+    /// Answers another program's INIT on the broadcast channel first.
+    foreign_init: bool = false,
 
     fn device(key: *FakeKey) Device {
         return .{ .context = key, .vtable = &.{ .write = write, .read = read } };
@@ -986,6 +1011,11 @@ const FakeKey = struct {
                 @memcpy(reply[0..8], payload[0..8]);
                 std.mem.writeInt(u32, reply[8..12], key.cid, .big);
                 @memcpy(reply[12..], &[_]u8{ 2, 5, 4, 0, 0x04 });
+                if (key.foreign_init) {
+                    var other = reply;
+                    other[0] ^= 0xff;
+                    key.queue(Channel.broadcast, .init, &other);
+                }
                 key.queue(Channel.broadcast, .init, &reply);
             },
             .ping => key.queue(key.cid, .ping, payload),
@@ -1176,7 +1206,8 @@ test "Channel: INIT, then messages over many packets both ways" {
     // Nothing answers: the read times out.
     key.out_len = 0;
     key.out_read = 0;
-    try testing.expectError(error.Timeout, channel.receive(.ping, &out, null));
+    const now: Io.Timestamp = .now(testing.io, .awake);
+    try testing.expectError(error.Timeout, channel.receive(.ping, &out, null, now));
 }
 
 test "Channel: a reply longer than CTAPHID allows is refused, whatever the buffer" {
@@ -1206,7 +1237,60 @@ test "Channel: a reply longer than CTAPHID allows is refused, whatever the buffe
     };
     const out = try testing.allocator.alloc(u8, 0xffff);
     defer testing.allocator.free(out);
-    try testing.expectError(error.InvalidResponse, channel.receive(.ping, out, null));
+    const now: Io.Timestamp = .now(testing.io, .awake);
+    try testing.expectError(error.InvalidResponse, channel.receive(.ping, out, null, now));
+}
+
+/// A key that sends keepalives, and reports for another channel, until the test gives up
+/// on the deadline.
+const Chatty = struct {
+    reads: usize = 0,
+
+    const cid = 7;
+
+    fn device(chatty: *Chatty) Device {
+        return .{ .context = chatty, .vtable = &.{ .write = write, .read = read } };
+    }
+
+    fn read(context: *anyopaque, report: *Report, _: u32) Device.Error!void {
+        const chatty: *Chatty = @ptrCast(@alignCast(context));
+        chatty.reads += 1;
+        if (chatty.reads > 50_000_000) return error.DeviceFailed;
+        report.* = @splat(0);
+        std.mem.writeInt(u32, report[0..4], if (chatty.reads % 2 == 0) cid else 9, .big);
+        report[4] = 0x80 | @as(u8, @backingInt(Command.keepalive));
+        report[6] = 1;
+        report[7] = @backingInt(KeepaliveStatus.user_presence_needed);
+    }
+
+    fn write(_: *anyopaque, _: *const Report) Device.Error!void {}
+};
+
+test "Channel: a key that keeps sending keepalives meets the deadline" {
+    var chatty: Chatty = .{};
+    var channel: Channel = .{
+        .device = chatty.device(),
+        .cid = Chatty.cid,
+        .io = testing.io,
+        .deadline_ms = 20,
+    };
+    var out: [Channel.max_payload]u8 = undefined;
+    try testing.expectError(error.Timeout, channel.transact(.ping, "", &out, null));
+
+    // `assert` waits as long as the request's `timeout_ms`, then leaves the deadline be.
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    channel.deadline_ms = 300_000;
+    const options: webauthn.RequestOptions = .{ .challenge = "0123456789abcdef", .timeout_ms = 20 };
+    const got = assert(arena.allocator(), &channel, options, "https://example.com", .{});
+    try testing.expectError(error.Timeout, got);
+    try testing.expectEqual(300_000, channel.deadline_ms);
+}
+
+test "Channel.open waits past another program's INIT" {
+    var key: FakeKey = .{ .pair = .generate(testing.io), .foreign_init = true };
+    const channel: Channel = try .open(testing.io, key.device());
+    try testing.expectEqual(key.cid, channel.cid);
 }
 
 test "getInfo" {
