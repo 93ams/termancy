@@ -2,10 +2,12 @@
 //! `spin` does.
 //!
 //! The spinner is a `tui.Program` and the command its background work (`tui.Cmd.work`):
-//! `Job.finish` reads the command's pipes into the `Job`, which the view shows from while
+//! `Job.finish` reads the command's output (on POSIX a pseudo-terminal, as gum's, and a pipe
+//! for standard error; pipes elsewhere) into the `Job`, which the view shows from while
 //! it runs, then waits for it. The command runs in a process group of its own, so Ctrl-C
 //! and `--timeout` can stop all of it (SIGINT, as a terminal's Ctrl-C does, or SIGTERM, as
-//! timeout(1) does) before termancy ends at once, as gum does, without waiting.
+//! timeout(1) does); termancy then ends, on a pseudo-terminal after a second at most (then
+//! the group is killed), else at once.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -17,6 +19,7 @@ const sys = @import("sys");
 const term = @import("term.zig");
 const styles = @import("styles.zig");
 const Spinner = @import("../tui/registry/spinner.zig");
+const Pty = tui.term.Pty;
 const live = tui.term.live;
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -90,6 +93,8 @@ pub const command = cli.command(.{
     \\--show-error prints both if it fails. Where standard output is not a terminal
     \\(files=$(termancy ui spin -- find .)), the command's standard output goes straight
     \\there, and its standard error follows once the spinner is gone.
+    \\The command runs on a pseudo-terminal, as in gum, so it keeps its colors; its
+    \\standard error stays apart, on a pipe.
     \\
     \\Ctrl-C stops the command and exits with status 130; --timeout stops it with status
     \\124 and "timed out" on stderr. A command that cannot be found exits with status 127.
@@ -114,14 +119,10 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
         error.NotATerminal => return runPlain(ctx, flags),
         error.Canceled => return error.Canceled,
     };
+    const size = terminal.size() catch tui.Size{ .width = 80, .height = 24 };
     terminal.close();
     const caught = try Io.File.stdout().isTty(io);
-    var job = Job.spawn(ctx.gpa, io, ctx.args, .{
-        // The keys come from a terminal on standard input; the command gets nothing there.
-        .stdin = if (try Io.File.stdin().isTty(io)) .ignore else .inherit,
-        .stdout = if (caught) .pipe else .inherit,
-        .stderr = .pipe,
-    }) catch |err| return spawnFailed(ctx, err);
+    var job = try startJob(ctx, caught, size);
     defer job.deinit();
     var model: term.Framed(Spin) = .{
         .inner = try .init(ctx.arena, ctx.theme, &job, flags),
@@ -138,8 +139,8 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
         if (outcome.timed_out) return term.exitTimedOut(ctx);
         return term.exitInterrupted(ctx);
     };
-    const ended = result catch |err| return ctx.fail("{s}: {s}", .{ ctx.args[0], @errorName(err) });
-    const status = sys.process.exitStatus(ended);
+    const status = result catch |err|
+        return ctx.fail("{s}: {s}", .{ ctx.args[0], @errorName(err) });
     if (caught) {
         try ctx.out.writeAll(printed(flags, status, job.output()));
     } else {
@@ -148,16 +149,55 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
     return exitWith(ctx, status);
 }
 
+/// Starts the command for the spinner: on POSIX, on a pseudo-terminal of `size` (its
+/// standard output where that is caught, and its controlling terminal), as gum does, so
+/// it keeps its colors and can open `/dev/tty`; elsewhere on pipes. Standard error is a
+/// pipe either way, so the two stay apart; standard output not `caught` is termancy's.
+fn startJob(ctx: *cli.Context, caught: bool, size: tui.Size) !Job {
+    const io = ctx.io;
+    // The keys come from a terminal on standard input; the command gets nothing there.
+    const keys = try Io.File.stdin().isTty(io);
+    if (comptime builtin.os.tag != .windows and Pty.supported) pty: {
+        const os = sys.process.native;
+        if (try sys.process.which(ctx.arena, io, ctx.environ, os, ctx.args[0]) == null) {
+            return spawnFailed(ctx, error.FileNotFound);
+        }
+        const stdin: ?Io.File = if (!keys)
+            Io.File.stdin()
+        else
+            Io.Dir.cwd().openFile(io, "/dev/null", .{}) catch null;
+        defer if (keys) if (stdin) |file| file.close(io);
+        return Job.spawnPty(ctx.gpa, io, .{
+            .argv = ctx.args,
+            .environ = ctx.environ,
+            .size = size,
+            .stdin = stdin,
+            .stdout = if (caught) null else Io.File.stdout(),
+            .pipe_stderr = true,
+        }) catch |err| switch (err) {
+            error.PtyUnavailable => break :pty,
+            error.SpawnFailed => return spawnFailed(ctx, error.AccessDenied),
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+    return Job.spawn(ctx.gpa, io, ctx.args, .{
+        .stdin = if (keys) .ignore else .inherit,
+        .stdout = if (caught) .pipe else .inherit,
+        .stderr = .pipe,
+    }) catch |err| return spawnFailed(ctx, err);
+}
+
 /// With no terminal: the command runs on termancy's own streams, `--timeout` still
 /// stopping it.
 fn runPlain(ctx: *cli.Context, flags: Flags) !void {
     const io = ctx.io;
     var job = Job.spawn(ctx.gpa, io, ctx.args, .{}) catch |err| return spawnFailed(ctx, err);
     defer job.deinit();
-    if (flags.timeout.ns == 0) return exitWith(ctx, sys.process.exitStatus(try job.child.wait(io)));
+    const child = &job.process.child;
+    if (flags.timeout.ns == 0) return exitWith(ctx, sys.process.exitStatus(try child.wait(io)));
     var done: Io.Event = .unset;
     var task = io.concurrent(waitAndSet, .{ &job, &done }) catch
-        return exitWith(ctx, sys.process.exitStatus(try job.child.wait(io)));
+        return exitWith(ctx, sys.process.exitStatus(try child.wait(io)));
     const timeout: Io.Timeout = .{ .duration = .{ .raw = flags.timeout.toIo(), .clock = .awake } };
     done.waitTimeout(io, timeout) catch |err| switch (err) {
         error.Timeout => {
@@ -175,12 +215,14 @@ fn runPlain(ctx: *cli.Context, flags: Flags) !void {
 
 fn waitAndSet(job: *Job, done: *Io.Event) Child.WaitError!Child.Term {
     defer done.set(job.io);
-    return job.child.wait(job.io);
+    return job.process.child.wait(job.io);
 }
+
+const SpawnFailure = cli.Context.Exit || std.process.SpawnError || Io.Writer.Error;
 
 /// Reports a command that could not start: 127 when it is not found, 126 when it cannot
 /// run, as sh(1) does.
-fn spawnFailed(ctx: *cli.Context, err: std.process.SpawnError) !void {
+fn spawnFailed(ctx: *cli.Context, err: std.process.SpawnError) SpawnFailure {
     switch (err) {
         error.FileNotFound => {
             try ctx.err.print("{s}: {s}: command not found\n", .{ ctx.app_name, ctx.args[0] });
@@ -222,9 +264,9 @@ pub fn printed(flags: Flags, status: u8, output: Output) []const u8 {
     return "";
 }
 
-/// The command, and what it has written to the pipes it was given.
+/// The command, on pipes or a pseudo-terminal, and what it has written to them.
 pub const Job = struct {
-    child: Child,
+    process: union(enum) { child: Child, pty: Pty },
     io: Io,
     gpa: Allocator,
     /// Held while the output grows, and while the view reads it.
@@ -234,8 +276,8 @@ pub const Job = struct {
     /// Both, in the order they came.
     both: std.ArrayList(u8) = .empty,
 
-    pub const Error = Allocator.Error || Io.File.MultiReader.UnendingError ||
-        Io.Batch.AwaitConcurrentError || Child.WaitError;
+    pub const Error = Allocator.Error || Io.Batch.AwaitConcurrentError || Child.WaitError ||
+        error{WaitFailed};
 
     /// Where the command's standard streams go: termancy's own by default.
     pub const Streams = struct {
@@ -244,7 +286,7 @@ pub const Job = struct {
         stderr: std.process.SpawnOptions.StdIo = .inherit,
     };
 
-    /// Starts `argv` in a process group of its own.
+    /// Starts `argv` on `streams`, in a process group of its own.
     pub fn spawn(
         gpa: Allocator,
         io: Io,
@@ -258,31 +300,50 @@ pub const Job = struct {
             .stderr = streams.stderr,
             .pgid = if (builtin.os.tag == .windows) null else 0,
         });
-        return .{ .child = child, .io = io, .gpa = gpa };
+        return .{ .process = .{ .child = child }, .io = io, .gpa = gpa };
+    }
+
+    /// Starts a command on a pseudo-terminal, in a session (and process group) of its own.
+    pub fn spawnPty(gpa: Allocator, io: Io, options: Pty.SpawnOptions) Pty.SpawnError!Job {
+        const pty: Pty = try .spawn(io, gpa, options);
+        return .{ .process = .{ .pty = pty }, .io = io, .gpa = gpa };
     }
 
     pub fn deinit(job: *Job) void {
+        if (job.process == .pty) job.process.pty.deinit();
         job.stdout.deinit(job.gpa);
         job.stderr.deinit(job.gpa);
         job.both.deinit(job.gpa);
     }
 
-    /// Reads the pipes to their end, then waits for the command. Canceled, it leaves the
-    /// command running, for `stop`.
-    pub fn finish(job: *Job) Error!Child.Term {
-        if (job.child.stdout) |out| {
-            try job.read(2, .{ out, job.child.stderr.? }, .{ &job.stdout, &job.stderr });
-        } else if (job.child.stderr) |err| {
-            try job.read(1, .{err}, .{&job.stderr});
+    /// Reads the command's output to its end, then waits for it: its exit status, as a
+    /// shell reports it. Canceled, it leaves the command running, for `stop`.
+    pub fn finish(job: *Job) Error!u8 {
+        switch (job.process) {
+            .child => |*child| {
+                const sinks = .{ &job.stdout, &job.stderr };
+                if (child.stdout) |out| {
+                    try job.read(2, .{ out, child.stderr.? }, sinks, false);
+                } else if (child.stderr) |err| {
+                    try job.read(1, .{err}, .{&job.stderr}, false);
+                }
+                return sys.process.exitStatus(try child.wait(job.io));
+            },
+            .pty => |*pty| {
+                try job.read(2, .{ pty.output, pty.errors.? }, .{ &job.stdout, &job.stderr }, true);
+                return (try pty.wait()).status();
+            },
         }
-        return job.child.wait(job.io);
     }
 
+    /// Reads `files` into `sinks` (and `both`) to their end; a terminal's `\r\n` (`crlf`,
+    /// the first file) comes as `\n`.
     fn read(
         job: *Job,
         comptime n: usize,
         files: [n]Io.File,
         sinks: [n]*std.ArrayList(u8),
+        crlf: bool,
     ) Error!void {
         var buffer: Io.File.MultiReader.Buffer(n) = undefined;
         var reader: Io.File.MultiReader = undefined;
@@ -293,15 +354,26 @@ pub const Job = struct {
             defer job.mutex.unlock(job.io);
             for (sinks, 0..) |sink, i| {
                 const r = reader.reader(i);
-                try sink.appendSlice(job.gpa, r.buffered());
-                try job.both.appendSlice(job.gpa, r.buffered());
+                var rest = r.buffered();
+                while (rest.len > 0) {
+                    const cut = if (crlf and i == 0) std.mem.indexOf(u8, rest, "\r\n") else null;
+                    const end = cut orelse rest.len;
+                    try sink.appendSlice(job.gpa, rest[0..end]);
+                    try job.both.appendSlice(job.gpa, rest[0..end]);
+                    rest = rest[@min(end + 1, rest.len)..];
+                }
                 r.tossBuffered();
             }
         } else |err| switch (err) {
             error.EndOfStream => {},
             else => |e| return e,
         }
-        try reader.checkAnyError();
+        // A terminal reports its other side closing as an I/O error; any other read error
+        // only cuts the output short.
+        reader.checkAnyError() catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            else => {},
+        };
     }
 
     /// What the command wrote so far. Only once it has ended, or under `mutex`.
@@ -310,11 +382,20 @@ pub const Job = struct {
     }
 
     /// Stops the command and what it started: its process group gets SIGINT (`interrupt`,
-    /// as from a terminal's Ctrl-C) or SIGTERM (as from timeout(1)). Does not wait for it.
+    /// as from a terminal's Ctrl-C) or SIGTERM (as from timeout(1)). Does not wait for it;
+    /// `deinit` waits a second for a command on a pseudo-terminal, then kills the group.
     pub fn stop(job: *Job, interrupt: bool) void {
-        if (comptime builtin.os.tag == .windows) return job.child.kill(job.io);
-        const pid = job.child.id orelse return;
+        if (comptime builtin.os.tag == .windows) return job.process.child.kill(job.io);
+        const pid = switch (job.process) {
+            .child => |child| child.id orelse return,
+            .pty => |pty| pty.process.pid,
+        };
         std.posix.kill(-pid, if (interrupt) .INT else .TERM) catch {};
+    }
+
+    /// Tells a command on a pseudo-terminal that the terminal changed size.
+    fn resize(job: *Job, size: tui.Size) void {
+        if (job.process == .pty) job.process.pty.resize(size) catch {};
     }
 };
 
@@ -328,14 +409,15 @@ pub const Spin = struct {
     /// The streams shown under the spinner while the command runs.
     show_stdout: bool = false,
     show_stderr: bool = false,
-    /// The terminal's height, and the rows the view takes besides the output, so the
+    /// The terminal's size, and the rows the view takes besides the output, so the
     /// spinner stays on screen.
     rows: usize = 24,
+    columns: usize = 80,
     reserved: usize = 3,
     /// How the command ended; null while it runs.
     result: ?Message = null,
 
-    pub const Message = Job.Error!Child.Term;
+    pub const Message = Job.Error!u8;
 
     pub fn init(
         arena: Allocator,
@@ -371,7 +453,11 @@ pub const Spin = struct {
                 spin.result = result;
                 return .quit;
             },
-            .resize => |size| spin.rows = size.height,
+            .resize => |size| {
+                spin.rows = size.height;
+                spin.columns = size.width;
+                spin.job.resize(size);
+            },
             else => {},
         }
         return spin.spinner.update(msg.base().?);
@@ -395,21 +481,35 @@ pub const Spin = struct {
             output.stderr;
         if (text.len == 0) return;
         try w.writeAll("\n\n");
-        try w.writeAll(tail(text, @max(spin.rows -| spin.reserved, 1)));
+        try writeTail(w, text, @max(spin.rows -| spin.reserved, 1), spin.columns);
     }
 };
 
-/// The last `lines` lines of `text`, without its final line break.
-pub fn tail(text: []const u8, lines: usize) []const u8 {
+/// The end of `text` that fits `rows` rows of `columns` columns, long lines wrapping: the
+/// last whole lines, or when not even the last fits, its start, cut to fit.
+pub fn writeTail(
+    w: *Io.Writer,
+    text: []const u8,
+    rows: usize,
+    columns: usize,
+) Io.Writer.Error!void {
     const body = std.mem.trimEnd(u8, text, "\n");
     var start = body.len;
-    var count: usize = 0;
-    while (start > 0) : (start -= 1) {
-        if (body[start - 1] != '\n') continue;
-        count += 1;
-        if (count == lines) break;
+    var end = body.len;
+    var used: usize = 0;
+    while (true) {
+        const begin = if (std.mem.lastIndexOfScalar(u8, body[0..end], '\n')) |i| i + 1 else 0;
+        const wide = tui.width.of(body[begin..end]);
+        const height = @max(std.math.divCeil(usize, wide, @max(columns, 1)) catch 1, 1);
+        if (used + height > rows) break;
+        used += height;
+        start = begin;
+        if (begin == 0) break;
+        end = begin - 1;
     }
-    return body[start..];
+    if (start < body.len or body.len == 0) return w.writeAll(body[start..]);
+    const last = if (std.mem.lastIndexOfScalar(u8, body, '\n')) |i| i + 1 else 0;
+    try tui.width.truncate(w, body[last..], rows * columns, "…");
 }
 
 /// The spinner `name` names, with its frames and pace: gum's, for gum's names.
@@ -460,11 +560,20 @@ test "printed: gum's rules, where standard output is a terminal" {
     try testing.expectEqualStrings("", printed(.{ .show_output = true }, 1, output));
 }
 
-test tail {
-    try testing.expectEqualStrings("c\nd", tail("a\nb\nc\nd\n", 2));
-    try testing.expectEqualStrings("a\nb", tail("a\nb", 5));
-    try testing.expectEqualStrings("b", tail("a\nb\n", 1));
-    try testing.expectEqualStrings("", tail("", 3));
+fn expectTail(expected: []const u8, text: []const u8, rows: usize, columns: usize) !void {
+    var buffer: [64]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    try writeTail(&w, text, rows, columns);
+    try testing.expectEqualStrings(expected, w.buffered());
+}
+
+test writeTail {
+    try expectTail("c\nd", "a\nb\nc\nd\n", 2, 80);
+    try expectTail("a\nb", "a\nb", 5, 80);
+    try expectTail("", "", 3, 80);
+    // A line of seven columns takes two rows of four.
+    try expectTail("1234567", "a\n1234567\n", 2, 4);
+    try expectTail("1234…", "1234567", 1, 5);
 }
 
 const piped: Job.Streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .pipe };
@@ -483,7 +592,7 @@ test "Job: the streams caught, and the status" {
     defer job.deinit();
     const ended = try job.finish();
     const eol = if (windows) "\r\n" else "\n";
-    try testing.expectEqual(3, sys.process.exitStatus(ended));
+    try testing.expectEqual(3, ended);
     try testing.expectEqualStrings("out" ++ eol, job.stdout.items);
     try testing.expectEqualStrings("err" ++ eol, job.stderr.items);
     try testing.expectEqual(2 * ("out" ++ eol).len, job.both.items.len);
@@ -493,6 +602,23 @@ test "Job: a missing command" {
     try testing.expectError(error.FileNotFound, testJob(&.{"termancy-test-no-such-command"}));
 }
 
+test "Job on a pseudo-terminal: standard output a terminal, standard error apart" {
+    if (builtin.os.tag == .windows or !Pty.supported) return error.SkipZigTest;
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    try environ.put("PATH", "/usr/bin:/bin");
+    const script = "test -t 1 && echo tty; test -t 2 || echo pipe >&2; exit 4";
+    var job = try Job.spawnPty(testing.allocator, testing.io, .{
+        .argv = &.{ "sh", "-c", script },
+        .environ = &environ,
+        .pipe_stderr = true,
+    });
+    defer job.deinit();
+    try testing.expectEqual(4, try job.finish());
+    try testing.expectEqualStrings("tty\n", job.stdout.items);
+    try testing.expectEqualStrings("pipe\n", job.stderr.items);
+}
+
 test "Job.stop ends the command's whole process group" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     var job = try testJob(&.{ "sh", "-c", "sleep 30; echo late" });
@@ -500,7 +626,7 @@ test "Job.stop ends the command's whole process group" {
     job.stop(false);
     // The pipes close only once sh and its sleep have both gone.
     const ended = try job.finish();
-    try testing.expectEqual(128 + 15, sys.process.exitStatus(ended));
+    try testing.expectEqual(128 + 15, ended);
     try testing.expectEqualStrings("", job.stdout.items);
 }
 
@@ -516,7 +642,7 @@ test "the spinner, the title on either side, and the output under it" {
     defer d.deinit();
     // The driver runs the work at once: the command has ended.
     try testing.expect(d.done());
-    try testing.expectEqual(0, sys.process.exitStatus(try d.model().result.?));
+    try testing.expectEqual(0, try d.model().result.?);
     try d.expectFrame("- Wait\n\none\ntwo");
     d.model().@"align" = .right;
     d.model().rows = 4; // room for one line of output

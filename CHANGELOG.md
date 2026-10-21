@@ -9,6 +9,14 @@ git history.
 
 ### Breaking
 
+- **`termancy ui spin` and `ui table` behave as gum's:** where standard output is a
+  terminal, `spin` hides the command's output unless `--show-output`, `--show-stdout`,
+  `--show-stderr`, or `--show-error` asks for it (it printed it before), and its default
+  spinner is gum's `dot` (`--spinner dots` gives the old one). `table` reads CSV as Go's
+  `encoding/csv` does, so a stray quote is an error unless `--lazy-quotes` and a line with
+  another number of fields than the first is one unless `--fields-per-record`; `--height`
+  counts the table's lines, header and border included, and its default is `0`, which fits
+  the terminal (it was 10 data rows).
 - **`cfg.Value` has a date-time kind:** `.datetime` holds the text of a TOML offset
   date-time, local date-time, local date, or local time, and `toml.parse` gives one where it
   gave a `.string`. An exhaustive `switch` over a `cfg.Value` needs a `.datetime` arm. TOML
@@ -167,20 +175,21 @@ git history.
 ### Added
 
 - **`termancy ui spin` and `ui table` work as gum's.** `spin` takes `--show-output`,
-  `--show-stdout`, `--show-stderr`, and `--show-error` (where standard output is a terminal
-  the command's output is now hidden unless they ask for it; elsewhere it goes straight
-  through), gum's spinner names at gum's pace (`dot`, now the default, `minidot`, `jump`,
-  `monkey`, `meter`, `hamburger`, and the rest; the older names still work), `--align`,
-  `--timeout`, `--padding`, and `--spinner.*` and `--title.*` styles; Ctrl-C and `--timeout`
-  stop the command's whole process group, and standard input reaches the command. `table`
-  takes `--file`, `--return-column`, `--hide-count` (the row count leads the help line),
-  `--lazy-quotes` and `--fields-per-record` (CSV is read as Go's `encoding/csv` reads it, so
-  a stray quote or a short line is now an error), `--height` counting the table's lines (`0`,
-  the default, fits the terminal), `-b` for `--border`, `--timeout`, `--padding`, and
-  `--header.*`, `--cell.*`, `--selected.*`, and `--border.*` styles over the theme's colors.
-  Both read their flags from `TERMANCY_SPIN_*` and `TERMANCY_TABLE_*` variables.
+  `--show-stdout`, `--show-stderr`, and `--show-error`, gum's spinner names at gum's pace
+  (`minidot`, `jump`, `monkey`, `meter`, `hamburger`, and the rest), `--align`, `--timeout`,
+  `--padding`, and `--spinner.*` and `--title.*` styles. On POSIX the command runs on a
+  pseudo-terminal, as in gum, so it keeps its colors and can open `/dev/tty`; its standard
+  error stays a pipe apart. Ctrl-C and `--timeout` stop the command's whole process group,
+  and standard input reaches the command. `table` takes `--file`, `--return-column`,
+  `--hide-count` (the row count leads the help line), `--lazy-quotes`, `--fields-per-record`,
+  `-b` for `--border`, any one UTF-8 character as `--separator`, q and ctrl+q to quit as esc
+  does, `--timeout`, `--padding`, and `--header.*`, `--cell.*`, `--selected.*`, and
+  `--border.*` styles over the theme's colors; its columns narrow to fit the terminal. Both
+  read their flags from `TERMANCY_SPIN_*` and `TERMANCY_TABLE_*` variables.
 - `term.live.frames.dot`, gum's `dot` spinner. The `table` component fits the terminal's
-  height when it has no `height`, leaving `reserved` rows to the rest of the view.
+  height when it has no `height` (leaving `reserved` rows to the rest of the view), narrows
+  its widest columns to the terminal's width, and cancels on q and ctrl+q too.
+  `term.Pty.SpawnOptions` takes `stdin` and `stdout` files and `pipe_stderr` (`Pty.errors`).
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set

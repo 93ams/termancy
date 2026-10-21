@@ -17,15 +17,16 @@
 //! ```
 //!
 //! Column widths are display widths (`tui.width`): a column is as wide as its widest cell
-//! or title, or exactly `Column.width`, cutting longer cells with "…". Rows with fewer
+//! or title, or exactly `Column.width`, cutting longer cells with "…". After a resize, the
+//! widest columns narrow until the table fits the terminal's width. Rows with fewer
 //! cells than columns are padded with empty cells; extra cells are not shown, nor are
 //! columns past `max_columns`.
 //!
-//! Keys, when `selectable`: up/down (k/j), pgup/pgdown, home/end (g/G) move; enter
-//! chooses the highlighted row; esc cancels. At most `height` rows are shown, scrolling
-//! with the highlight; without a `height`, as many as fit the terminal (`reserved` rows
-//! left to the rest of the view). Embedded in a larger model, a table takes keys through
-//! `handleKey`, which only moves, so quitting stays the parent's choice.
+//! Keys, when `selectable`: up/down (k/j), pgup/pgdown, home/end (g/G) move; enter chooses
+//! the highlighted row; esc, q, or ctrl+q cancels. At most `height` rows are shown,
+//! scrolling with the highlight; without a `height`, as many as fit the terminal
+//! (`reserved` rows left to the rest of the view). Embedded in a larger model, a table
+//! takes keys through `handleKey`, which only moves, so quitting stays the parent's choice.
 
 const std = @import("std");
 const tui = @import("tui");
@@ -49,8 +50,9 @@ offset: usize = 0,
 height: ?usize = null,
 /// Rows of the terminal the rest of the view takes, when the table fits it.
 reserved: usize = 0,
-/// The terminal's height, from the last resize.
+/// The terminal's size, from the last resize.
 screen_height: ?usize = null,
+screen_width: ?usize = null,
 /// Whether a row is highlighted and can be chosen.
 selectable: bool = true,
 border: ?Border = .rounded,
@@ -140,12 +142,13 @@ pub fn update(table: *Table, msg: tui.Msg) tui.Cmd {
         .mouse => |mouse| return table.handleMouse(mouse),
         .resize => |size| {
             table.screen_height = size.height;
+            table.screen_width = size.width;
             table.moveTo(table.cursor);
             return .none;
         },
         else => return .none,
     };
-    if (key.matches("esc")) {
+    if (key.matches("esc") or key.matches("q") or key.matches("ctrl+q")) {
         table.status = .canceled;
         return .quit;
     }
@@ -207,7 +210,8 @@ pub fn selected(table: *const Table) ?[]const []const u8 {
     return table.rows[table.cursor];
 }
 
-/// The width of each column, at most `max_columns` of them.
+/// The width of each column, at most `max_columns` of them, narrowed to fit
+/// `screen_width`.
 pub fn widths(table: *const Table, buffer: *[max_columns]usize) []usize {
     const count = @min(table.columns.len, max_columns);
     for (table.columns[0..count], buffer[0..count], 0..) |column, *width, i| {
@@ -220,7 +224,19 @@ pub fn widths(table: *const Table, buffer: *[max_columns]usize) []usize {
             if (i < row.len) width.* = @max(width.*, tui.width.of(row[i]));
         }
     }
-    return buffer[0..count];
+    const columns = buffer[0..count];
+    const limit = table.screen_width orelse return columns;
+    // Beside the cells: with a border, a space each side and a line between and around
+    // them all; without, two spaces between.
+    const around = if (table.border != null) 3 * count + 1 else 2 * (count -| 1);
+    var total: usize = around;
+    for (columns) |width| total += width;
+    while (total > limit) : (total -= 1) {
+        const widest = std.mem.indexOfMax(usize, columns);
+        if (columns[widest] <= 1) break;
+        columns[widest] -= 1;
+    }
+    return columns;
 }
 
 /// The wheel moves the cursor; a left click on a row chooses it. The table starts on
@@ -461,6 +477,19 @@ test "without a height, the rows fit the terminal" {
     try d.expectFrame("Name   Age  City    \nGrace   85          \nLinus   54  Helsinki");
     try d.resize(.{ .width = 30, .height = 10 });
     try testing.expectEqual(8, d.model().shown().?);
+}
+
+test "the widest columns narrow to fit the terminal; q cancels" {
+    var d: tui.testing.Driver(Table) = try .init(testing.allocator, .{
+        .columns = &person_columns,
+        .rows = &people,
+        .border = null,
+        .height = 1,
+    }, .{ .program = .{ .size = .{ .width = 16, .height = 10 } } });
+    defer d.deinit();
+    try d.expectFrame("Name  Age  City \nAda    36  Lond…");
+    try d.press("q");
+    try testing.expectEqual(Status.canceled, d.model().status);
 }
 
 test "esc cancels; a table that is not selectable ignores the rest" {

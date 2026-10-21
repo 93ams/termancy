@@ -82,7 +82,7 @@ pub const command = cli.command(.{
     \\unless --lazy-quotes, as in gum.
     \\
     \\Interactively, up/down move, enter prints the chosen row as a line of the same
-    \\format (or with --return-column, one of its fields), esc cancels (status 1), and
+    \\format (or with --return-column, one of its fields), esc or q cancels (status 1), and
     \\Ctrl-C interrupts (status 130). --height counts the table's lines, header and
     \\border included; 0 fits the terminal. --timeout ends with status 124. With --print,
     \\the whole table is written to standard output instead, colored only where standard
@@ -166,11 +166,14 @@ fn read(ctx: *cli.Context, path: []const u8) ![]const u8 {
         ctx.usageError("no table: give CSV on standard input or with --file", .{});
 }
 
-/// The separator `--separator` names: one byte, or a tab for `\t` and `tab`.
-pub fn parseSeparator(text: []const u8) ?u8 {
-    if (std.mem.eql(u8, text, "\\t") or std.mem.eql(u8, text, "tab")) return '\t';
-    if (text.len != 1 or text[0] == '"' or text[0] == '\n' or text[0] == '\r') return null;
-    return text[0];
+/// The separator `--separator` names: one UTF-8 character, or a tab for `\t` and `tab`.
+pub fn parseSeparator(text: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, text, "\\t") or std.mem.eql(u8, text, "tab")) return "\t";
+    const len = std.unicode.utf8ByteSequenceLength(if (text.len > 0) text[0] else 0) catch
+        return null;
+    if (text.len != len or !std.unicode.utf8ValidateSlice(text)) return null;
+    if (std.mem.indexOfAny(u8, text, "\"\n\r") != null) return null;
+    return text;
 }
 
 /// The table for `records` and the flags: titles from `--columns` or the first record,
@@ -254,7 +257,7 @@ pub fn writeChosen(
     w: *Writer,
     table: *const Table,
     column: usize,
-    separator: u8,
+    separator: []const u8,
 ) Writer.Error!void {
     const row = table.selected().?;
     if (column == 0 or column > table.columns.len) return writeRecord(w, row, separator);
@@ -267,7 +270,8 @@ pub fn writeChosen(
 /// and line breaks, with `""` standing for a quote. Blank lines are skipped, and so is a
 /// byte-order mark at the start.
 pub const Csv = struct {
-    separator: u8 = ',',
+    /// One UTF-8 character.
+    separator: []const u8 = ",",
     /// A quote may appear in an unquoted field, and a lone quote in a quoted one.
     lazy_quotes: bool = false,
     /// The fields each record must have: 0 as many as the first, below 0 any number.
@@ -298,8 +302,8 @@ pub const Csv = struct {
             var fields: std.ArrayList([]const u8) = .empty;
             while (true) {
                 try fields.append(arena, try csv.field(arena, text, &i));
-                if (i < text.len and text[i] == csv.separator) {
-                    i += 1;
+                if (std.mem.startsWith(u8, text[i..], csv.separator)) {
+                    i += csv.separator.len;
                 } else break;
             }
             if (i < text.len) {
@@ -323,7 +327,7 @@ pub const Csv = struct {
         const start = i.*;
         if (start >= text.len or text[start] != '"') {
             var end = start;
-            while (end < text.len and text[end] != csv.separator and lineEnd(text, end) == null) {
+            while (end < text.len and !csv.separatorAt(text, end) and lineEnd(text, end) == null) {
                 end += 1;
             }
             i.* = end;
@@ -347,7 +351,7 @@ pub const Csv = struct {
             if (at < text.len and text[at] == '"') {
                 try value.append(arena, '"');
                 at += 1;
-            } else if (at == text.len or text[at] == csv.separator or lineEnd(text, at) != null) {
+            } else if (at == text.len or csv.separatorAt(text, at) or lineEnd(text, at) != null) {
                 i.* = at;
                 return value.items;
             } else if (csv.lazy_quotes) {
@@ -373,6 +377,11 @@ pub const Csv = struct {
         try value.appendSlice(arena, rest);
     }
 
+    /// Whether the separator starts at `i`.
+    fn separatorAt(csv: *const Csv, text: []const u8, i: usize) bool {
+        return std.mem.startsWith(u8, text[i..], csv.separator);
+    }
+
     /// The length of the line break at `i`: `\n`, `\r\n`, or a `\r` that ends the text.
     fn lineEnd(text: []const u8, i: usize) ?usize {
         if (text[i] == '\n') return 1;
@@ -384,12 +393,17 @@ pub const Csv = struct {
 
 /// Writes `fields` as one record, quoting the fields that need it (as Go's `csv.Writer`
 /// does), and a line break.
-pub fn writeRecord(w: *Writer, fields: []const []const u8, separator: u8) Writer.Error!void {
+pub fn writeRecord(
+    w: *Writer,
+    fields: []const []const u8,
+    separator: []const u8,
+) Writer.Error!void {
     for (fields, 0..) |field, i| {
-        if (i > 0) try w.writeByte(separator);
-        const special = [_]u8{ separator, '"', '\n', '\r' };
+        if (i > 0) try w.writeAll(separator);
         const spaced = field.len > 0 and (field[0] == ' ' or field[0] == '\t');
-        if (!spaced and std.mem.indexOfAny(u8, field, &special) == null) {
+        const special = std.mem.indexOfAny(u8, field, "\"\n\r") != null or
+            std.mem.indexOf(u8, field, separator) != null;
+        if (!spaced and !special) {
             try w.writeAll(field);
             continue;
         }
@@ -423,8 +437,11 @@ test "Csv: quotes, line breaks, blank lines, and a byte-order mark" {
     try testing.expectEqualStrings("says \"hi\", twice", records[1][1]);
     try testing.expectEqualStrings("two\nlines", records[2][1]);
     try testing.expectEqualStrings("", records[3][1]);
-    const tsv = try parse(&arena, "a\tb c\n", .{ .separator = '\t' });
+    const tsv = try parse(&arena, "a\tb c\n", .{ .separator = "\t" });
     try testing.expectEqualStrings("b c", tsv[0][1]);
+    const piped = try parse(&arena, "a│\"b│c\"│d\n", .{ .separator = "│" });
+    try testing.expectEqualStrings("b│c", piped[0][1]);
+    try testing.expectEqualStrings("d", piped[0][2]);
 }
 
 test "Csv: stray quotes are errors, with the line, unless lazy" {
@@ -459,16 +476,19 @@ test "Csv: fields per record" {
 test writeRecord {
     var buffer: [64]u8 = undefined;
     var w: Writer = .fixed(&buffer);
-    try writeRecord(&w, &.{ "plain", "a,b", "say \"x\"" }, ',');
-    try writeRecord(&w, &.{ "a,b", " c" }, '\t');
+    try writeRecord(&w, &.{ "plain", "a,b", "say \"x\"" }, ",");
+    try writeRecord(&w, &.{ "a,b", " c" }, "\t");
     try testing.expectEqualStrings("plain,\"a,b\",\"say \"\"x\"\"\"\na,b\t\" c\"\n", w.buffered());
 }
 
 test parseSeparator {
-    try testing.expectEqual('\t', parseSeparator("\\t").?);
-    try testing.expectEqual('\t', parseSeparator("tab").?);
-    try testing.expectEqual(';', parseSeparator(";").?);
+    try testing.expectEqualStrings("\t", parseSeparator("\\t").?);
+    try testing.expectEqualStrings("\t", parseSeparator("tab").?);
+    try testing.expectEqualStrings(";", parseSeparator(";").?);
+    try testing.expectEqualStrings("│", parseSeparator("│").?);
     try testing.expectEqual(null, parseSeparator(";;"));
+    try testing.expectEqual(null, parseSeparator(""));
+    try testing.expectEqual(null, parseSeparator("\xff"));
     try testing.expectEqual(null, parseSeparator("\""));
 }
 
@@ -531,9 +551,9 @@ test "choosing a row: the help line with the count, and --return-column" {
     try d.press("enter");
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try writeChosen(&out.writer, &d.model().inner, 0, ',');
-    try writeChosen(&out.writer, &d.model().inner, 2, ',');
-    try writeChosen(&out.writer, &d.model().inner, 3, ',');
+    try writeChosen(&out.writer, &d.model().inner, 0, ",");
+    try writeChosen(&out.writer, &d.model().inner, 2, ",");
+    try writeChosen(&out.writer, &d.model().inner, 3, ",");
     try testing.expectEqualStrings("y,2\n2\ny,2\n", out.written());
 }
 

@@ -774,6 +774,20 @@ const pty_cases = [_]PtyCase{
         .shows = "1/2 • ",
         .stdout = "2\n",
     },
+    .{
+        .name = "table: q quits, as esc does",
+        .command = "printf 'n\\n1\\n' | \"$TERMANCY\" ui table",
+        .keys = "q",
+        .status = 1,
+    },
+    .{
+        // gum's pseudo-terminal: the command's standard output is a terminal.
+        .name = "spin: the command runs on a terminal",
+        .command = "(\"$TERMANCY\" ui spin --show-stdout -- " ++
+            "sh -c 'test -t 1 && echo on-a\"\"-tty' > /dev/tty)",
+        .keys = "",
+        .shows = "on-a-tty",
+    },
 };
 
 /// Runs `$3` (a shell command) in a pseudo-terminal with `TERMANCY=$1`, types `$2` once the
