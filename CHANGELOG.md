@@ -484,7 +484,9 @@ From a review before the repository went public:
 - `passkey get` and `create`, `ctap.assert`, and `windows_hello.assert` and `register` refuse
   an RP ID that is not the host of `--origin` or a domain it is under (WebAuthn's client
   check): options from `https://evil.example` naming `rpId` `bank.example` were signed for
-  `bank.example`. The new `webauthn.rpIdFor` makes the check.
+  `bank.example`. The new `webauthn.rpIdFor` makes the check: hosts compare without case,
+  an IP address (IPv6 in brackets, `https://[::1]:8443`) is only its own RP ID, and a
+  single label such as `com` is no parent domain to claim.
 - `webauthn.PublicKey.fromCose` refuses a COSE key that repeats a label (the last `x` won,
   where another parser may take the first) or has no `alg`, which WebAuthn requires.
 - `ctap.Channel.transact` refuses a reply longer than CTAPHID's 7609 bytes whatever the size

@@ -282,19 +282,33 @@ fn writeCcdString(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
 
 /// The RP ID a client may ask for on behalf of `origin` (WebAuthn §5.1.4.1): `rp_id` when it
 /// is the origin's host or a domain the host is under, the host when `rp_id` is null, else
-/// null, as for an `https://evil.example` that asks for `bank.example`.
-// shortcut: no public suffix list, so `com` passes for any .com origin (no key holds a
-// credential for it); upgrade if a caller relies on this to refuse public suffixes.
+/// null, as for an `https://evil.example` that asks for `bank.example`. Hosts compare
+/// without case; an IP address (IPv6 in brackets) is only its own RP ID.
+// shortcut: no public suffix list, so a suffix with a dot in it (`co.uk`) passes for its
+// origins (single labels such as `com` are refused); upgrade if a caller needs it refused.
 pub fn rpIdFor(rp_id: ?[]const u8, origin: []const u8) ?[]const u8 {
     const scheme_end = std.mem.indexOf(u8, origin, "://") orelse return null;
     const rest = origin[scheme_end + 3 ..];
-    const end = std.mem.indexOfAny(u8, rest, ":/") orelse rest.len;
-    if (end == 0) return null;
-    const host = rest[0..end];
+    const ipv6 = std.mem.startsWith(u8, rest, "[");
+    const host = if (ipv6) host: {
+        const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+        const after = rest[close + 1 ..];
+        if (after.len > 0 and after[0] != ':' and after[0] != '/') return null;
+        break :host rest[1..close];
+    } else rest[0 .. std.mem.indexOfAny(u8, rest, ":/") orelse rest.len];
+    if (host.len == 0) return null;
     const id = rp_id orelse return host;
-    const under = std.mem.endsWith(u8, host, id) and
-        (host.len == id.len or host[host.len - id.len - 1] == '.');
-    return if (id.len > 0 and under) id else null;
+    if (std.ascii.eqlIgnoreCase(host, id)) return id;
+    // A host whose last label is a number is an IPv4 address, as URLs parse it.
+    const last = host[if (std.mem.lastIndexOfScalar(u8, host, '.')) |dot| dot + 1 else 0..];
+    const ipv4 = last.len > 0 and for (last) |c| {
+        if (!std.ascii.isDigit(c)) break false;
+    } else true;
+    if (ipv6 or ipv4 or std.mem.indexOfScalar(u8, id, '.') == null or host.len <= id.len) {
+        return null;
+    }
+    const dot = host.len - id.len - 1;
+    return if (host[dot] == '.' and std.ascii.eqlIgnoreCase(host[dot + 1 ..], id)) id else null;
 }
 
 /// What the relying party expects of an assertion.
@@ -936,6 +950,22 @@ test rpIdFor {
     try std.testing.expectEqual(null, rpIdFor("", "https://example.com"));
     try std.testing.expectEqual(null, rpIdFor(null, "https://"));
     try std.testing.expectEqual(null, rpIdFor(null, "example.com"));
+    // Hosts compare without case.
+    try eq("Example.COM", rpIdFor("Example.COM", "https://login.example.com").?);
+    try eq("example.com", rpIdFor("example.com", "https://EXAMPLE.com").?);
+    // A label alone is not a parent domain to claim; `localhost` is its own host.
+    try std.testing.expectEqual(null, rpIdFor("com", "https://x.example.com"));
+    try eq("localhost", rpIdFor("localhost", "http://localhost:8080").?);
+    // An IP address is only its own RP ID, IPv6 in brackets.
+    try eq("10.0.0.1", rpIdFor(null, "https://10.0.0.1:8443").?);
+    try eq("10.0.0.1", rpIdFor("10.0.0.1", "https://10.0.0.1").?);
+    try std.testing.expectEqual(null, rpIdFor("0.0.1", "https://10.0.0.1"));
+    try eq("::1", rpIdFor(null, "https://[::1]:8443").?);
+    try eq("::1", rpIdFor("::1", "https://[::1]/x").?);
+    try std.testing.expectEqual(null, rpIdFor("0.1", "https://[::10.0.0.1]"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://[::1"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://[::1]x"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://[]"));
 }
 
 test "AuthenticatorData.parse" {
