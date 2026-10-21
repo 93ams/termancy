@@ -469,6 +469,8 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `termancy image` (`image.decode`) reads a GIF's first frame only; it read every frame to
+  keep the first, so a long animation was slow and a bad later frame refused the file.
 - A GIF cut short, or followed by junk, keeps the frames before the damage, as browsers
   show them; the whole file was refused. One with no whole frame still is.
 - A GIF with an LZW minimum code size of 1 (below the spec's 2) is read as giflib and

@@ -899,6 +899,11 @@ const BitPacker = struct {
 
 /// Reads a GIF's frames, composited, for tests and for showing GIFs in the terminal.
 pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
+    return gifFrames(gpa, data, std.math.maxInt(usize));
+}
+
+/// A GIF's first `limit` frames.
+fn gifFrames(gpa: Allocator, data: []const u8, limit: usize) DecodeError![]Image {
     if (data.len < 13 or !std.mem.eql(u8, data[0..3], "GIF")) return error.InvalidImage;
     const width = std.mem.readInt(u16, data[6..8], .little);
     const height = std.mem.readInt(u16, data[8..10], .little);
@@ -1016,6 +1021,7 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 if (before) |b| @memcpy(canvas.pixels, b.pixels);
                 transparent = null;
                 disposal = 0;
+                if (frames.items.len == limit) break :blocks false;
             },
             else => break :blocks true,
         }
@@ -1101,10 +1107,9 @@ fn unlzw(gpa: Allocator, stream: []const u8, min_code: u4, count: usize) DecodeE
 /// (its first frame).
 pub fn decode(gpa: Allocator, data: []const u8) DecodeError!Image {
     if (std.mem.startsWith(u8, data, "GIF8")) {
-        const frames = try readGif(gpa, data);
+        const frames = try gifFrames(gpa, data, 1);
         defer gpa.free(frames);
         if (frames.len == 0) return error.InvalidImage;
-        for (frames[1..]) |*f| f.deinit(gpa);
         return frames[0];
     }
     if (std.mem.startsWith(u8, data, "\xff\xd8\xff")) return readJpeg(gpa, data);
@@ -1926,6 +1931,17 @@ test "GIF: cut short or followed by junk, the frames before are kept" {
     const data = try std.mem.concat(gpa, u8, &.{ out.written()[0..header], cut });
     defer gpa.free(data);
     try testing.expectError(error.InvalidImage, readGif(gpa, data));
+}
+
+test "decode reads a GIF's first frame only" {
+    const gpa = testing.allocator;
+    // A second frame too large to read: decoding them all refused the first with it.
+    const gif = "GIF89a\x01\x00\x01\x00\x00\x00\x00" ++
+        "\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00" ++
+        "\x2c\x00\x00\x00\x00\xff\xff\xff\xff\x00\x02\x00;";
+    var img = try decode(gpa, gif);
+    img.deinit(gpa);
+    try testing.expectError(error.UnsupportedImage, readGif(gpa, gif));
 }
 
 /// Decodes testdata/jpeg/`name`.jpg and compares it with the pixels libjpeg-turbo decodes
