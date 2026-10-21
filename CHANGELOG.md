@@ -160,6 +160,9 @@ git history.
   reached by prefix; typed in full they still run, with their warning.
 - `cfg.encrypted.Decrypted.plaintext` is `[]u8` (it is wiped), and diagnostics no longer
   quote lines of encrypted files.
+- `webauthn.Registration.credential` takes `arena` and the relying party's `Expected`
+  (`.credential(arena, .{ .challenge, .origin, .rp_id })`), which it checks the
+  registration against.
 
 ### Added
 
@@ -477,6 +480,85 @@ From a review before the repository went public:
 
 ### Fixed
 
+- `passkey get` and `create` check the RP ID against `--origin` before anything else, on
+  every system: `create` away from Windows said it needs Windows Hello instead.
+- `ctap.getPinToken` wipes the PIN's hash, the secret shared with the key, its ephemeral
+  key, and the key agreement's intermediates (the shared point, its `x`, the HKDF key) on
+  every way out, errors included; they stayed on the stack.
+- `ctap.Channel.open` waits past another program's INIT reply on the broadcast channel
+  (its nonce is not ours) instead of failing with `InvalidResponse`.
+- A security key that keeps sending keepalives, or a busy other channel, can no longer hold
+  `ctap.Channel` (and `passkey get`) forever: each request ends with `error.Timeout` after
+  the new `Channel.deadline_ms` (five minutes). `ctap.assert` takes it from the request's
+  `timeout` as browsers do, as a hint: 0 or absent is WebAuthn's recommended default, and
+  other values are held within its recommended range (`RequestOptions.ceremonyTimeoutMs`).
+- `webauthn.verifyAssertion` (and so `verify` and `Registration.credential`) refuses
+  authenticator data flagged backed up (BS) but not backup eligible (BE), as WebAuthn
+  requires.
+- `oauth.DevicePoll.next` no longer overflows when a server that sent an `interval` near
+  2^32 then answers `slow_down`; the interval stops at its largest.
+- `webauthn.Registration.credential` makes the registration checks `verifyAssertion` makes
+  for a sign-in (client data of type `webauthn.create`, challenge, origin, RP ID hash, user
+  presence, and verification when required): it read the key of a credential made for any
+  RP, without the user's touch.
+- `passkey get` and `create`, `ctap.assert`, and `windows_hello.assert` and `register` refuse
+  an RP ID that is not the host of `--origin` or a domain it is under (WebAuthn's client
+  check): options from `https://evil.example` naming `rpId` `bank.example` were signed for
+  `bank.example`. The new `webauthn.rpIdFor` makes the check: hosts compare without case,
+  an IP address (IPv6 in brackets, `https://[::1]:8443`) is only its own RP ID, and a
+  single label such as `com` is no parent domain to claim.
+- `webauthn.PublicKey.fromCose` refuses a COSE key that repeats a label (the last `x` won,
+  where another parser may take the first) or has no `alg`, which WebAuthn requires.
+- `ctap.Channel.transact` refuses a reply longer than CTAPHID's 7609 bytes whatever the size
+  of `out`: with a larger buffer, a key announcing 65535 bytes overflowed the sequence
+  number at its 256th continuation packet.
+- `ctap.getAssertion` reads a credential or user map whose keys are not all text whole: a
+  key that was not text was skipped without its value, so a key (`h'bb'` in
+  `{1: "id", h'bb': 0}`) could be taken for the ID and the rest of the response misread.
+- `webauthn.attestedCredential` no longer panics on a credential ID length of 65518 or more
+  (the key's offset overflowed 16 bits); it refuses IDs over WebAuthn's 1023 bytes, and
+  bytes after the key that the ED flag does not announce as an extensions map.
+- `cbor.Reader.boolean` takes only `false` and `true` (`0xf4`, `0xf5`): a float whose bits
+  matched them (`f9 00 15`), or a simple value in two bytes (`f8 14`), read as a boolean.
+- `yaml.parseReader` (YAML through `Config.loadReader`) reads exactly what `yaml.parse`
+  reads: it took each piece for a document, so it accepted keys after `...` and after a
+  root that was a flow mapping or indented, and dropped a byte order mark starting a line.
+- `termancy image` (`image.decode`) reads a GIF's first frame only; it read every frame to
+  keep the first, so a long animation was slow and a bad later frame refused the file.
+- A GIF cut short, or followed by junk, keeps the frames before the damage, as browsers
+  show them; the whole file was refused. One with no whole frame still is.
+- A GIF with an LZW minimum code size of 1 (below the spec's 2) is read as giflib and
+  Chrome read it; its codes never grew wider, so most of it came out wrong.
+- A baseline or extended JPEG scan with successive approximation (Ah or Al not 0) is
+  refused, as the standard requires; it was decoded with its coefficients shifted.
+- A JPEG quantization table whose precision is neither 8 nor 16 bits is refused; it was read
+  as 16 bits.
+- Interlaced GIFs are read with their rows in place; they came out scrambled.
+- `image.readGif` clears or puts back a frame as its disposal method says, and a graphic
+  control extension's transparent color applies to the frame after it only, not every one.
+- A JPEG of more than 100 scans is refused, and blocks past the end of a scan's data are left
+  blank (as libjpeg leaves them) instead of decoded from zeros: 8 KB of empty scans took 19 s.
+- A JPEG of more than `image.max_pixels` (8192 by 8192) is refused, as a PNG or GIF is: a
+  file of a few megabytes claiming 32768 by 32768 allocated gigabytes.
+- A GIF's frames larger than its screen count toward `image.max_pixels`: a few kilobytes of
+  8192 by 8192 frames on a 1 by 1 screen took most of a minute to read.
+- `cfg fmt` on YAML took a `#` inside a key (`c#ounts:`) for the start of a comment and
+  declined the file, even one it had just written from `c#ounts: [3, -4]`.
+- **`cfg` encrypted files:** the Argon2 costs an envelope names are bounded (1 GiB, four
+  passes over it, 16 lanes) and checked before they are paid; a file from elsewhere
+  saying `m=4294967295` ran the machine out of memory, `t=4294967295` for hours.
+  `encrypted.encrypt` refuses the same costs, so what it writes can be read.
+- Argon2's working memory, from which an encrypted file's key could be derived again, is
+  unmapped once the key is made instead of staying (64 MiB, unwiped) in the file's arena
+  for as long as the `Config` lives.
+- With a profile active, what is secret under `profiles.<name>` (an encrypted file's
+  values, `${secret:...}`, `--secret profiles.prod.db`) is secret where the profile puts
+  it too; `cfg show --profile prod` and `cfg explain` printed it. Those keys then stay
+  secret whatever sets them.
+- `encrypted.encrypt` and `cfg encrypt --passphrase ''` refuse an empty passphrase
+  (`error.EmptyPassphrase`), which made a file anyone could open.
+- Cancelling during an encrypted file's key derivation is `error.Canceled`, not
+  `WeakParameters` (or `CorruptEncryption` from `Config.loadFile`).
 - `cfg`: `Config.markSecret` after a `get` also redacts the references that had already
   expanded the secret (`url = "pg://u:${password}@h"`); `write` and `snapshot` showed them
   in plain text.

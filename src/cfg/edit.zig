@@ -736,7 +736,8 @@ fn afterColon(raw: []const u8) ?usize {
         if (raw[i] == ':' and (i + 1 == raw.len or raw[i + 1] == ' ' or raw[i + 1] == '\t')) {
             return i + 1;
         }
-        if (raw[i] == '#') return null;
+        // Only at the start or after a space does `#` start a comment: `c#ounts` is a key.
+        if (raw[i] == '#' and (i == 0 or raw[i - 1] == ' ' or raw[i - 1] == '\t')) return null;
     }
     return null;
 }
@@ -2536,6 +2537,8 @@ test "reformat YAML keeps comments beside their entries" {
     // Found by the fuzzer: a negative number in a sequence is a scalar, not an indicator.
     try expectReformat(.yaml, "counts: [3, -4]\n", "counts:\n  - 3\n  - -4\n");
     try expectReformat(.yaml, "\"a\\\"b\": # c\n  - 1\n", "a\"b: # c\n  - 1\n");
+    // And a `#` inside a key starts no comment, so what this writes reformats again.
+    try expectReformat(.yaml, "c#ounts:\n  - 3 # c\n", "c#ounts:\n  - 3 # c\n");
 }
 
 test "reformat dotenv keeps comments and values" {

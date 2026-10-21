@@ -10,16 +10,20 @@
 //! ```
 //!
 //! The header line is authenticated with the ciphertext, so changing the parameters or the
-//! format makes decryption fail rather than misread. `Config.usePassphrase` lets
-//! `Config.loadFile` read such a file directly; `app.toml.enc` is a TOML file encrypted.
+//! format makes decryption fail rather than misread. The costs are paid before that check,
+//! so they are bounded (`Params`): a file from elsewhere cannot take all memory, or hours.
+//! `Config.usePassphrase` lets `Config.loadFile` read such a file directly; `app.toml.enc`
+//! is a TOML file encrypted.
 //!
 //! What is wiped: the derived key, always, and the plaintext buffer when decryption fails.
-//! The plaintext `decrypt` returns belongs to the caller, who should `secureZero` it once
-//! done with it, as `Config.loadFile` does after parsing. What is not: the values parsed
-//! from it (they are the configuration), copies a parser made on the way (unescaped
-//! strings), and Argon2's working memory, all in the arena given; an arena does not wipe
-//! what it frees. A process that must not keep secrets in memory after use should give
-//! these an allocator that zeroes on free.
+//! Argon2's working memory, from which the key could be derived again, is not taken from
+//! the arena but mapped and unmapped for each derivation, so it is gone once the key is
+//! made (on WASI, which cannot unmap, it is only freed). The plaintext `decrypt` returns
+//! belongs to the caller, who should `secureZero` it once done with it, as
+//! `Config.loadFile` does after parsing. What is not wiped: the values parsed from it (they
+//! are the configuration) and copies a parser made on the way (unescaped strings), both in
+//! the arena given; an arena does not wipe what it frees. A process that must not keep
+//! secrets in memory after use should give these an allocator that zeroes on free.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -34,7 +38,9 @@ const base64 = std.base64.standard;
 pub const magic = "termancy-encrypted";
 
 /// Argon2id costs. The defaults follow the RFC 9106 second recommendation: 64 MiB, three
-/// passes, which takes a fraction of a second.
+/// passes, which takes a fraction of a second. At most 1 GiB, 16 lanes, and `t * m` at
+/// most four passes over 1 GiB: an envelope asking for more is refused (`WeakParameters`)
+/// before any of it is paid, and `encrypt` refuses the same, so what it writes can be read.
 pub const Params = struct {
     /// Passes over memory.
     t: u32 = 3,
@@ -42,6 +48,10 @@ pub const Params = struct {
     m: u32 = 64 * 1024,
     /// Lanes.
     p: u24 = 1,
+
+    const max_m = 1024 * 1024;
+    const max_work = 4 * max_m;
+    const max_p = 16;
 };
 
 /// What encrypting and decrypting can fail with.
@@ -58,7 +68,9 @@ pub const Error = error{
     WeakParameters,
     /// The system has no secure random numbers to give.
     EntropyUnavailable,
-} || Allocator.Error;
+    /// `encrypt` was given an empty passphrase, which protects nothing.
+    EmptyPassphrase,
+} || Allocator.Error || Io.Cancelable;
 
 const salt_len = 16;
 const key_len = Aead.key_length;
@@ -79,6 +91,7 @@ pub fn encrypt(
     format: Format,
     params: Params,
 ) Error![]const u8 {
+    if (passphrase.len == 0) return error.EmptyPassphrase;
     const header = try std.fmt.allocPrint(arena, "{s} v1 argon2id t={d} m={d} p={d} format={t}", .{
         magic, params.t, params.m, params.p, format,
     });
@@ -88,7 +101,7 @@ pub fn encrypt(
     io.randomSecure(&nonce) catch return error.EntropyUnavailable;
     var key: [key_len]u8 = undefined;
     defer std.crypto.secureZero(u8, &key);
-    try deriveKey(arena, io, &key, passphrase, &salt, params);
+    try deriveKey(io, &key, passphrase, &salt, params);
 
     const body = try arena.alloc(u8, salt_len + nonce_len + plaintext.len + tag_len);
     @memcpy(body[0..salt_len], &salt);
@@ -147,7 +160,7 @@ pub fn decrypt(
     const tag = body[body.len - tag_len ..][0..tag_len].*;
     var key: [key_len]u8 = undefined;
     defer std.crypto.secureZero(u8, &key);
-    try deriveKey(arena, io, &key, passphrase, salt, parsed.params);
+    try deriveKey(io, &key, passphrase, salt, parsed.params);
     const plaintext = try arena.alloc(u8, ciphertext.len);
     Aead.decrypt(plaintext, ciphertext, tag, header, nonce, key) catch {
         // Unauthenticated bytes are not handed out, nor left behind.
@@ -157,12 +170,15 @@ pub fn decrypt(
     return .{ .plaintext = plaintext, .format = parsed.format };
 }
 
-const Header = struct {
+/// What an envelope's first line says.
+pub const Header = struct {
     params: Params,
     format: Format,
 };
 
-fn parseHeader(header: []const u8) Error!Header {
+/// Reads an envelope's first line, without its line ending. `decrypt` calls it; it is
+/// public so a fuzzer can see an envelope's costs before paying them.
+pub fn parseHeader(header: []const u8) Error!Header {
     var words = std.mem.tokenizeScalar(u8, header, ' ');
     if (!std.mem.eql(u8, words.next() orelse "", magic)) return error.NotEncrypted;
     if (!std.mem.eql(u8, words.next() orelse "", "v1")) return error.Unsupported;
@@ -187,17 +203,23 @@ fn parseHeader(header: []const u8) Error!Header {
 }
 
 fn deriveKey(
-    arena: Allocator,
     io: Io,
     key: *[key_len]u8,
     passphrase: []const u8,
     salt: []const u8,
     params: Params,
 ) Error!void {
+    const work = @as(u64, params.t) * params.m;
+    if (params.m > Params.max_m or params.p > Params.max_p or work > Params.max_work) {
+        return error.WeakParameters;
+    }
     const argon_params: argon2.Params = .{ .t = params.t, .m = params.m, .p = params.p };
-    argon2.kdf(arena, key, passphrase, salt, argon_params, .argon2id, io) catch |err| {
+    // Unmapped once done: the key could be derived again from it, and an arena keeps it.
+    const scratch = std.heap.page_allocator;
+    argon2.kdf(scratch, key, passphrase, salt, argon_params, .argon2id, io) catch |err| {
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
+            error.Canceled => error.Canceled,
             else => error.WeakParameters,
         };
     };
@@ -241,4 +263,44 @@ test "each encryption is different" {
     const one = try encrypt(a, testing.io, "a = 1", "p", .toml, test_params);
     const two = try encrypt(a, testing.io, "a = 1", "p", .toml, test_params);
     try testing.expect(!std.mem.eql(u8, one, two));
+}
+
+test "costs past the ceiling are refused before they are paid" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // A salt, a nonce, and a tag, all zero: the least that reaches key derivation.
+    const body: []const u8 = &@as([75]u8, @splat('A')) ++ "=\n";
+    for ([_][]const u8{
+        "t=4294967295 m=8 p=1", // hours of passes
+        "t=1 m=4294967295 p=1", // 4 TiB, which the OOM killer stopped
+        "t=1 m=2097152 p=1", // 2 GiB
+        "t=5 m=1048576 p=1", // 1 GiB, five times over
+        "t=1 m=1048576 p=17", // more lanes than allowed
+    }) |costs| {
+        const parts = &.{ magic, " v1 argon2id ", costs, " format=toml\n", body };
+        const envelope = try std.mem.concat(a, u8, parts);
+        try testing.expectError(error.WeakParameters, decrypt(a, testing.io, envelope, "x"));
+    }
+    const greedy: Params = .{ .t = 1, .m = 2 * Params.max_m };
+    const sealed = encrypt(a, testing.io, "a = 1", "p", .toml, greedy);
+    try testing.expectError(error.WeakParameters, sealed);
+}
+
+test "an empty passphrase is refused" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const sealed = encrypt(arena.allocator(), testing.io, "a = 1", "", .toml, test_params);
+    try testing.expectError(error.EmptyPassphrase, sealed);
+}
+
+test "Argon2's working memory is not left in the arena" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const params: Params = .{ .t = 1, .m = 1024, .p = 1 };
+    const envelope = try encrypt(arena.allocator(), testing.io, "a = 1", "p", .toml, params);
+    var opening: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer opening.deinit();
+    _ = try decrypt(opening.allocator(), testing.io, envelope, "p");
+    try testing.expect(opening.queryCapacity() < params.m * 1024);
 }

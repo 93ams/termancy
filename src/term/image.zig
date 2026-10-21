@@ -323,7 +323,7 @@ pub fn readPng(gpa: Allocator, data: []const u8) DecodeError!Image {
     while (at + 12 <= data.len) {
         const len = std.mem.readInt(u32, data[at..][0..4], .big);
         const kind = data[at + 4 ..][0..4];
-        if (at + 12 + len > data.len) return error.InvalidImage;
+        if (len > data.len - at - 12) return error.InvalidImage;
         const body = data[at + 8 ..][0..len];
         at += 12 + len;
         if (std.mem.eql(u8, kind, "IHDR")) {
@@ -899,6 +899,11 @@ const BitPacker = struct {
 
 /// Reads a GIF's frames, composited, for tests and for showing GIFs in the terminal.
 pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
+    return gifFrames(gpa, data, std.math.maxInt(usize));
+}
+
+/// A GIF's first `limit` frames.
+fn gifFrames(gpa: Allocator, data: []const u8, limit: usize) DecodeError![]Image {
     if (data.len < 13 or !std.mem.eql(u8, data[0..3], "GIF")) return error.InvalidImage;
     const width = std.mem.readInt(u16, data[6..8], .little);
     const height = std.mem.readInt(u16, data[8..10], .little);
@@ -923,22 +928,28 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
     if (@as(usize, width) * height > max_pixels) return error.UnsupportedImage;
     var canvas: Image = try .init(gpa, width, height);
     defer canvas.deinit(gpa);
+    // Each frame's copy of the canvas, or its own pixels if more (off the screen).
+    var budget: usize = 0;
+    // From a graphic control extension, for the frame after it only.
     var transparent: ?u8 = null;
-    while (at < data.len) {
+    var disposal: u8 = 0;
+    // Cut short or followed by junk, the frames before are kept, as browsers keep them.
+    const malformed = blocks: while (at < data.len) {
         switch (data[at]) {
-            0x3b => break,
+            0x3b => break :blocks false,
             0x21 => {
-                if (at + 2 > data.len) return error.InvalidImage;
+                if (at + 2 > data.len) break :blocks true;
                 const label = data[at + 1];
                 at += 2;
                 if (label == 0xf9 and at + 5 <= data.len and data[at] == 4) {
                     transparent = if (data[at + 1] & 1 != 0) data[at + 4] else null;
+                    disposal = data[at + 1] >> 2 & 7;
                 }
                 while (at < data.len and data[at] != 0) at += 1 + @as(usize, data[at]);
                 at += 1;
             },
             0x2c => {
-                if (at + 10 > data.len) return error.InvalidImage;
+                if (at + 10 > data.len) break :blocks true;
                 const fx = std.mem.readInt(u16, data[at + 1 ..][0..2], .little);
                 const fy = std.mem.readInt(u16, data[at + 3 ..][0..2], .little);
                 const fw = std.mem.readInt(u16, data[at + 5 ..][0..2], .little);
@@ -947,11 +958,12 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                 at += 10;
                 if (@as(usize, fw) * fh > max_pixels) return error.UnsupportedImage;
                 // Frames past `max_pixels` in all are dropped.
-                if ((frames.items.len + 1) * canvas.pixels.len > max_pixels) break;
+                budget += @max(canvas.pixels.len, @as(usize, fw) * fh);
+                if (budget > max_pixels) break :blocks false;
                 var palette = global;
                 if (flags & 0x80 != 0) {
                     const n = @as(usize, 2) << @intCast(flags & 7);
-                    if (at + 3 * n > data.len) return error.InvalidImage;
+                    if (at + 3 * n > data.len) break :blocks true;
                     for (0..n) |i| palette[i] = .{
                         .r = data[at + 3 * i],
                         .g = data[at + 3 * i + 1],
@@ -959,34 +971,62 @@ pub fn readGif(gpa: Allocator, data: []const u8) DecodeError![]Image {
                     };
                     at += 3 * n;
                 }
-                if (at >= data.len) return error.InvalidImage;
-                // At most 8 (codes are bytes); larger overflowed the code table.
-                if (data[at] > 8) return error.InvalidImage;
+                if (at >= data.len) break :blocks true;
+                // At most 8 (codes are bytes); larger overflowed the code table. Below the
+                // spec's 2, 0 and 1 are read as giflib and Chrome's Wuffs read them.
+                if (data[at] > 8) break :blocks true;
                 const min_code: u4 = @intCast(data[at]);
                 at += 1;
                 var stream: std.ArrayList(u8) = .empty;
                 defer stream.deinit(gpa);
                 while (at < data.len and data[at] != 0) {
                     const n: usize = data[at];
-                    if (at + 1 + n > data.len) return error.InvalidImage;
+                    if (at + 1 + n > data.len) break :blocks true;
                     try stream.appendSlice(gpa, data[at + 1 ..][0..n]);
                     at += 1 + n;
                 }
                 at += 1;
-                const indices = try unlzw(gpa, stream.items, min_code, @as(usize, fw) * fh);
+                const indices = unlzw(gpa, stream.items, min_code, @as(usize, fw) * fh) catch |err|
+                    switch (err) {
+                        error.InvalidImage => break :blocks true,
+                        else => |e| return e,
+                    };
                 defer gpa.free(indices);
-                for (0..fh) |y| for (0..fw) |x| {
-                    const i = indices[y * fw + x];
-                    if (transparent != null and i == transparent.?) continue;
-                    if (fx + x < width and fy + y < height) {
-                        canvas.at(fx + x, fy + y).* = palette[i];
+                var before: ?Image = if (disposal == 3) try canvas.clone(gpa) else null;
+                defer if (before) |*b| b.deinit(gpa);
+                // Interlaced, the rows come every 8th from 0, every 8th from 4, every 4th
+                // from 2, then every 2nd from 1.
+                const passes: []const [2]u8 = if (flags & 0x40 != 0)
+                    &.{ .{ 0, 8 }, .{ 4, 8 }, .{ 2, 4 }, .{ 1, 2 } }
+                else
+                    &.{.{ 0, 1 }};
+                var row: usize = 0;
+                for (passes) |pass| {
+                    var y: usize = pass[0];
+                    while (y < fh) : (y += pass[1]) {
+                        for (0..fw) |x| {
+                            const i = indices[row * fw + x];
+                            if (transparent != null and i == transparent.?) continue;
+                            if (fx + x < width and fy + y < height) {
+                                canvas.at(fx + x, fy + y).* = palette[i];
+                            }
+                        }
+                        row += 1;
                     }
-                };
+                }
                 try frames.append(gpa, try canvas.clone(gpa));
+                // Disposed of: cleared to transparent (as browsers do), or put back.
+                if (disposal == 2)
+                    canvas.fillRect(fx, fy, fw, fh, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+                if (before) |b| @memcpy(canvas.pixels, b.pixels);
+                transparent = null;
+                disposal = 0;
+                if (frames.items.len == limit) break :blocks false;
             },
-            else => return error.InvalidImage,
+            else => break :blocks true,
         }
-    }
+    } else false;
+    if (malformed and frames.items.len == 0) return error.InvalidImage;
     return frames.toOwnedSlice(gpa);
 }
 
@@ -1054,8 +1094,10 @@ fn unlzw(gpa: Allocator, stream: []const u8, min_code: u4, count: usize) DecodeE
             suffixes[next] = out[written - (if (code >= next) len + 1 else len)];
             lengths[next] = lengths[prev] + 1;
             next += 1;
-            if (next == (@as(u16, 1) << @intCast(width)) and width < 12) width += 1;
         };
+        // Wider once the next code needs it: after a clear's first code too, which only the
+        // minimum code sizes 0 and 1 need.
+        if (next >= @as(u16, 1) << @intCast(width) and width < 12) width += 1;
         previous = code;
     }
     return out;
@@ -1065,10 +1107,9 @@ fn unlzw(gpa: Allocator, stream: []const u8, min_code: u4, count: usize) DecodeE
 /// (its first frame).
 pub fn decode(gpa: Allocator, data: []const u8) DecodeError!Image {
     if (std.mem.startsWith(u8, data, "GIF8")) {
-        const frames = try readGif(gpa, data);
+        const frames = try gifFrames(gpa, data, 1);
         defer gpa.free(frames);
         if (frames.len == 0) return error.InvalidImage;
-        for (frames[1..]) |*f| f.deinit(gpa);
         return frames[0];
     }
     if (std.mem.startsWith(u8, data, "\xff\xd8\xff")) return readJpeg(gpa, data);
@@ -1138,6 +1179,8 @@ const Bits = struct {
     buffer: u64 = 0,
     count: u7 = 0,
     marker: bool = false,
+    /// The zeros put in after the data: more than `count` once one of them was taken.
+    padding: usize = 0,
 
     fn fill(b: *Bits) void {
         while (b.count <= 56) {
@@ -1151,11 +1194,17 @@ const Bits = struct {
                 } else {
                     b.marker = true;
                     byte = 0;
+                    b.padding += 8;
                 }
-            }
+            } else b.padding += 8;
             b.buffer |= @as(u64, byte) << @intCast(56 - b.count);
             b.count += 8;
         }
+    }
+
+    /// Whether bits past the data were taken: the scan (or restart interval) ran out.
+    fn exhausted(b: *const Bits) bool {
+        return b.padding > b.count;
     }
 
     fn take(b: *Bits, n: u5) u16 {
@@ -1198,6 +1247,7 @@ const Bits = struct {
         b.buffer = 0;
         b.count = 0;
         b.marker = false;
+        b.padding = 0;
         while (b.at + 1 < b.data.len) : (b.at += 1) {
             if (b.data[b.at] != 0xff or b.data[b.at + 1] == 0 or b.data[b.at + 1] == 0xff)
                 continue;
@@ -1316,6 +1366,7 @@ const Jpeg = struct {
         var least: usize = 0;
         for (components[0..count]) |c| least += j.blocksAcross(c) * j.blocksDown(c);
         if (j.data.len * 8 < least) return error.InvalidImage;
+        if (j.width * j.height > max_pixels) return error.UnsupportedImage;
         for (components[0..count]) |*c| {
             c.blocks_w = j.mcus_x * c.h;
             c.blocks_h = j.mcus_y * c.v;
@@ -1358,7 +1409,8 @@ const Jpeg = struct {
             const wide = rest[0] >> 4 != 0;
             const index = rest[0] & 15;
             const size: usize = if (wide) 128 else 64;
-            if (index > 3 or rest.len < 1 + size) return error.InvalidImage;
+            // Precision 0 is 8 bits, 1 is 16; the rest are not JPEG's.
+            if (rest[0] >> 4 > 1 or index > 3 or rest.len < 1 + size) return error.InvalidImage;
             for (0..64) |k| j.quant[index][zigzag[k]] = if (wide)
                 std.mem.readInt(u16, rest[1 + 2 * k ..][0..2], .big)
             else
@@ -1415,12 +1467,15 @@ const Jpeg = struct {
         if (j.progressive) {
             if (ss > se or se > 63 or (ss == 0 and se != 0) or (ss > 0 and n != 1) or
                 ah > 13 or al > 13) return error.InvalidImage;
-        } else if (ss != 0 or se != 63) return error.InvalidImage;
+        } else if (ss != 0 or se != 63 or ah != 0 or al != 0) return error.InvalidImage;
         for (in_scan[0..n]) |c| {
             if (ss == 0 and ah == 0 and !j.dc[c.dc_table].defined) return error.InvalidImage;
             if (se > 0 and !j.ac[c.ac_table].defined) return error.InvalidImage;
             c.dc = 0;
         }
+        // Each scan walks every block again: many small ones took time quadratic in the
+        // file's size. Encoders write about ten.
+        if (j.scans == 100) return error.UnsupportedImage;
         j.scans += 1;
         j.eobrun = 0;
         var bits: Bits = .{ .data = j.data, .at = start };
@@ -1470,6 +1525,9 @@ const Jpeg = struct {
         b: *[64]i16,
         s: Scan,
     ) DecodeError!void {
+        // Past the data the blocks stay as they are, as libjpeg leaves them: decoding the
+        // zeros there cost what real data does, for data that is not there.
+        if (bits.exhausted()) return;
         if (s.ss == 0) {
             if (s.ah == 0) {
                 const size = try bits.symbol(&j.dc[c.dc_table]);
@@ -1720,6 +1778,11 @@ test "PNG round trips, opaque and with alpha" {
         for (img.pixels, back.pixels) |a, b| try testing.expect(a.eql(b));
     }
     try testing.expectError(error.InvalidImage, readPng(gpa, "not a png"));
+    // A chunk's length past the end: adding it to where it starts overflowed 32 bits.
+    try testing.expectError(
+        error.InvalidImage,
+        readPng(gpa, "\x89PNG\r\n\x1a\n\xff\xff\xff\xf4IHDR\x00\x00\x00\x00"),
+    );
 }
 
 test "GIF frames: few colors exactly, many approximately, unchanged frames merged" {
@@ -1762,23 +1825,123 @@ test "LZW round trips across table resets" {
     var prng: std.Random.DefaultPrng = .init(4);
     const data = try gpa.alloc(u8, 20000);
     defer gpa.free(data);
-    for (data, 0..) |*d, i| d.* = if (i % 3 == 0) prng.random().int(u8) else @truncate(i / 50);
+    // And from a minimum code size of 1, below the spec's 2, as giflib and Wuffs read it.
+    for ([_]u4{ 8, 1 }) |min_code| {
+        const mask: u8 = @intCast((@as(u16, 1) << min_code) - 1);
+        for (data, 0..) |*d, i| {
+            d.* = mask & if (i % 3 == 0) prng.random().int(u8) else @as(u8, @truncate(i / 50));
+        }
+        var out: Writer.Allocating = .init(gpa);
+        defer out.deinit();
+        try lzw(gpa, &out.writer, data, min_code);
+        // Undo the sub-blocks.
+        var stream: std.ArrayList(u8) = .empty;
+        defer stream.deinit(gpa);
+        var at: usize = 0;
+        const bytes = out.written();
+        while (at < bytes.len and bytes[at] != 0) {
+            const n: usize = bytes[at];
+            try stream.appendSlice(gpa, bytes[at + 1 ..][0..n]);
+            at += 1 + n;
+        }
+        const back = try unlzw(gpa, stream.items, min_code, data.len);
+        defer gpa.free(back);
+        try testing.expectEqualSlices(u8, data, back);
+    }
+}
+
+/// Writes a GIF frame of `indices` in the global palette of 16 colors, after a graphic
+/// control extension with `control` as its flags (transparent index 0) unless null.
+fn testGifFrame(w: *Writer, control: ?u8, rect: [4]u16, flags: u8, indices: []const u8) !void {
+    if (control) |c| try w.writeAll(&.{ 0x21, 0xf9, 4, c, 0, 0, 0, 0 });
+    try w.writeByte(0x2c);
+    for (rect) |v| try writeU16(w, v);
+    try w.writeAll(&.{ flags, 4 });
+    try lzw(testing.allocator, w, indices, 4);
+    try w.writeByte(0);
+}
+
+test "GIF: interlaced rows in place, frames disposed of, transparency for one frame" {
+    const gpa = testing.allocator;
     var out: Writer.Allocating = .init(gpa);
     defer out.deinit();
-    try lzw(gpa, &out.writer, data, 8);
-    // Undo the sub-blocks.
-    var stream: std.ArrayList(u8) = .empty;
-    defer stream.deinit(gpa);
-    var at: usize = 0;
-    const bytes = out.written();
-    while (at < bytes.len and bytes[at] != 0) {
-        const n: usize = bytes[at];
-        try stream.appendSlice(gpa, bytes[at + 1 ..][0..n]);
-        at += 1 + n;
+    const w = &out.writer;
+    // 2 by 9, color i a red of i * 10.
+    try w.writeAll("GIF89a\x02\x00\x09\x00\x83\x00\x00");
+    for (0..16) |i| try w.writeAll(&.{ @intCast(i * 10), 0, 0 });
+    // Column 0 interlaced, row y in color y; cleared after.
+    try testGifFrame(w, 2 << 2, .{ 0, 0, 1, 9 }, 0x40, &.{ 0, 8, 4, 2, 6, 1, 3, 5, 7 });
+    // (1, 0) in color 11, put back after.
+    try testGifFrame(w, 3 << 2, .{ 1, 0, 1, 1 }, 0, &.{11});
+    // (1, 1) in color 12, with index 0 transparent.
+    try testGifFrame(w, 1, .{ 1, 1, 1, 1 }, 0, &.{12});
+    // (1, 2) in color 0, with no control extension: opaque.
+    try testGifFrame(w, null, .{ 1, 2, 1, 1 }, 0, &.{0});
+    try w.writeByte(0x3b);
+    const frames = try readGif(gpa, out.written());
+    defer {
+        for (frames) |*f| f.deinit(gpa);
+        gpa.free(frames);
     }
-    const back = try unlzw(gpa, stream.items, 8, data.len);
-    defer gpa.free(back);
-    try testing.expectEqualSlices(u8, data, back);
+    try testing.expectEqual(4, frames.len);
+    for (0..9) |y| try testing.expectEqual(y * 10, frames[0].at(0, y).r);
+    try testing.expectEqual(0, frames[1].at(0, 5).a);
+    try testing.expectEqual(110, frames[1].at(1, 0).r);
+    try testing.expectEqual(0, frames[2].at(1, 0).a);
+    try testing.expectEqual(120, frames[2].at(1, 1).r);
+    try testing.expectEqual(255, frames[3].at(1, 2).a);
+}
+
+test "GIF: frames larger than the screen count toward max_pixels" {
+    const gpa = testing.allocator;
+    // A 1 by 1 screen, a 1 by 1 frame, then one of 8192 by 8192 in 12 bytes: decoded too.
+    const frames = try readGif(gpa, "GIF89a\x01\x00\x01\x00\x00\x00\x00" ++
+        "\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00" ++
+        "\x2c\x00\x00\x00\x00\x00\x20\x00\x20\x00\x02\x00;");
+    defer {
+        for (frames) |*f| f.deinit(gpa);
+        gpa.free(frames);
+    }
+    try testing.expectEqual(1, frames.len);
+}
+
+test "GIF: cut short or followed by junk, the frames before are kept" {
+    const gpa = testing.allocator;
+    var out: Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    const w = &out.writer;
+    try w.writeAll("GIF89a\x01\x00\x01\x00\x83\x00\x00");
+    for (0..16) |i| try w.writeAll(&.{ @intCast(i * 10), 0, 0 });
+    const header = out.written().len;
+    try testGifFrame(w, null, .{ 0, 0, 1, 1 }, 0, &.{5});
+    // A frame whose sub-block runs past the end, or junk where a block starts.
+    const cut = "\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x04\x05\x00";
+    for ([_][]const u8{ cut, "junk" }) |tail| {
+        const data = try std.mem.concat(gpa, u8, &.{ out.written(), tail });
+        defer gpa.free(data);
+        const frames = try readGif(gpa, data);
+        defer {
+            for (frames) |*f| f.deinit(gpa);
+            gpa.free(frames);
+        }
+        try testing.expectEqual(1, frames.len);
+        try testing.expectEqual(50, frames[0].at(0, 0).r);
+    }
+    // With no frame before, it is no GIF.
+    const data = try std.mem.concat(gpa, u8, &.{ out.written()[0..header], cut });
+    defer gpa.free(data);
+    try testing.expectError(error.InvalidImage, readGif(gpa, data));
+}
+
+test "decode reads a GIF's first frame only" {
+    const gpa = testing.allocator;
+    // A second frame too large to read: decoding them all refused the first with it.
+    const gif = "GIF89a\x01\x00\x01\x00\x00\x00\x00" ++
+        "\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x00" ++
+        "\x2c\x00\x00\x00\x00\xff\xff\xff\xff\x00\x02\x00;";
+    var img = try decode(gpa, gif);
+    img.deinit(gpa);
+    try testing.expectError(error.UnsupportedImage, readGif(gpa, gif));
 }
 
 /// Decodes testdata/jpeg/`name`.jpg and compares it with the pixels libjpeg-turbo decodes
@@ -1859,5 +2022,74 @@ test "JPEG: cut short or corrupted, an error or an image, never a crash" {
             } else |_| {}
             data[i] = saved;
         }
+    }
+}
+
+test "JPEG: more than max_pixels is refused before it is allocated" {
+    const gpa = testing.allocator;
+    // 8192 by 8193 in grayscale, with bytes enough for a bit a block.
+    const data = try gpa.alloc(u8, 140_000);
+    defer gpa.free(data);
+    @memset(data, 0);
+    const sof = "\xff\xd8\xff\xc0\x00\x0b\x08\x20\x01\x20\x00\x01\x01\x11\x00";
+    @memcpy(data[0..sof.len], sof);
+    try testing.expectError(error.UnsupportedImage, readJpeg(gpa, data));
+}
+
+test "JPEG: more scans than encoders write are refused" {
+    const gpa = testing.allocator;
+    // 8 by 8 progressive grayscale, its AC table one code, of length 1; then empty scans.
+    var data: std.ArrayList(u8) = .empty;
+    defer data.deinit(gpa);
+    try data.appendSlice(gpa, "\xff\xd8\xff\xdb\x00\x43\x00");
+    try data.appendNTimes(gpa, 1, 64);
+    try data.appendSlice(gpa, "\xff\xc2\x00\x0b\x08\x00\x08\x00\x08\x01\x01\x11\x00");
+    try data.appendSlice(gpa, "\xff\xc4\x00\x14\x10\x01");
+    try data.appendNTimes(gpa, 0, 15);
+    try data.append(gpa, 1);
+    for (0..100) |_| try data.appendSlice(gpa, "\xff\xda\x00\x08\x01\x01\x00\x01\x3f\x00");
+    var img = try readJpeg(gpa, data.items);
+    img.deinit(gpa);
+    try data.appendSlice(gpa, "\xff\xda\x00\x08\x01\x01\x00\x01\x3f\x00");
+    try testing.expectError(error.UnsupportedImage, readJpeg(gpa, data.items));
+}
+
+test "JPEG: blocks past the end of a scan's data are left blank" {
+    const gpa = testing.allocator;
+    const original = @embedFile("testdata/jpeg/rgb_33x17_444.jpg");
+    // Six bytes into the scan: the zeros after them were decoded, into noise.
+    const sos = std.mem.indexOf(u8, original, "\xff\xda").?;
+    var img = try readJpeg(gpa, original[0 .. sos + 20]);
+    defer img.deinit(gpa);
+    for (0..img.width) |x| try testing.expect(img.at(x, 16).eql(.{ .r = 128, .g = 128, .b = 128 }));
+}
+
+test "JPEG: a quantization table of a precision not 8 or 16 bits is refused" {
+    const gpa = testing.allocator;
+    // 8 by 8 progressive grayscale with a 16-bit table, its AC table one code; one scan.
+    var data: std.ArrayList(u8) = .empty;
+    defer data.deinit(gpa);
+    try data.appendSlice(gpa, "\xff\xd8\xff\xdb\x00\x83\x10");
+    for (0..64) |_| try data.appendSlice(gpa, "\x00\x01");
+    try data.appendSlice(gpa, "\xff\xc2\x00\x0b\x08\x00\x08\x00\x08\x01\x01\x11\x00");
+    try data.appendSlice(gpa, "\xff\xc4\x00\x14\x10\x01");
+    try data.appendNTimes(gpa, 0, 15);
+    try data.appendSlice(gpa, "\x01\xff\xda\x00\x08\x01\x01\x00\x01\x3f\x00\xff\xd9");
+    var img = try readJpeg(gpa, data.items);
+    img.deinit(gpa);
+    // Precision 2, read as 16 bits.
+    data.items[6] = 0x20;
+    try testing.expectError(error.InvalidImage, readJpeg(gpa, data.items));
+}
+
+test "JPEG: a sequential scan with successive approximation is refused" {
+    const gpa = testing.allocator;
+    var data = @embedFile("testdata/jpeg/rgb_33x17_444.jpg").*;
+    const sos = std.mem.indexOf(u8, &data, "\xff\xda").?;
+    const end = sos + 2 + std.mem.readInt(u16, data[sos + 2 ..][0..2], .big);
+    // Ah, then Al: both 0 outside progressive JPEG.
+    for ([_]u8{ 0x10, 0x01 }) |approximation| {
+        data[end - 1] = approximation;
+        try testing.expectError(error.InvalidImage, readJpeg(gpa, &data));
     }
 }

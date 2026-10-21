@@ -92,6 +92,19 @@ pub const RequestOptions = struct {
         try jw.endObject();
     }
 
+    /// How long the ceremony may take, in milliseconds: `timeout_ms` as a hint, the way
+    /// browsers take it, within WebAuthn's recommended range (§15.1), and its recommended
+    /// default when absent or 0. The range is 30 s to 3 min (default 2 min) when user
+    /// verification is discouraged, else 5 to 10 min (default 5 min).
+    pub fn ceremonyTimeoutMs(options: RequestOptions) u32 {
+        const min: u32, const max: u32, const default: u32 = switch (options.user_verification) {
+            .discouraged => .{ 30_000, 180_000, 120_000 },
+            .required, .preferred => .{ 300_000, 600_000, 300_000 },
+        };
+        const ms = options.timeout_ms orelse 0;
+        return if (ms == 0) default else std.math.clamp(ms, min, max);
+    }
+
     /// Parses the JSON form into `arena`.
     pub fn parseJson(arena: Allocator, json: []const u8) JsonObject.Error!RequestOptions {
         const object: JsonObject = try .parse(arena, json);
@@ -280,6 +293,37 @@ fn writeCcdString(writer: *Io.Writer, text: []const u8) Io.Writer.Error!void {
     try writer.writeByte('"');
 }
 
+/// The RP ID a client may ask for on behalf of `origin` (WebAuthn §5.1.4.1): `rp_id` when it
+/// is the origin's host or a domain the host is under, the host when `rp_id` is null, else
+/// null, as for an `https://evil.example` that asks for `bank.example`. Hosts compare
+/// without case; an IP address (IPv6 in brackets) is only its own RP ID.
+// shortcut: no public suffix list, so a suffix with a dot in it (`co.uk`) passes for its
+// origins (single labels such as `com` are refused); upgrade if a caller needs it refused.
+pub fn rpIdFor(rp_id: ?[]const u8, origin: []const u8) ?[]const u8 {
+    const scheme_end = std.mem.indexOf(u8, origin, "://") orelse return null;
+    const rest = origin[scheme_end + 3 ..];
+    const ipv6 = std.mem.startsWith(u8, rest, "[");
+    const host = if (ipv6) host: {
+        const close = std.mem.indexOfScalar(u8, rest, ']') orelse return null;
+        const after = rest[close + 1 ..];
+        if (after.len > 0 and after[0] != ':' and after[0] != '/') return null;
+        break :host rest[1..close];
+    } else rest[0 .. std.mem.indexOfAny(u8, rest, ":/") orelse rest.len];
+    if (host.len == 0) return null;
+    const id = rp_id orelse return host;
+    if (std.ascii.eqlIgnoreCase(host, id)) return id;
+    // A host whose last label is a number is an IPv4 address, as URLs parse it.
+    const last = host[if (std.mem.lastIndexOfScalar(u8, host, '.')) |dot| dot + 1 else 0..];
+    const ipv4 = last.len > 0 and for (last) |c| {
+        if (!std.ascii.isDigit(c)) break false;
+    } else true;
+    if (ipv6 or ipv4 or std.mem.indexOfScalar(u8, id, '.') == null or host.len <= id.len) {
+        return null;
+    }
+    const dot = host.len - id.len - 1;
+    return if (host[dot] == '.' and std.ascii.eqlIgnoreCase(host[dot + 1 ..], id)) id else null;
+}
+
 /// What the relying party expects of an assertion.
 pub const Expected = struct {
     ceremony: Ceremony = .get,
@@ -301,7 +345,7 @@ pub const VerifyError = JsonObject.Error || error{
     OriginMismatch,
     /// `crossOrigin` is true and that was not allowed.
     CrossOrigin,
-    /// The authenticator data is shorter than 37 bytes.
+    /// The authenticator data is shorter than 37 bytes, or malformed.
     InvalidAuthenticatorData,
     /// The authenticator data is for another RP ID.
     RpIdMismatch,
@@ -373,10 +417,10 @@ pub const AuthenticatorData = struct {
     }
 };
 
-/// Every check of WebAuthn §7.2 that needs no stored state: client data, RP ID hash,
-/// user presence, and user verification when `expected` requires it. The signature
-/// over `authenticator_data ++ SHA-256(client_data_json)` and the signature counter are
-/// left to the caller, who holds the public key and the last count.
+/// Every check of WebAuthn §7.2 that needs no stored state: client data, RP ID hash, the
+/// backup flags, user presence, and user verification when `expected` requires it. The
+/// signature over `authenticator_data ++ SHA-256(client_data_json)` and the signature
+/// counter are left to the caller, who holds the public key and the last count.
 pub fn verifyAssertion(
     arena: Allocator,
     assertion: Assertion,
@@ -385,6 +429,10 @@ pub fn verifyAssertion(
     try verifyClientData(arena, assertion.client_data_json, expected);
     const data: AuthenticatorData = try .parse(assertion.authenticator_data);
     try data.checkRpId(expected.rp_id);
+    // Backed up (BS) but not eligible for backup (BE): no authenticator says that.
+    if (data.flags.backed_up and !data.flags.backup_eligible) {
+        return error.InvalidAuthenticatorData;
+    }
     if (!data.flags.user_present) return error.UserNotPresent;
     if (expected.user_verification == .required and !data.flags.user_verified) {
         return error.UserNotVerified;
@@ -423,6 +471,16 @@ pub const PublicKey = union(enum) {
                 continue;
             }
             const label = reader.int() catch return error.InvalidPublicKey;
+            // A repeated label is not CBOR, and parsers differ on which value counts.
+            const repeated = switch (label) {
+                1 => kty != null,
+                3 => alg != null,
+                -1 => crv != null,
+                -2 => x != null,
+                -3 => y != null,
+                else => false,
+            };
+            if (repeated) return error.InvalidPublicKey;
             switch (label) {
                 1 => kty = reader.int() catch return error.InvalidPublicKey,
                 3 => alg = reader.int() catch return error.InvalidPublicKey,
@@ -440,7 +498,8 @@ pub const PublicKey = union(enum) {
         const p256 = 1;
         const ed25519 = 6;
         const x_bytes = x orelse return error.InvalidPublicKey;
-        if (kty == ec2 and alg orelse es256 == es256 and crv == p256) {
+        // WebAuthn requires `alg`.
+        if (kty == ec2 and alg == es256 and crv == p256) {
             const y_bytes = y orelse return error.InvalidPublicKey;
             if (x_bytes.len != 32 or y_bytes.len != 32) return error.InvalidPublicKey;
             var point: [65]u8 = undefined;
@@ -450,7 +509,7 @@ pub const PublicKey = union(enum) {
             _ = EcdsaP256.PublicKey.fromSec1(&point) catch return error.InvalidPublicKey;
             return .{ .es256 = point };
         }
-        if (kty == okp and alg orelse eddsa == eddsa and crv == ed25519) {
+        if (kty == okp and alg == eddsa and crv == ed25519) {
             if (x_bytes.len != Ed25519.PublicKey.encoded_length) return error.InvalidPublicKey;
             return .{ .ed25519 = x_bytes[0..Ed25519.PublicKey.encoded_length].* };
         }
@@ -594,18 +653,27 @@ pub const AttestedCredential = struct {
     public_key: []const u8,
 };
 
-/// Reads the attested credential data that follows the fixed part of `bytes`.
+/// Reads the attested credential data that follows the fixed part of `bytes`, and checks
+/// that nothing follows it but the extensions the ED flag announces.
 pub fn attestedCredential(bytes: []const u8) error{InvalidAuthenticatorData}!AttestedCredential {
     const data: AuthenticatorData = try .parse(bytes);
     if (!data.flags.attested_credential_data) return error.InvalidAuthenticatorData;
     const rest = bytes[AuthenticatorData.min_len..];
     if (rest.len < 18) return error.InvalidAuthenticatorData;
     const id_len = std.mem.readInt(u16, rest[16..18], .big);
-    if (rest.len - 18 < id_len) return error.InvalidAuthenticatorData;
-    const key = rest[18 + id_len ..];
+    const from_id = rest[18..];
+    // 1023: WebAuthn's longest credential ID.
+    if (id_len > 1023 or from_id.len < id_len) return error.InvalidAuthenticatorData;
+    const key = from_id[id_len..];
     var reader: cbor.Reader = .{ .bytes = key };
     reader.skip() catch return error.InvalidAuthenticatorData;
-    return .{ .aaguid = rest[0..16].*, .id = rest[18..][0..id_len], .public_key = key[0..reader.pos] };
+    const key_len = reader.pos;
+    if (data.flags.extension_data) {
+        if ((reader.peek() catch null) != .map) return error.InvalidAuthenticatorData;
+        reader.skip() catch return error.InvalidAuthenticatorData;
+    }
+    if (!reader.atEnd()) return error.InvalidAuthenticatorData;
+    return .{ .aaguid = rest[0..16].*, .id = from_id[0..id_len], .public_key = key[0..key_len] };
 }
 
 /// A `PublicKeyCredential` carrying an `AuthenticatorAttestationResponse`.
@@ -618,9 +686,22 @@ pub const Registration = struct {
     /// The CBOR attestation object, for a relying party that checks attestation.
     attestation_object: []const u8,
 
-    /// What the relying party keeps: the public key and the first signature count. The
-    /// caller still checks clientDataJSON (type `webauthn.create`, challenge, origin).
-    pub fn credential(r: Registration) (PublicKey.Error || error{InvalidAuthenticatorData})!Credential {
+    /// What the relying party keeps: the public key and the first signature count, once
+    /// the checks of WebAuthn §7.1 that need no stored state pass, as `verifyAssertion`
+    /// makes them (`expected.ceremony` is taken as `create`). Attestation is not checked.
+    pub fn credential(
+        r: Registration,
+        arena: Allocator,
+        expected: Expected,
+    ) (VerifyError || PublicKey.Error)!Credential {
+        var create = expected;
+        create.ceremony = .create;
+        try verifyAssertion(arena, .{
+            .raw_id = r.raw_id,
+            .client_data_json = r.client_data_json,
+            .authenticator_data = r.authenticator_data,
+            .signature = "",
+        }, create);
         const attested = try attestedCredential(r.authenticator_data);
         if (!std.mem.eql(u8, attested.id, r.raw_id)) return error.InvalidAuthenticatorData;
         const data: AuthenticatorData = try .parse(r.authenticator_data);
@@ -713,6 +794,28 @@ test "RequestOptions JSON round trip" {
     const transports = back.allow_credentials[0].transports;
     try std.testing.expectEqualSlices(Transport, &.{ .usb, .smart_card }, transports);
     try std.testing.expectEqual(.required, back.user_verification);
+}
+
+test "RequestOptions.ceremonyTimeoutMs: the request's timeout as a hint" {
+    const timeout = struct {
+        fn ms(given: ?u32, verification: UserVerification) u32 {
+            const options: RequestOptions = .{
+                .challenge = "",
+                .timeout_ms = given,
+                .user_verification = verification,
+            };
+            return options.ceremonyTimeoutMs();
+        }
+    }.ms;
+    const eq = std.testing.expectEqual;
+    try eq(300_000, timeout(null, .preferred));
+    try eq(300_000, timeout(0, .required));
+    try eq(300_000, timeout(20, .preferred));
+    try eq(450_000, timeout(450_000, .preferred));
+    try eq(600_000, timeout(std.math.maxInt(u32), .required));
+    try eq(120_000, timeout(null, .discouraged));
+    try eq(30_000, timeout(1, .discouraged));
+    try eq(180_000, timeout(999_999, .discouraged));
 }
 
 test "RequestOptions.parseJson defaults and refusals" {
@@ -854,6 +957,10 @@ test "verifyAssertion and the challenge check" {
     case = good;
     case.flags = 0;
     try e(error.UserNotPresent, case.verify(a));
+    case.flags = 0x11; // backed up, not eligible for backup
+    try e(error.InvalidAuthenticatorData, case.verify(a));
+    case.flags = 0x19;
+    try case.verify(a);
     case = good;
     case.expected.user_verification = .required;
     try e(error.UserNotVerified, case.verify(a));
@@ -864,6 +971,36 @@ test "verifyAssertion and the challenge check" {
     short.authenticator_data = short.authenticator_data[0..10];
     try e(error.InvalidAuthenticatorData, verifyAssertion(a, short, expected));
     try e(error.InvalidJson, verifyClientData(a, "not json", expected));
+}
+
+test rpIdFor {
+    const eq = std.testing.expectEqualStrings;
+    try eq("example.com", rpIdFor(null, "https://example.com").?);
+    try eq("a.example", rpIdFor(null, "https://a.example:8443/x").?);
+    try eq("example.com", rpIdFor("example.com", "https://example.com").?);
+    try eq("example.com", rpIdFor("example.com", "https://login.example.com:8443").?);
+    try std.testing.expectEqual(null, rpIdFor("bank.example", "https://evil.example"));
+    try std.testing.expectEqual(null, rpIdFor("example.com", "https://notexample.com"));
+    try std.testing.expectEqual(null, rpIdFor("login.example.com", "https://example.com"));
+    try std.testing.expectEqual(null, rpIdFor("", "https://example.com"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://"));
+    try std.testing.expectEqual(null, rpIdFor(null, "example.com"));
+    // Hosts compare without case.
+    try eq("Example.COM", rpIdFor("Example.COM", "https://login.example.com").?);
+    try eq("example.com", rpIdFor("example.com", "https://EXAMPLE.com").?);
+    // A label alone is not a parent domain to claim; `localhost` is its own host.
+    try std.testing.expectEqual(null, rpIdFor("com", "https://x.example.com"));
+    try eq("localhost", rpIdFor("localhost", "http://localhost:8080").?);
+    // An IP address is only its own RP ID, IPv6 in brackets.
+    try eq("10.0.0.1", rpIdFor(null, "https://10.0.0.1:8443").?);
+    try eq("10.0.0.1", rpIdFor("10.0.0.1", "https://10.0.0.1").?);
+    try std.testing.expectEqual(null, rpIdFor("0.0.1", "https://10.0.0.1"));
+    try eq("::1", rpIdFor(null, "https://[::1]:8443").?);
+    try eq("::1", rpIdFor("::1", "https://[::1]/x").?);
+    try std.testing.expectEqual(null, rpIdFor("0.1", "https://[::10.0.0.1]"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://[::1"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://[::1]x"));
+    try std.testing.expectEqual(null, rpIdFor(null, "https://[]"));
 }
 
 test "AuthenticatorData.parse" {
@@ -879,39 +1016,97 @@ test "AuthenticatorData.parse" {
 }
 
 test "a registration's credential: ID, COSE key, and first count" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
     const point = EcdsaP256.KeyPair.generate(std.testing.io).public_key.toUncompressedSec1();
     const cose = testCoseEs256(point);
     const id = "credential-7";
-    var bytes: [AuthenticatorData.min_len + 18 + id.len + cose.len + 2]u8 = @splat(0);
-    bytes[32] = 0x45; // user present and verified, attested credential data
+    var bytes: [AuthenticatorData.min_len + 18 + id.len + cose.len + 1]u8 = @splat(0);
+    Sha256.hash("example.com", bytes[0..32], .{});
+    bytes[32] = 0xc5; // user present and verified, attested credential and extension data
     std.mem.writeInt(u32, bytes[33..37], 3, .big);
     bytes[37] = 0xaa; // first byte of the AAGUID
     std.mem.writeInt(u16, bytes[53..55], id.len, .big);
     @memcpy(bytes[55..][0..id.len], id);
     @memcpy(bytes[55 + id.len ..][0..cose.len], &cose);
-    bytes[bytes.len - 2] = 0xa0; // an extensions map after the key: not part of it
+    bytes[bytes.len - 1] = 0xa0; // an extensions map after the key: not part of it
     const attested = try attestedCredential(&bytes);
     try std.testing.expectEqual(0xaa, attested.aaguid[0]);
     try std.testing.expectEqualStrings(id, attested.id);
     try std.testing.expectEqualSlices(u8, &cose, attested.public_key);
 
+    const challenge = "0123456789abcdef";
+    const origin = "https://example.com";
+    var client: Io.Writer.Allocating = .init(a);
+    const data: ClientData = .{ .ceremony = .create, .challenge = challenge, .origin = origin };
+    try data.writeJson(&client.writer);
     const registration: Registration = .{
         .raw_id = id,
-        .client_data_json = "{}",
+        .client_data_json = client.written(),
         .authenticator_data = &bytes,
         .attestation_object = &.{},
     };
-    const credential = try registration.credential();
+    const rp_id = "example.com";
+    const expected: Expected = .{ .challenge = challenge, .origin = origin, .rp_id = rp_id };
+    const credential = try registration.credential(a, expected);
     try std.testing.expectEqualSlices(u8, &point, &credential.public_key.es256);
     try std.testing.expectEqual(3, credential.sign_count);
 
+    const e = std.testing.expectError;
     var other = registration;
     other.raw_id = "another";
-    try std.testing.expectError(error.InvalidAuthenticatorData, other.credential());
+    try e(error.InvalidAuthenticatorData, other.credential(a, expected));
+    // Made for another RP, without the user's touch, or with an assertion's client data.
+    var elsewhere = expected;
+    elsewhere.rp_id = "evil.example";
+    try e(error.RpIdMismatch, registration.credential(a, elsewhere));
+    bytes[32] = 0xc4;
+    try e(error.UserNotPresent, registration.credential(a, expected));
+    bytes[32] = 0xc1;
+    var verified = expected;
+    verified.user_verification = .required;
+    try e(error.UserNotVerified, registration.credential(a, verified));
+    other = registration;
+    var get: Io.Writer.Allocating = .init(a);
+    try (ClientData{ .challenge = challenge, .origin = origin }).writeJson(&get.writer);
+    other.client_data_json = get.written();
+    try e(error.WrongCeremony, other.credential(a, expected));
     bytes[32] = 0x05; // no attested credential data
     try std.testing.expectError(error.InvalidAuthenticatorData, attestedCredential(&bytes));
     bytes[32] = 0x45;
     try std.testing.expectError(error.InvalidAuthenticatorData, attestedCredential(bytes[0..60]));
+}
+
+test "attestedCredential refuses what the flags do not announce, and long IDs" {
+    const e = std.testing.expectError;
+    const cose = testCoseEd25519(@splat(9));
+    var bytes: [AuthenticatorData.min_len + 18 + cose.len + 1]u8 = @splat(0);
+    @memcpy(bytes[55..][0..cose.len], &cose);
+    bytes[bytes.len - 1] = 0xa0;
+    bytes[32] = 0x41; // attested credential data, then an extensions map ED does not announce
+    try e(error.InvalidAuthenticatorData, attestedCredential(&bytes));
+    const plain = try attestedCredential(bytes[0 .. bytes.len - 1]);
+    try std.testing.expectEqual(cose.len, plain.public_key.len);
+    bytes[32] = 0xc1; // ED, and no extensions after the key
+    try e(error.InvalidAuthenticatorData, attestedCredential(bytes[0 .. bytes.len - 1]));
+    bytes[bytes.len - 1] = 0x80; // extensions that are not a map
+    try e(error.InvalidAuthenticatorData, attestedCredential(&bytes));
+
+    // A 65535-byte ID overflowed the offset of the key (in 16 bits) after it.
+    const gpa = std.testing.allocator;
+    const long = try gpa.alloc(u8, AuthenticatorData.min_len + 18 + 0xffff + 1);
+    defer gpa.free(long);
+    @memset(long, 0);
+    long[32] = 0x41;
+    long[long.len - 1] = 0xa0;
+    for ([_]u16{ 0xffff, 1024 }) |id_len| {
+        std.mem.writeInt(u16, long[53..55], id_len, .big);
+        const end = 55 + @as(usize, id_len) + 1;
+        try e(error.InvalidAuthenticatorData, attestedCredential(long[0..end]));
+    }
+    std.mem.writeInt(u16, long[53..55], 1023, .big);
+    try std.testing.expectEqual(1023, (try attestedCredential(long[0 .. 55 + 1023 + 1])).id.len);
 }
 
 test "CreationOptions.parseJson: what a relying party sends" {
@@ -1103,4 +1298,12 @@ test "PublicKey.fromCose refusals" {
     // Trailing bytes after the map.
     const ed_cose = testCoseEd25519(@splat(0)) ++ [_]u8{0};
     try e(error.InvalidPublicKey, PublicKey.fromCose(&ed_cose));
+    // {1: 1, 3: -8, -1: 6, -2: x, -2: x'}: which x a parser takes differs.
+    const x2 = [_]u8{ 0x21, 0x58, 0x20 } ++ @as([32]u8, @splat(2));
+    var twice = testCoseEd25519(@splat(1)) ++ x2;
+    twice[0] = 0xa6;
+    try e(error.InvalidPublicKey, PublicKey.fromCose(&twice));
+    // {1: 1, -1: 6, -2: x}: no `alg`.
+    const no_alg = [_]u8{ 0xa3, 0x01, 0x01, 0x20, 0x06, 0x21, 0x58, 0x20 } ++ x2[3..].*;
+    try e(error.UnsupportedAlgorithm, PublicKey.fromCose(&no_alg));
 }
