@@ -484,9 +484,10 @@ From a review before the repository went public:
 - Argon2's working memory, from which an encrypted file's key could be derived again, is
   unmapped once the key is made instead of staying (64 MiB, unwiped) in the file's arena
   for as long as the `Config` lives.
-- With a profile active, the values an encrypted file holds under `profiles.<name>` are
-  redacted where the profile puts them; `cfg show --profile prod` printed them. Those keys
-  are now secret whatever sets them, as with `--secret`.
+- With a profile active, what is secret under `profiles.<name>` (an encrypted file's
+  values, `${secret:...}`, `--secret profiles.prod.db`) is secret where the profile puts
+  it too; `cfg show --profile prod` and `cfg explain` printed it. Those keys then stay
+  secret whatever sets them.
 - `encrypted.encrypt` and `cfg encrypt --passphrase ''` refuse an empty passphrase
   (`error.EmptyPassphrase`), which made a file anyone could open.
 - Cancelling during an encrypted file's key derivation is `error.Canceled`, not

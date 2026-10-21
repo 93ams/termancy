@@ -720,14 +720,9 @@ fn readFile(
         // Parsers may borrow strings from the text, which is about to be wiped.
         tree = try tree.clone(a);
         source = "";
-        // Everything in an encrypted file is treated as secret, a profile's values also
-        // where `useProfile` puts them.
+        // Everything in an encrypted file is treated as secret.
         var leaves: std.ArrayList([]const u8) = .empty;
         try tree.leafPaths(a, "", &leaves);
-        const profiles = if (tree == .table) tree.table.get(config.profiles_key) else null;
-        if (profiles) |table| if (table == .table) for (table.table.values()) |profile| {
-            try profile.leafPaths(a, "", &leaves);
-        };
         for (leaves.items) |leaf| try config.markSecret(leaf);
     }
     try config.expandSecrets(io, a, &tree, diag);
@@ -1492,6 +1487,7 @@ pub fn resolve(config: *Config) Allocator.Error!Value {
                     const folded = try config.foldTree(a, selected);
                     try config.mergeInto(a, &result, folded);
                     config.derived_profile = folded;
+                    try config.carrySecrets(name, selected);
                 }
                 try config.recordProfile(name, selected: {
                     break :selected profiles.table.get(name) orelse Value.empty_table;
@@ -1836,6 +1832,28 @@ fn overlay(config: *Config, result: *Value, layer: Layer) Allocator.Error!void {
     for (leaves.items) |leaf| {
         const origin: Origin = .{ .layer = layer, .source = sources.get(leaf) orelse "" };
         try config.origins.put(a, try config.foldKey(leaf), origin);
+    }
+}
+
+/// Marks secret where the profile `name` puts them the keys that are secret under
+/// `profiles.<name>`, or all of its keys when the profile (or every profile) is secret.
+/// shortcut: they stay secret once another profile is chosen, which only over-redacts.
+fn carrySecrets(config: *Config, name: []const u8, selected: Value) Allocator.Error!void {
+    const a = config.cache.allocator();
+    const prefix = try path.join(a, config.profiles_key, name);
+    var carried: std.ArrayList([]const u8) = .empty;
+    for (config.secrets.keys()) |secret| {
+        if (isUnder(prefix, secret)) {
+            if (selected != .table) continue;
+            for (selected.table.keys()) |key| try carried.append(a, try path.join(a, "", key));
+        } else if (isUnder(secret, prefix)) {
+            try carried.append(a, secret[prefix.len + 1 ..]);
+        }
+    }
+    // Not `markSecret`: the tree being built is what it would invalidate.
+    const keep = config.arena.allocator();
+    for (carried.items) |key| {
+        if (!config.secrets.contains(key)) try config.secrets.put(keep, try keep.dupe(u8, key), {});
     }
 }
 
@@ -3392,6 +3410,43 @@ test "references stop adding text at max_expanded_len" {
     try testing.expectError(error.BadReference, config.checkReferences(&diag));
     try testing.expectEqualStrings("expanded value is too long", diag.message);
     try testing.expectEqualStrings("${k22}${k22}", (try config.get("k23")).?.string);
+}
+
+test "what is secret in a profile is secret where the profile puts it" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = testing.io;
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    try environ.put("API_TOKEN", "t0k3n");
+    const source =
+        \\[profiles.prod]
+        \\token = "${secret:env:API_TOKEN}"
+        \\[profiles.prod.db]
+        \\password = "hunter2"
+        \\[profiles.test.db]
+        \\password = "hunter3"
+        \\
+    ;
+    try tmp.dir.writeFile(io, .{ .sub_path = "app.toml", .data = source });
+    for ([_][]const u8{ "prod", "test" }) |profile| {
+        var config: Config = .init(testing.allocator);
+        defer config.deinit();
+        config.useEnv(&environ);
+        try config.loadFile(io, tmp.dir, "app.toml", null, null);
+        // Marked one key at a time, and a whole profile.
+        try config.markSecret("profiles.prod.db.password");
+        try config.markSecret("profiles.test");
+        try config.useProfile(profile);
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        try config.write(&out.writer, .json, .{});
+        for ([_][]const u8{ "t0k3n", "hunter2", "hunter3" }) |secret| {
+            try testing.expect(std.mem.indexOf(u8, out.written(), secret) == null);
+        }
+        // `cfg explain` asks this way.
+        try testing.expect(config.isSecret("db.password") or config.isSecret("db"));
+    }
 }
 
 test "secret references resolve at load and are redacted" {
