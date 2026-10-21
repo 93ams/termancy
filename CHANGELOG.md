@@ -166,6 +166,20 @@ git history.
 
 ### Added
 
+- **`termancy ui input`, `write`, and `confirm` work as gum's:** `input` takes `--width` (text
+  wider scrolls sideways), `--cursor.mode blink|static|hide` (the terminal's own cursor), and
+  its value from standard input when piped; `write` submits with enter, starts a line with
+  ctrl+j or alt+enter, opens the text in `$EDITOR` with ctrl+e, wraps lines at `--width`,
+  and takes `--show-line-numbers`, `--show-cursor-line`, `--max-lines`, and a value from
+  standard input; `confirm` takes `--show-output`, `--timeout` (the highlighted answer, not
+  an error), `--default=false` and `--no-default` beside `--default no`, an empty
+  `--negative` for one button, and `q` for no. All three take `--header`, `--padding`,
+  `--show-help`, style groups (`--cursor.foreground`, `--selected.background`,
+  `--line-number.foreground`), and `TERMANCY_INPUT_*`, `TERMANCY_WRITE_*`, and
+  `TERMANCY_CONFIRM_*` variables. Components: `input`'s `width` and `scroll`;
+  `textarea`'s `width` (lines wrap, up and down move by rows), `max_lines`,
+  `end_of_buffer`, `cursor_line` styles, and `cursorPosition`; `confirm`'s ctrl+n/ctrl+p,
+  `q`, and an empty `negative`. `sys.process.editText` takes `.at`.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set

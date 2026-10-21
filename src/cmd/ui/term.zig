@@ -235,42 +235,22 @@ pub fn writeStyled(
     try tui.ansi.downsample(w, text, color);
 }
 
-/// A model with a line of text above it, for components that have no header of their own.
-pub fn Headed(comptime Inner: type) type {
-    return struct {
-        header: []const u8,
-        inner: Inner,
-        style: tui.Style = .{ .fg = .{ .indexed = 99 }, .bold = true },
-
-        const Self = @This();
-
-        pub fn update(model: *Self, msg: tui.Msg) tui.Cmd {
-            return model.inner.update(msg);
-        }
-
-        pub fn view(model: *const Self, w: *Io.Writer) Io.Writer.Error!void {
-            if (model.header.len > 0) {
-                try model.style.paint(w, model.header);
-                try w.writeByte('\n');
-            }
-            try model.inner.view(w);
-        }
-    };
-}
-
 /// The keys the help line under a component shows (`--show-help`), in `tui.Keymap`'s
 /// look: `↑/↓ navigate • enter submit`. Only for showing: every action is `.hint`.
 pub const Hints = tui.Keymap(enum { hint });
 pub const Hint = Hints.Binding;
 
-/// `Inner` with what gum puts around every component: below it, after a blank line, the
-/// help line of its keys (`--show-help`); around it all, `--padding`. The component sees
-/// the terminal narrower by the padding, so it cuts its rows to fit.
+/// `Inner` with what gum puts around every component: above it, `--header`; below it,
+/// after a blank line, the help line of its keys (`--show-help`); around it all,
+/// `--padding`. The component sees the terminal narrower by the padding, so it cuts its
+/// rows to fit. The inner model's `cursor` and `handoff`, when it has them, go through.
 pub fn Framed(comptime Inner: type) type {
     return struct {
         inner: Inner,
         /// For laying the view out.
         gpa: std.mem.Allocator,
+        /// Above the component, laid out already (`styles.render`); none when empty.
+        header: []const u8 = "",
         /// `--padding`.
         padding: tui.Style.Sides = .{},
         /// The help line; none when empty (`--no-show-help`).
@@ -298,6 +278,7 @@ pub fn Framed(comptime Inner: type) type {
         pub fn view(model: *const Self, w: *Io.Writer) Io.Writer.Error!void {
             var body: Io.Writer.Allocating = .init(model.gpa);
             defer body.deinit();
+            if (model.header.len > 0) try body.writer.print("{s}\n", .{model.header});
             try model.inner.view(&body.writer);
             // The program ignores a final line break; so must the help line below.
             const text = body.written();
@@ -310,6 +291,23 @@ pub fn Framed(comptime Inner: type) type {
             if (std.meta.eql(model.padding, .{})) return w.writeAll(body.written());
             const style: tui.Style = .{ .padding = model.padding };
             try style.render(w, body.written());
+        }
+
+        /// The inner model's cursor, moved below the header and inside the padding.
+        pub fn cursor(model: *const Self) ?tui.Cursor {
+            if (!@hasDecl(Inner, "cursor")) return null;
+            var at = model.inner.cursor() orelse return null;
+            const header_rows = if (model.header.len == 0)
+                0
+            else
+                std.mem.count(u8, model.header, "\n") + 1;
+            at.x += model.padding.left;
+            at.y += model.padding.top + header_rows;
+            return at;
+        }
+
+        pub fn handoff(model: *Self, io: Io, id: u32) tui.Cmd {
+            return if (@hasDecl(Inner, "handoff")) model.inner.handoff(io, id) else .none;
         }
 
         pub fn deinit(model: *Self) void {
@@ -369,22 +367,33 @@ test writeStyled {
     try testing.expectEqualStrings("x\x1b[1;91my\x1b[0m", w.buffered());
 }
 
-test Headed {
-    const Static = struct {
-        pub fn update(_: *@This(), _: tui.Msg) tui.Cmd {
-            return .quit;
+test "Framed: the header above, and the inner cursor and handoff go through" {
+    const Field = struct {
+        edits: u32 = 0,
+        pub fn update(_: *@This(), msg: tui.Msg) tui.Cmd {
+            return if (msg == .key and msg.key.matches("e")) .handoff(1) else .none;
         }
         pub fn view(_: *const @This(), w: *Io.Writer) Io.Writer.Error!void {
-            try w.writeAll("body");
+            try w.writeAll("> ab");
+        }
+        pub fn cursor(_: *const @This()) ?tui.Cursor {
+            return .{ .x = 4, .y = 0 };
+        }
+        pub fn handoff(m: *@This(), _: Io, _: u32) tui.Cmd {
+            m.edits += 1;
+            return .none;
         }
     };
-    var d: tui.testing.Driver(Headed(Static)) = try .init(
-        testing.allocator,
-        .{ .header = "Title", .inner = .{} },
-        .{},
-    );
+    var d: tui.testing.Driver(Framed(Field)) = try .init(testing.allocator, .{
+        .inner = .{},
+        .gpa = testing.allocator,
+        .header = "Two\nlines",
+        .padding = .{ .top = 1, .left = 2 },
+    }, .{});
     defer d.deinit();
-    try d.expectFrame("Title\nbody");
-    try d.press("x");
-    try testing.expect(d.done());
+    try d.expectFrame("       \n  Two  \n  lines\n  > ab ");
+    try testing.expectEqual(3, d.screen.row);
+    try testing.expectEqual(6, d.screen.column);
+    try d.press("e");
+    try testing.expectEqual(1, d.model().inner.edits);
 }

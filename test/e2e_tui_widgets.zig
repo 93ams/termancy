@@ -292,6 +292,14 @@ const cases = [_]Case{
             usage("spin"),
         .status = 2,
     },
+    // input/write/confirm (gum parity)
+    .{
+        .name = "confirm --default that is not an answer",
+        .args = &.{ "ui", "confirm", "--default", "maybe" },
+        .stderr = "termancy: invalid value \"maybe\" for flag --default: expected yes|no\n" ++
+            usage("confirm"),
+        .status = 2,
+    },
 };
 
 /// Cases run with no controlling terminal (under `setsid`).
@@ -475,9 +483,10 @@ const pty_cases = [_]PtyCase{
     },
     .{ .name = "input: esc", .command = "\"$TERMANCY\" ui input", .keys = "abc\\033", .status = 1 },
     .{
-        .name = "write: lines until Ctrl-D",
+        // alt+enter starts a line (enter would submit, as gum's); Ctrl-D submits too.
+        .name = "write: alt+enter, then Ctrl-D",
         .command = "\"$TERMANCY\" ui write",
-        .keys = "one\\rtwo\\004",
+        .keys = "one\\033\\rtwo\\004",
         .stdout = "one\ntwo\n",
     },
     .{
@@ -628,6 +637,86 @@ const pty_cases = [_]PtyCase{
         .keys = "x\\r",
         .wait_for = "What now?",
         .stdout = "a = 1\n",
+        .status = 1,
+    },
+    // input/write/confirm (gum parity)
+    .{
+        .name = "input: the value from standard input",
+        .command = "printf '  piped value\\n' | \"$TERMANCY\" ui input",
+        .keys = "!\\r",
+        .stdout = "piped value!\n",
+    },
+    .{
+        // The dots are drawn before enter is typed.
+        .name = "input --password shows dots",
+        .command = "\"$TERMANCY\" ui input --password --no-show-help",
+        .keys = "s3cret",
+        .then_wait_for = "••••••",
+        .then_keys = "\\r",
+        .stdout = "s3cret\n",
+    },
+    .{
+        // The interface goes to the terminal; only the answer is captured.
+        .name = "input in $(...): only the result",
+        .command = "x=$(\"$TERMANCY\" ui input --header Name); printf '[%s]\\n' \"$x\"",
+        .keys = "Ada\\r",
+        .stdout = "[Ada]\n",
+    },
+    .{
+        .name = "input: flags from TERMANCY_INPUT_* variables",
+        .command = "\"$TERMANCY\" ui input",
+        .keys = " there\\r",
+        .env = &.{.{ "TERMANCY_INPUT_VALUE", "hi" }},
+        .stdout = "hi there\n",
+    },
+    .{
+        // Enter submits, as gum's.
+        .name = "write: the value from standard input, enter submits",
+        .command = "printf 'line one\\r\\nline two\\n' | \"$TERMANCY\" ui write",
+        .keys = "\\r",
+        .stdout = "line one\nline two\n",
+    },
+    .{
+        .name = "write: ctrl+e edits the text in $EDITOR",
+        .command = "EDITOR=\"sh $PWD/append.sh\" \"$TERMANCY\" ui write --value one",
+        .keys = "\\005",
+        .then_wait_for = "appended-line",
+        .then_keys = "\\r",
+        .stdout = "one\nappended-line\n",
+    },
+    .{
+        .name = "write --show-line-numbers --max-lines 2",
+        .command = "\"$TERMANCY\" ui write --show-line-numbers --max-lines 2",
+        .keys = "a\\033\\rb\\033\\rc\\r",
+        .stdout = "a\nbc\n",
+    },
+    .{
+        // gum's timeout: no error, the answer highlighted (the default) is taken.
+        .name = "confirm --timeout takes the default, yes",
+        .command = "sh -c '\"$TERMANCY\" ui confirm --timeout 100ms 2>&1'",
+        .keys = "",
+    },
+    .{
+        .name = "confirm --timeout takes the default, no",
+        .command = "sh -c '\"$TERMANCY\" ui confirm --default=false --timeout 100ms 2>&1'",
+        .keys = "",
+        .status = 1,
+    },
+    .{
+        .name = "confirm --show-output",
+        .command = "\"$TERMANCY\" ui confirm --show-output --affirmative Ship 'Deploy?'",
+        .keys = "y",
+        .stdout = "Deploy? Ship\n",
+    },
+    .{
+        .name = "confirm: flags from TERMANCY_CONFIRM_* variables",
+        .command = "\"$TERMANCY\" ui confirm",
+        .keys = "\\r",
+        .env = &.{
+            .{ "TERMANCY_CONFIRM_DEFAULT", "false" },
+            .{ "TERMANCY_CONFIRM_SHOW_OUTPUT", "1" },
+        },
+        .stdout = "Are you sure? No\n",
         .status = 1,
     },
 };
