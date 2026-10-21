@@ -127,7 +127,8 @@ The commands share gum's conventions, each where it applies:
   is. `--height 0`, the default, fills the terminal; `--reverse` puts the query at the bottom;
   `--width` caps the columns. `--indicator`, `--selected-prefix`, `--unselected-prefix`,
   `--value`, `--placeholder`, `--prompt`, `--selected`, and `--select-if-one` (on the matches
-  of `--value`) as gum's.
+  of `--value`) as gum's. With `ACCESSIBLE=1`, it asks for the query, then numbers the
+  matches.
 
 ```sh
 color=$(termancy ui choose --label-delimiter : "Red:#f00" "Green:#0f0" "Blue:#00f")

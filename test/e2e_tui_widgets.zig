@@ -719,6 +719,24 @@ const pty_cases = [_]PtyCase{
         .wait_for = "Number (1-3, enter for 2)",
         .stdout = "2\n",
     },
+    .{
+        // A query that matches nothing is asked again; then the matches are numbered.
+        .name = "ACCESSIBLE: filter, strict",
+        .command = "printf 'apple\\nbanana\\ncherry\\n' | \"$TERMANCY\" ui filter",
+        .keys = "zz\\ra\\r2\\r",
+        .env = &accessible,
+        .wait_for = "Filter",
+        .stdout = "banana\n",
+    },
+    .{
+        .name = "ACCESSIBLE: filter --no-strict --no-limit, the typed text first",
+        .command = "printf 'apple\\nbanana\\n' | " ++
+            "\"$TERMANCY\" ui filter --no-strict --no-limit",
+        .keys = "ban\\r2 1\\r",
+        .env = &accessible,
+        .wait_for = "Filter",
+        .stdout = "ban\nbanana\n",
+    },
 };
 
 /// Runs `$3` (a shell command) in a pseudo-terminal with `TERMANCY=$1`, types `$2` once the

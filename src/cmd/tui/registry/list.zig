@@ -3,7 +3,7 @@
 //!
 //! ```zig
 //! var list: List = .{ .items = &.{ "apple", "banana", "cherry" }, .height = 5 };
-//! _ = list.update(msg); // up/down, j/k, pgup/pgdown, home/end, g/G
+//! _ = list.update(msg); // up/down, j/k, pgup/pgdown (left/right, h/l), home/end, g/G
 //! const choice = list.current(); // "apple"
 //! ```
 //!
@@ -29,6 +29,8 @@ cursor: usize = 0,
 offset: usize = 0,
 /// The most items shown at once.
 height: usize = 10,
+/// Up on the first item goes to the last, and down on the last to the first.
+wrap: bool = false,
 /// The terminal's width, from the last resize; rows are cut to fit.
 width: ?usize = null,
 /// Written before the highlighted item.
@@ -64,12 +66,16 @@ pub fn update(list: *List, msg: tui.Msg) tui.Cmd {
 /// Applies a navigation key; returns whether the key was one.
 pub fn handleKey(list: *List, key: tui.input.Key) bool {
     if (key.matches("up") or key.matches("k") or key.matches("ctrl+p")) {
-        list.moveBy(-1);
+        list.step(-1);
     } else if (key.matches("down") or key.matches("j") or key.matches("ctrl+n")) {
-        list.moveBy(1);
-    } else if (key.matches("pgup") or key.matches("ctrl+b")) {
+        list.step(1);
+    } else if (key.matches("pgup") or key.matches("ctrl+b") or key.matches("left") or
+        key.matches("h"))
+    {
         list.page(-1);
-    } else if (key.matches("pgdown") or key.matches("ctrl+f")) {
+    } else if (key.matches("pgdown") or key.matches("ctrl+f") or key.matches("right") or
+        key.matches("l"))
+    {
         list.page(1);
     } else if (key.matches("home") or key.matches("g")) {
         list.moveTo(0);
@@ -101,6 +107,15 @@ pub fn handleMouse(list: *List, mouse: tui.input.Mouse, top: usize) ?usize {
 pub fn moveBy(list: *List, delta: isize) void {
     const target = @as(isize, @intCast(list.cursor)) + delta;
     list.moveTo(@intCast(@max(0, target)));
+}
+
+/// Moves the cursor one item up (`delta` -1) or down (1), round to the other end when
+/// `wrap` is on.
+pub fn step(list: *List, delta: isize) void {
+    const last = list.items.len -| 1;
+    if (list.wrap and delta < 0 and list.cursor == 0) return list.moveTo(last);
+    if (list.wrap and delta > 0 and list.cursor == last) return list.moveTo(0);
+    list.moveBy(delta);
 }
 
 /// Moves the cursor a screenful up (`direction` < 0) or down.
@@ -235,6 +250,22 @@ test "page up and page down move a screenful" {
     try d.press("pgup");
     try testing.expectEqual(3, d.model().cursor);
     try d.expectFrame("> damson\n  elder\n  fig");
+}
+
+test "wrap: past either end to the other; left and right page" {
+    var d: tui.testing.Driver(List) = undefined;
+    try startList(&d, .{ .items = &fruits, .height = 3, .wrap = true });
+    defer d.deinit();
+    try d.press("up");
+    try testing.expectEqual(6, d.model().cursor);
+    try d.press("down");
+    try testing.expectEqual(0, d.model().cursor);
+    try d.press("right");
+    try d.press("l");
+    try testing.expectEqual(6, d.model().cursor);
+    try d.press("h");
+    try d.press("left");
+    try testing.expectEqual(0, d.model().cursor);
 }
 
 test "rows are cut to the terminal width" {

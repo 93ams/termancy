@@ -176,12 +176,16 @@ git history.
   `--height` (0, now the default, fills the terminal on the alternate screen),
   `--indicator`, the prefixes, `--selected`, `--select-if-one`, `--timeout`, the shared
   flags, style groups for each part, and `TERMANCY_FILTER_*` variables; its rows have gum's
-  look (`•` before the highlighted one, `◉`/`○` marks).
+  look (`•` before the highlighted one, `◉`/`○` marks). With `ACCESSIBLE=1`, `filter` asks
+  for a query, then numbers its matches. gum's keys: ctrl+q submits, left/right (h/l)
+  page, up/down go round past either end, and ctrl+a (or a) chooses all.
 - **Components:** `MultiSelect.order` keeps the order items were chosen in, `cursor_mark`
   marks the highlighted one, `toggle_all` turns off a/ctrl+a, and tab and ctrl+space toggle;
   a chosen item's text is in `styles.chosen` too. `Filter` has `strict`, `fuzzy`, `sort`,
   `reverse`, and `fill`, shift+tab, ctrl+space, and ctrl+a (`toggleAll`), and
-  `styles.unchosen`; an empty query keeps the items' order, as documented. `List.styles`
+  `styles.unchosen`; an empty query keeps the items' order, as documented. `List.wrap` goes
+  round past either end, left/right (h/l) page, and ctrl+q submits `Select`, `MultiSelect`,
+  and `Filter`. `List.styles`
   has `cursor_text`, styling the highlighted text apart from its prefix (`textStyle`). A
   `cli.flags` set with many groups no longer runs out of compile-time branches.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in

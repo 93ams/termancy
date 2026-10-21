@@ -12,8 +12,8 @@
 //! (ctrl+p/ctrl+n) and pgup/pgdown move; when `limit` allows more than one, tab chooses or
 //! clears the highlighted item and moves down (shift+tab, up; ctrl+space, nowhere) and
 //! ctrl+a chooses every match (as many as the limit allows), or clears them all when that is
-//! already done; enter submits (choosing the highlighted item when nothing else is chosen);
-//! esc cancels. Enter does nothing when no row is shown.
+//! already done; enter (or ctrl+q) submits (choosing the highlighted item when nothing else
+//! is chosen); esc cancels. Enter does nothing when no row is shown.
 //!
 //! With `strict` off, a query that is not an item is offered as the first row, so enter
 //! there submits the typed text itself: the filter ends submitted with nothing chosen, and
@@ -205,9 +205,10 @@ pub fn toggleAll(filter: *Filter) void {
     if (filter.count() == before) @memset(filter.chosen, false);
 }
 
-/// Moves the cursor `rows` rows down the screen: up the list when `reverse`.
+/// Moves the cursor a row down the screen (`rows` 1) or up (-1): up the list when
+/// `reverse`. Round to the other end with `list.wrap`.
 fn move(filter: *Filter, rows: isize) void {
-    filter.list.moveBy(if (filter.reverse) -rows else rows);
+    filter.list.step(if (filter.reverse) -rows else rows);
 }
 
 fn headerRows(filter: *const Filter) usize {
@@ -243,7 +244,7 @@ pub fn update(filter: *Filter, msg: tui.Msg) tui.Cmd {
 }
 
 fn handleKey(filter: *Filter, key: tui.input.Key) tui.Cmd {
-    if (key.matches("enter")) {
+    if (key.matches("enter") or key.matches("ctrl+q")) {
         if (filter.list.items.len == 0) return .none;
         if (filter.count() == 0) {
             if (filter.current()) |index| filter.chosen[index] = true;

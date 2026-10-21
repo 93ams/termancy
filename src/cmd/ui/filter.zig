@@ -8,6 +8,7 @@ const tui = @import("tui");
 const term = @import("term.zig");
 const styles = @import("styles.zig");
 const choose = @import("choose.zig");
+const plain = @import("plain.zig");
 const Filter = @import("../tui/registry/filter.zig");
 
 pub const Flags = struct {
@@ -101,9 +102,12 @@ pub const command = cli.command(.{
     \\the only match of --value at once, with no terminal at all. --height 0, the default,
     \\fills the terminal (on the alternate screen); --reverse puts the query at the bottom.
     \\
-    \\Keys: typing edits the query, up/down (ctrl+p/ctrl+n) move, tab and shift+tab choose,
-    \\ctrl+a chooses all, enter prints, esc cancels (status 1), Ctrl-C interrupts (status
-    \\130). --timeout ends with status 124.
+    \\Keys: typing edits the query, up/down (ctrl+p/ctrl+n) move, round past either end,
+    \\tab and shift+tab choose, ctrl+a chooses all, enter (ctrl+q) prints, esc cancels
+    \\(status 1), Ctrl-C interrupts (status 130). --timeout ends with status 124.
+    \\
+    \\With ACCESSIBLE=1, the query is a typed line and its matches are numbered, to choose
+    \\by number as `ui choose` asks.
     \\
     \\Style a part with --indicator.*, --selected-indicator.*, --unselected-prefix.*,
     \\--header.*, --text.*, --cursor-text.*, --match.*, --prompt.*, and --placeholder.*.
@@ -133,6 +137,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
     if (flags.select_if_one and matches.len == 1) {
         return term.writeJoined(ctx.out, &.{items[matches[0].index]}, flags.output_delimiter);
     }
+    if (plain.wanted(ctx)) return askPlainly(ctx, items, flags);
     // gum's: unless a height is given, the whole screen.
     const full: tui.Options = .{ .alt_screen = true };
     const options = term.timed(if (flags.height == 0) full else term.inline_options, flags.timeout);
@@ -147,7 +152,7 @@ const single_hints = [_]term.Hint{ navigate, submit };
 const multiple_hints = [_]term.Hint{
     navigate,
     .{ .keys = &.{"tab"}, .action = .hint, .help = "toggle" },
-    .{ .keys = &.{"ctrl+a"}, .action = .hint, .help = "all" },
+    .{ .keys = &.{"ctrl+a"}, .action = .hint, .help = "select all" },
     submit,
 };
 
@@ -190,6 +195,7 @@ pub fn build(
     model.reverse = flags.reverse;
     model.fill = flags.height == 0;
     model.list.height = @max(flags.height, 1);
+    model.list.wrap = true;
     // As gum: the indicator, then a space with a limit of one, or else the marks.
     const one = model.limit == 1;
     model.list.cursor_prefix = if (one)
@@ -229,6 +235,49 @@ pub fn build(
         if (one) model.list.moveTo(first + row) else model.toggle(model.matches.items[row].index);
     }
     return model;
+}
+
+/// ACCESSIBLE: a typed query (`--value` when empty), then its matches numbered, as
+/// `choose` asks; strictly, a query that matches nothing is asked again.
+fn askPlainly(ctx: *cli.Context, items: []const []const u8, flags: Flags) !void {
+    var session: plain.Session = undefined;
+    try session.open(ctx);
+    defer session.close();
+    const label = if (flags.value.len == 0)
+        "Filter"
+    else
+        try std.fmt.allocPrint(ctx.arena, "Filter (enter for {s})", .{flags.value});
+    while (true) {
+        var with = flags;
+        with.value = try session.input(label, flags.value, false) orelse return error.CommandFailed;
+        var model = try build(ctx.gpa, ctx.arena, items, with, ctx.theme);
+        defer model.deinit();
+        const rows = model.list.items;
+        if (rows.len == 0) {
+            try session.terminal.writer().writeAll("No match.\n");
+            continue;
+        }
+        const first = @intFromBool(model.offers_query);
+        const limit = model.limit orelse rows.len;
+        const named = try choose.preselected(ctx.arena, rows[first..], flags.selected, limit);
+        for (named) |*row| row.* += first;
+        const chosen = try session.choose(flags.header, rows, limit, named) orelse
+            return error.CommandFailed;
+        // In the items' order, the query (its own row) first.
+        const order = struct {
+            fn key(m: *const Filter, row: usize) usize {
+                if (row < @intFromBool(m.offers_query)) return 0;
+                return m.matches.items[row - @intFromBool(m.offers_query)].index + 1;
+            }
+            fn less(m: *const Filter, a: usize, b: usize) bool {
+                return key(m, a) < key(m, b);
+            }
+        };
+        std.mem.sort(usize, chosen, @as(*const Filter, &model), order.less);
+        const texts = try ctx.arena.alloc([]const u8, chosen.len);
+        for (texts, chosen) |*text, row| text.* = rows[row];
+        return term.writeJoined(ctx.out, texts, flags.output_delimiter);
+    }
 }
 
 /// What the filter answers: the chosen items, in their original order, or else the query
@@ -285,6 +334,16 @@ test "no limit: tab chooses several, the marks gum's" {
     try d.expectFrameContains("  ◉ gamma\n• ○ delta");
     try d.press("enter");
     try testing.expectEqualStrings("alpha,beta,gamma\n", try answer(&arena, d.model()));
+}
+
+test "round past the ends; ctrl+q prints" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var d = try start(&arena, .{});
+    defer d.deinit();
+    try d.press("up");
+    try d.press("ctrl+q");
+    try testing.expectEqualStrings("delta\n", try answer(&arena, d.model()));
 }
 
 test "--selected: highlighted with a limit of one, chosen above it; * for all" {

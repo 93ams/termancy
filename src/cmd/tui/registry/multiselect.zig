@@ -11,9 +11,9 @@
 //!
 //! Keys: everything `List` moves with; space (or tab, x, ctrl+space) toggles the
 //! highlighted item; a (or ctrl+a) chooses every item (as many as the limit allows), or
-//! clears them all when that is already done, unless `toggle_all` is off; enter submits,
-//! choosing the highlighted item when nothing else is; esc cancels. With a limit, items
-//! past it cannot be chosen until another is cleared.
+//! clears them all when that is already done, unless `toggle_all` is off; enter (or ctrl+q)
+//! submits, choosing the highlighted item when nothing else is; esc cancels. With a limit,
+//! items past it cannot be chosen until another is cleared.
 //!
 //! Each item shows a mark: `chosen_mark` when chosen, else `cursor_mark` on the highlighted
 //! one and `unchosen_mark` on the rest. A chosen item, mark and text, is in `styles.chosen`.
@@ -121,7 +121,7 @@ pub fn update(model: *MultiSelect, msg: tui.Msg) tui.Cmd {
         model.toggle(model.list.cursor);
     } else if (model.toggle_all and (key.matches("a") or key.matches("ctrl+a"))) {
         model.toggleAll();
-    } else if (key.matches("enter") and items > 0) {
+    } else if ((key.matches("enter") or key.matches("ctrl+q")) and items > 0) {
         if (model.count() == 0) model.toggle(model.list.cursor);
         model.status = .submitted;
         return .quit;

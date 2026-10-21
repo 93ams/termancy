@@ -82,8 +82,9 @@ pub const command = cli.command(.{
     \\and a value to print: "Red:#f00". --ordered sorts the items by label.
     \\--select-if-one prints a lone item at once, with no terminal at all.
     \\
-    \\Keys: up/down or j/k move, pgup/pgdown and home/end jump, space (tab, x) chooses,
-    \\a chooses them all (with --no-limit), enter prints, esc cancels (status 1), Ctrl-C
+    \\Keys: up/down or j/k move (round past either end), left/right (h/l, pgup/pgdown) page,
+    \\home/end jump, space (tab, x) chooses, ctrl+a (a) chooses them all (with --no-limit),
+    \\enter (ctrl+q) prints, esc cancels (status 1), Ctrl-C
     \\interrupts (status 130). The list is drawn on the terminal even when standard output
     \\is not one. --timeout ends with status 124.
     \\
@@ -246,7 +247,7 @@ const multiple_hints = [_]term.Hint{
     submit,
 };
 const all_hints = multiple_hints ++ [_]term.Hint{
-    .{ .keys = &.{"a"}, .action = .hint, .help = "all" },
+    .{ .keys = &.{"ctrl+a"}, .action = .hint, .help = "select all" },
 };
 
 /// `inner` with the help line (unless `--no-show-help`) and `--padding`.
@@ -308,6 +309,7 @@ fn list(labels: []const []const u8, flags: Flags, look: Look) List {
         .cursor_prefix = flags.cursor,
         .item_prefix = spaces[0..@min(tui.width.of(flags.cursor), spaces.len)],
         .styles = .{ .cursor = look.cursor, .item = look.item },
+        .wrap = true,
     };
 }
 
@@ -418,6 +420,23 @@ test "--select-if-one prints the value, without a terminal; labels need the deli
     try testing.expectEqual(1, bad.status);
     const message = "item \"b\" has no --label-delimiter \"\t\"\n";
     try testing.expect(std.mem.endsWith(u8, bad.err, message));
+}
+
+test "gum's keys: round past the ends, ctrl+a for all, ctrl+q to print" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const flags: Flags = .{ .no_limit = true };
+    const inner = try multiple(testing.allocator, &colors, &.{}, flags, try lookOf(&arena, flags));
+    var d: tui.testing.Driver(MultiSelect) = try .init(testing.allocator, inner, .{});
+    defer d.deinit();
+    try d.press("up");
+    try testing.expectEqual(2, d.model().list.cursor);
+    try d.press("down");
+    try testing.expectEqual(0, d.model().list.cursor);
+    try d.press("ctrl+a");
+    try d.press("ctrl+q");
+    try testing.expect(d.done());
+    try testing.expectEqual(3, d.model().count());
 }
 
 test "no limit" {
