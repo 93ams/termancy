@@ -132,8 +132,8 @@ The output commands, as gum's:
   `-s`, a message and `key value` pairs; with `-f`, a printf format (`%s`, `%d`, `%v`, a
   width such as `%-8s`, `%%`) and its arguments. `--level none` (the default) writes no
   level; `--formatter text|json|logfmt`; `--time` takes Go's layout names, as gum's
-  (`kitchen`, `rfc3339`, `datetime`, `stampmilli`, ...), in UTC, and JSON and logfmt keep
-  RFC 3339; `--min-level` or `TERMANCY_LOG_LEVEL` leaves out lower levels, never a record
+  (`kitchen`, `rfc3339`, `datetime`, `stampmilli`, ...), in local time (`TZ`, else the
+  system's zone), and JSON and logfmt keep RFC 3339; `--min-level` or `TERMANCY_LOG_LEVEL` leaves out lower levels, never a record
   with no level; `fatal` ends with status 1. `--level.*`, `--time.*`, `--prefix.*`,
   `--message.*`, `--key.*`, `--value.*`, and `--separator.*` style the parts.
 

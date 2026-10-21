@@ -22,6 +22,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Io = std.Io;
+const timezone = @import("../system/timezone.zig");
 
 /// Severity, least severe first, so filtering is one comparison.
 pub const Level = enum(u3) {
@@ -132,7 +133,8 @@ pub const Style = enum {
 };
 
 /// How timestamps are written in text records (JSON and logfmt always use RFC 3339), in
-/// UTC: these, and the rest of Go's named layouts as gum's log names them (`goLayout`).
+/// the logger's `zone`: these, and the rest of Go's named layouts as gum's log names them
+/// (`goLayout`).
 pub const TimeFormat = enum {
     /// `2026-10-12T10:00:00Z`
     rfc3339,
@@ -284,6 +286,12 @@ pub const Logger = struct {
     /// The look of each part under `style = .charm`.
     styles: Styles = .{},
     time_format: TimeFormat = .rfc3339,
+    /// The zone times are written in: `timezone.local(...)` for the local time.
+    zone: timezone.Zone = .utc,
+
+    fn offsetAt(logger: *const Logger, instant: Io.Timestamp) timezone.Offset {
+        return logger.zone.at(@intCast(@divFloor(instant.toNanoseconds(), std.time.ns_per_s)));
+    }
 
     /// Whether a record at `level` would be written.
     pub fn enabled(logger: *const Logger, level: Level) bool {
@@ -403,7 +411,7 @@ pub const Logger = struct {
         const st: Styles = if (charm) logger.styles else .none;
         if (time) |instant| {
             try w.writeAll(st.time);
-            try writeTimeAs(w, instant, logger.time_format);
+            try writeTimeAs(w, instant, logger.time_format, logger.offsetAt(instant));
             try endStyle(w, st.time);
             try w.writeByte(' ');
         }
@@ -484,7 +492,7 @@ pub const Logger = struct {
         const w = logger.writer;
         if (time) |instant| {
             try w.writeAll("time=");
-            try writeTimestamp(w, instant);
+            try writeTimeAs(w, instant, .rfc3339, logger.offsetAt(instant));
             try w.writeByte(' ');
         }
         if (level != .none) try w.print("level={s} ", .{level.name()});
@@ -536,7 +544,7 @@ pub const Logger = struct {
             try json.objectField("time");
             try json.beginWriteRaw();
             try json.writer.writeByte('"');
-            try writeTimestamp(json.writer, instant);
+            try writeTimeAs(json.writer, instant, .rfc3339, logger.offsetAt(instant));
             try json.writer.writeByte('"');
             json.endWriteRaw();
         }
@@ -623,9 +631,14 @@ fn writeFieldValue(
     }
 }
 
-/// Writes `instant` (UTC) in `format`.
-pub fn writeTimeAs(w: *Io.Writer, instant: Io.Timestamp, format: TimeFormat) Io.Writer.Error!void {
-    return writeLayout(w, instant, format.goLayout());
+/// Writes `instant` in `format`, at `offset` from UTC (`timezone.Offset.utc` for UTC).
+pub fn writeTimeAs(
+    w: *Io.Writer,
+    instant: Io.Timestamp,
+    format: TimeFormat,
+    offset: timezone.Offset,
+) Io.Writer.Error!void {
+    return writeLayout(w, instant, format.goLayout(), offset);
 }
 
 /// The parts of Go's reference time that `TimeFormat.goLayout` uses, longest first where
@@ -670,10 +683,19 @@ const weekdays = [_][]const u8{
     "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 };
 
-/// Writes `instant` in UTC as Go's `layout` spells it: each of `layout_parts` stands for
-/// that part of the instant, and anything else is written as it is.
-fn writeLayout(w: *Io.Writer, instant: Io.Timestamp, layout: []const u8) Io.Writer.Error!void {
-    const ns: u64 = @intCast(@max(0, instant.toNanoseconds()));
+/// Writes `instant` at `offset` from UTC as Go's `layout` spells it: each of
+/// `layout_parts` stands for that part of the local time, and anything else is written as
+/// it is.
+fn writeLayout(
+    w: *Io.Writer,
+    instant: Io.Timestamp,
+    layout: []const u8,
+    offset: timezone.Offset,
+) Io.Writer.Error!void {
+    const local = instant.toNanoseconds() + @as(i96, offset.seconds) * std.time.ns_per_s;
+    const ns: u64 = @intCast(@max(0, local));
+    const minutes = @divTrunc(@abs(offset.seconds), 60);
+    const sign: u8 = if (offset.seconds < 0) '-' else '+';
     const epoch: std.time.epoch.EpochSeconds = .{ .secs = ns / std.time.ns_per_s };
     const epoch_day = epoch.getEpochDay();
     const year_day = epoch_day.calculateYearDay();
@@ -693,9 +715,11 @@ fn writeLayout(w: *Io.Writer, instant: Io.Timestamp, layout: []const u8) Io.Writ
                 .weekday_short => try w.writeAll(weekdays[(epoch_day.day + 4) % 7][0..3]),
                 .month_short => try w.writeAll(months[3 * (month - 1) ..][0..3]),
                 .year => try w.print("{d:0>4}", .{year_day.year}),
-                .zone_colon => try w.writeByte('Z'),
-                .zone => try w.writeAll("+0000"),
-                .zone_name => try w.writeAll("UTC"),
+                .zone_colon => if (offset.seconds == 0) try w.writeByte('Z') else {
+                    try w.print("{c}{d:0>2}:{d:0>2}", .{ sign, minutes / 60, minutes % 60 });
+                },
+                .zone => try w.print("{c}{d:0>2}{d:0>2}", .{ sign, minutes / 60, minutes % 60 }),
+                .zone_name => try w.writeAll(offset.name.slice()),
                 .nanos => try w.print(".{d:0>9}", .{nanos}),
                 .micros => try w.print(".{d:0>6}", .{nanos / std.time.ns_per_us}),
                 .millis => try w.print(".{d:0>3}", .{nanos / std.time.ns_per_ms}),
@@ -1214,7 +1238,7 @@ test "logfmt, charm's style, fields carried, prefixes, callers, and time formats
         "\x1b[2mtemp=\x1b[0m300\n", w.buffered());
 
     w = .fixed(&buffer);
-    try writeTimeAs(&w, test_instant, .date_time);
+    try writeTimeAs(&w, test_instant, .date_time, .utc);
     try testing.expectEqualStrings("2026/10/12 10:00:00", w.buffered());
 }
 
@@ -1235,7 +1259,7 @@ test "records with no level, as charm's Print" {
         "{\"prefix\":\"p\",\"msg\":\"hi\"}\n", w.buffered());
 }
 
-test "Go's named time layouts, in UTC" {
+test "Go's named time layouts" {
     // Monday 2026-10-12, 15:04:05.120 UTC.
     const instant: Io.Timestamp = .fromNanoseconds(test_instant.toNanoseconds() +
         (5 * std.time.s_per_hour + 4 * std.time.s_per_min + 5) * std.time.ns_per_s +
@@ -1256,18 +1280,42 @@ test "Go's named time layouts, in UTC" {
         .{ .dateonly, "2026-10-12" },
         .{ .timeonly, "15:04:05" },
     };
-    var buffer: [64]u8 = undefined;
+    var buffer: [128]u8 = undefined;
     for (expected) |e| {
         var w: Io.Writer = .fixed(&buffer);
-        try writeTimeAs(&w, instant, e[0]);
+        try writeTimeAs(&w, instant, e[0], .utc);
         try testing.expectEqualStrings(e[1], w.buffered());
     }
     // A day of one digit is padded with a space; midnight is 12AM.
     var w: Io.Writer = .fixed(&buffer);
-    try writeTimeAs(&w, .fromNanoseconds(0), .stamp);
-    try writeTimeAs(&w, .fromNanoseconds(0), .kitchen);
-    try writeTimeAs(&w, .fromNanoseconds(0), .rfc3339nano);
+    try writeTimeAs(&w, .fromNanoseconds(0), .stamp, .utc);
+    try writeTimeAs(&w, .fromNanoseconds(0), .kitchen, .utc);
+    try writeTimeAs(&w, .fromNanoseconds(0), .rfc3339nano, .utc);
     try testing.expectEqualStrings("Jan  1 00:00:0012:00AM1970-01-01T00:00:00Z", w.buffered());
+    // In a zone: local fields, its offset, and its name.
+    const india: timezone.Offset = .{ .seconds = 19800, .name = .init("IST") };
+    w = .fixed(&buffer);
+    try writeTimeAs(&w, instant, .rfc3339, india);
+    try writeTimeAs(&w, instant, .rubydate, .{ .seconds = -14400, .name = .init("EDT") });
+    try writeTimeAs(&w, instant, .unixdate, india);
+    try testing.expectEqualStrings("2026-10-12T20:34:05+05:30Mon Oct 12 11:04:05 -0400 2026" ++
+        "Mon Oct 12 20:34:05 IST 2026", w.buffered());
+}
+
+test "records in the logger's zone, in every format" {
+    var buffer: [512]u8 = undefined;
+    var w: Io.Writer = .fixed(&buffer);
+    var logger = testLogger(&w, .text);
+    logger.zone = .{ .rule = try .parse("CET-1CEST,M3.5.0,M10.5.0/3") };
+    logger.time_format = .unixdate;
+    try logger.log(.info, "x", .{});
+    logger.format = .logfmt;
+    try logger.log(.info, "x", .{});
+    logger.format = .json;
+    try logger.log(.info, "x", .{});
+    try testing.expectEqualStrings("Mon Oct 12 12:00:00 CEST 2026 INFO x\n" ++
+        "time=2026-10-12T12:00:00+02:00 level=info msg=x\n" ++
+        "{\"time\":\"2026-10-12T12:00:00+02:00\",\"level\":\"info\",\"msg\":\"x\"}\n", w.buffered());
 }
 
 test "charm's style, restyled" {

@@ -33,7 +33,7 @@ const flags_flags = cli.flags(Flags, field_.Set(.{ field_.Spec(Flags){ .fields =
     .format = .{ .help = "The first argument is a printf format for the rest: %s, %d, %v, %%" },
     .structured = .{ .help = "The arguments after the message are key value pairs" },
     .formatter = .{ .help = "How the record is written" },
-    .time = .{ .help = "Add the time (UTC) in Go's layout of this name, as gum's: kitchen, " ++
+    .time = .{ .help = "Add the local time in Go's layout of this name, as gum's: kitchen, " ++
         "layout, ansic, unixdate, rubydate, rfc822, rfc822z, rfc850, rfc1123, rfc1123z, " ++
         "rfc3339, rfc3339nano, stamp, stampmilli, stampmicro, stampnano, datetime, " ++
         "dateonly, timeonly; or date-time (2006/01/02 15:04:05) or time" },
@@ -76,8 +76,8 @@ pub const command = cli.command(.{
     \\
     \\--level none (the default) writes no level, and such a record is never left out by
     \\--min-level (or TERMANCY_LOG_LEVEL). A fatal record ends with status 1. Values whose
-    \\keys look secret (password, token, ...) are redacted. JSON and logfmt write the time
-    \\as RFC 3339 whatever --time names.
+    \\keys look secret (password, token, ...) are redacted. Times are local (TZ, or else
+    \\the system's zone); JSON and logfmt write them as RFC 3339 whatever --time names.
     \\
     \\Style a part with --level.*, --time.*, --prefix.*, --message.*, --key.*, --value.*,
     \\and --separator.* (foreground, background, bold, and the rest of termancy ui style's
@@ -135,6 +135,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
         .styles = try stylesOf(ctx.arena, flags, level, ctx.err_color),
         .clock = if (flags.time != null) .{ .io = ctx.io } else .none,
         .time_format = flags.time orelse .rfc3339,
+        .zone = if (flags.time != null) sys.timezone.local(ctx.arena, ctx.io, ctx.environ.get("TZ")) else .utc,
         .prefix = flags.prefix,
         .fields = fields,
     };

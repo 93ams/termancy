@@ -174,6 +174,12 @@ git history.
 
 ### Added
 
+- **`sys.timezone`: the local time zone,** its offset and abbreviation at any instant,
+  from `TZ` (a POSIX rule such as `CET-1CEST,M3.5.0,M10.5.0/3`, or a zone name read from
+  zoneinfo), else `/etc/localtime`, else on Windows the system's zone; TZif versions 1 to 3
+  with their footer rule; UTC when nothing can be read. `sys.log.Logger.zone` writes times
+  in it (`writeTimeAs` takes the offset), and `termancy ui log --time` uses the local zone,
+  as gum's does.
 - **`termancy ui style`, `format`, `join`, and `log` work as gum's:** a variable for every
   flag (`TERMANCY_STYLE_TRIM`, `TERMANCY_FORMAT_THEME`, `TERMANCY_JOIN_ALIGN`,
   `TERMANCY_LOG_FORMATTER`); `style --trim` and `--strip-ansi`; `--align top|middle|bottom`
