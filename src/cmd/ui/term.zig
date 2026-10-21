@@ -197,6 +197,18 @@ pub fn readStdin(ctx: *cli.Context) !?[]const u8 {
     };
 }
 
+/// What `style` and `format` work on: the arguments joined by line breaks, or else standard
+/// input without its final line breaks and, with `strip_ansi` (`--strip-ansi`), its escape
+/// sequences. Fails with a usage error when there are no arguments and standard input is a
+/// terminal.
+pub fn inputText(ctx: *cli.Context, strip_ansi: bool) ![]const u8 {
+    if (ctx.args.len > 0) return std.mem.join(ctx.arena, "\n", ctx.args);
+    const input = try readStdin(ctx) orelse
+        return ctx.usageError("no text: give it as arguments or on standard input", .{});
+    const trimmed = std.mem.trimEnd(u8, input, "\n");
+    return if (strip_ansi) stripAnsi(ctx.arena, trimmed) else trimmed;
+}
+
 /// `text` split at each `delimiter` (not empty); a final delimiter ends the last item
 /// rather than starting an empty one. At line breaks (`\n`), `\r\n` ends a line too; at
 /// anything else, a final line break goes, as `echo` adds one.

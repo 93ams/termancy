@@ -132,8 +132,8 @@ test "style: plain without color, escapes when forced" {
 test "format: Markdown marks become styles, or go" {
     const args: []const []const u8 = &.{ "format", "# Hi", "a **b**" };
     try expectRun(args, &.{.{ "NO_COLOR", "1" }}, 0, "\n  # Hi\n\n  a b\n", "");
-    const colored = "\n  \x1b[1;38;5;228;48;5;63m \x1b[0m\x1b[1;38;5;228;48;5;63mHi\x1b[0m" ++
-        "\x1b[1;38;5;228;48;5;63m \x1b[0m\n\n  \x1b[38;5;252ma \x1b[0m\x1b[1;38;5;252mb\x1b[0m\n";
+    // gum's default style sheet, pink.
+    const colored = "\n  \x1b[1;4;38;5;212mHi\x1b[0m\n\n  a \x1b[1;38;5;212mb\x1b[0m\n";
     try expectRun(args, &.{.{ "FORCE_COLOR", "3" }}, 0, colored, "");
 }
 
@@ -160,14 +160,14 @@ test "join and log" {
         "",
     );
     try expectRun(
-        &.{ "log", "-f", "logfmt", "-l", "warn", "full", "used", "93%" },
+        &.{ "log", "--formatter", "logfmt", "-s", "-l", "warn", "full", "used", "93%" },
         &.{},
         0,
         "",
         "level=warn msg=full used=93%\n",
     );
-    try expectRun(&.{ "log", "x", "odd" }, &.{}, 2, "", "termancy: fields come in key value pairs\n" ++
-        "Run 'termancy log --help' for usage.\n");
+    try expectRun(&.{ "log", "-s", "x", "odd" }, &.{}, 2, "", "termancy: fields come in key " ++
+        "value pairs\nRun 'termancy log --help' for usage.\n");
 }
 
 test "usage errors come before any input or terminal" {

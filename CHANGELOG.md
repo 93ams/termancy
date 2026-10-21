@@ -9,6 +9,14 @@ git history.
 
 ### Breaking
 
+- **`termancy ui log` takes its arguments as gum's `log` does:** they are one message,
+  joined by spaces, and key value pairs need `-s`/`--structured`. `-f`/`--format` is gum's
+  printf switch (the first argument formats the rest), so the output format moved to
+  `--formatter text|json|logfmt`. `--format json` is not kept: as a switch, `--format`
+  would take `json` for the message, so `--format=json` is refused rather than misread.
+  The default level is `none` (no level written), and `--min-level` reads
+  `TERMANCY_LOG_LEVEL` instead of `GUM_LOG_LEVEL`. `sys.log.Level` has a `none` variant
+  (charm's `Print`), so an exhaustive `switch` over it needs a `.none` arm.
 - **`cfg.Value` has a date-time kind:** `.datetime` holds the text of a TOML offset
   date-time, local date-time, local date, or local time, and `toml.parse` gives one where it
   gave a `.string`. An exhaustive `switch` over a `cfg.Value` needs a `.datetime` arm. TOML
@@ -166,6 +174,18 @@ git history.
 
 ### Added
 
+- **`termancy ui style`, `format`, `join`, and `log` work as gum's:** a variable for every
+  flag (`TERMANCY_STYLE_TRIM`, `TERMANCY_FORMAT_THEME`, `TERMANCY_JOIN_ALIGN`,
+  `TERMANCY_LOG_FORMATTER`); `style --trim` and `--strip-ansi`; `format --strip-ansi`, gum's
+  `pink` style sheet by default (`notty` without color, where it was `dark` or `light`),
+  and gum's template functions in all their spellings (`Color` with one color,
+  `Foreground` and `Background` with none, `Overline`); `log --structured`, `--format`
+  (printf), `--formatter`, the `none` level, gum's `--time` layout names (`kitchen`,
+  `ansic`, `rfc822`, `stampmilli`, ...), `--min-level` from `TERMANCY_LOG_LEVEL`, a status
+  of 1 after `fatal`, and a style group for each part (`--level.foreground`,
+  `--key.faint`). `sys.log` grows what that takes: `Styles`, charm's look part by part;
+  `TimeFormat`'s Go layouts (`goLayout`); `Level.charmColor`. `cli.flags`: `.env = ""`
+  gives a flag no variable under an `env_prefix`.
 - **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
   any flags struct, so one can be shared) takes `.separator` (`"."` spells
   `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set
