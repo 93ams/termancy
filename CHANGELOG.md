@@ -9,36 +9,33 @@ git history.
 
 ### Breaking
 
-- **`ui pager` follows gum:** esc exits 0, as q does (it exited 1: there is nothing to
-  cancel); an argument that names no file is shown as the text itself (it failed with "no
-  such file"); and empty standard input is a usage error, status 2 (it showed an empty
-  pager).
-- **`pager` and `filepicker` components:** `Pager.rows` holds `Pager.Row`s (`bytes`,
-  `line`, `pen`) rather than strings, and are slices of `Pager.plain`, the text without
-  its escape sequences; `Pager.current` is an index into `matches`. In the file picker,
-  right and l only open a directory, no longer choosing a file (enter chooses), and the
-  highlighted row is bold (`styles.selected`).
-- **`termancy ui spin` and `ui table` behave as gum's:** where standard output is a
-  terminal, `spin` hides the command's output unless `--show-output`, `--show-stdout`,
-  `--show-stderr`, or `--show-error` asks for it (it printed it before), and its default
-  spinner is gum's `dot` (`--spinner dots` gives the old one). `table` reads CSV as Go's
-  `encoding/csv` does, so a stray quote is an error unless `--lazy-quotes` and a line with
-  another number of fields than the first is one unless `--fields-per-record`; `--height`
-  counts the table's lines, header and border included, and its default is `0`, which fits
-  the terminal (it was 10 data rows).
+- **`termancy ui` follows gum**, so some commands now behave differently:
+  - `write` submits with enter, as gum's; ctrl+j (or alt+enter) starts a line, and Ctrl-D
+    still submits.
+  - `log` takes its arguments as one message, joined by spaces; key value pairs need
+    `-s`/`--structured`. `-f`/`--format` is gum's printf switch, so the output format moved
+    to `--formatter text|json|logfmt`, and `--format=json` is refused rather than misread
+    as a message. The default level is `none` (no level written), and `--min-level` reads
+    `TERMANCY_LOG_LEVEL`.
+  - `spin` hides the command's output where standard output is a terminal unless
+    `--show-output`, `--show-stdout`, `--show-stderr`, or `--show-error` asks for it, and
+    its default spinner is gum's `dot` (`--spinner dots` gives the old one).
+  - `table` reads CSV as Go's `encoding/csv` does: a stray quote is an error unless
+    `--lazy-quotes`, and a line with another number of fields than the first is one unless
+    `--fields-per-record`. `--height` counts the table's lines, header and border included,
+    and defaults to `0`, which fits the terminal (it was 10 data rows).
+  - `pager`: esc exits 0, as q does; an argument that names no file is shown as the text
+    itself; empty standard input is a usage error (status 2).
+  - `choose` has gum's `Choose:` header unless `--header` is given, and `filter` fills the
+    terminal on the alternate screen unless `--height` is given.
 - **A line feed is ctrl+j, not enter:** `term.input` decodes LF (0x0a) as ctrl+j, as Bubble
   Tea and crossterm do; enter is CR, which every terminal sends in raw mode (Windows
-  consoles with virtual terminal input too). The textarea takes ctrl+j as enter.
-- **`termancy ui write` submits with enter**, as gum's: ctrl+j (or alt+enter) starts a line.
-  Ctrl-D still submits.
-- **`termancy ui log` takes its arguments as gum's `log` does:** they are one message,
-  joined by spaces, and key value pairs need `-s`/`--structured`. `-f`/`--format` is gum's
-  printf switch (the first argument formats the rest), so the output format moved to
-  `--formatter text|json|logfmt`. `--format json` is not kept: as a switch, `--format`
-  would take `json` for the message, so `--format=json` is refused rather than misread.
-  The default level is `none` (no level written), and `--min-level` reads
-  `TERMANCY_LOG_LEVEL` instead of `GUM_LOG_LEVEL`. `sys.log.Level` has a `none` variant
-  (charm's `Print`), so an exhaustive `switch` over it needs a `.none` arm.
+  consoles with virtual terminal input too). The `textarea` component takes ctrl+j as enter.
+- **Components and `sys.log`:** `Pager.rows` holds `Pager.Row`s (`bytes`, `line`, `pen`),
+  slices of `Pager.plain`, the text without its escape sequences, and `Pager.current` is an
+  index into `matches`. In the `filepicker`, right and l only open a directory (enter
+  chooses), and the highlighted row is bold (`styles.selected`). `sys.log.Level` has a
+  `none` variant (charm's `Print`), so an exhaustive `switch` over it needs a `.none` arm.
 - **`cfg.Value` has a date-time kind:** `.datetime` holds the text of a TOML offset
   date-time, local date-time, local date, or local time, and `toml.parse` gives one where it
   gave a `.string`. An exhaustive `switch` over a `cfg.Value` needs a `.datetime` arm. TOML
@@ -196,107 +193,79 @@ git history.
 
 ### Added
 
-- **`ui pager` and `ui file` as gum's:** `pager` shows a file, the text given as the
-  argument (gum's `pager "$text"`), or standard input, in a rounded border (the top-level
-  style flags: `--border`, `--padding`, `--foreground` for the text, `--width`/`--height` up
-  to the terminal's), lines numbered (`--no-show-line-numbers`) and soft-wrapped
-  (`--no-soft-wrap` cuts them, left/right scroll sideways), colored input keeping its
-  colors, tabs as four spaces; `/` searches for a regular expression (smart case; one that
-  does not compile is searched for as typed), highlighting every match (`--match.*`, the
-  current one `--match-highlight.*`), and n/N go round them. `file` shows permissions and
-  sizes (`-p`/`-s`, `--no-permissions`, `--no-size`, `--file-size.*`), `--directory` lets
-  enter choose a directory (right opens it), `--no-file` only a directory, `-c/--cursor`,
-  `--header`, `--height` (at most the terminal's), the path from `TERMANCY_FILE_PATH`, and
-  styles for each part. Both take `--timeout`, `--show-help`, and `TERMANCY_PAGER_*`/
-  `TERMANCY_FILE_*` variables. The `pager` component gains `line_numbers`, `soft_wrap`,
-  regular-expression search, colored text, and `styles.text`; `filepicker` gains
+- **`termancy ui` works like gum:** gum's commands with gum's flags, defaults, keys, and
+  exit statuses, so most gum scripts run with `gum` replaced by `termancy ui`
+  (docs/coming-from-charm.md lists where it deliberately differs).
+  - Every interactive command takes `--timeout 500ms` (status 124 and `timed out` on stderr;
+    `confirm` takes the highlighted answer instead), `--show-help`/`--no-show-help`,
+    `--padding`, and style groups for each part spelled as gum's (`--cursor.foreground 212`,
+    `--header.bold`), defaulting to the theme's colors. Commands that read items take
+    `--strip-ansi`, `--input-delimiter`, and `--output-delimiter`. Every flag of every
+    command can come from a variable: `TERMANCY_CHOOSE_HEIGHT`, `TERMANCY_LOG_LEVEL`.
+  - `choose`: `--ordered`, `--select-if-one` (prints a lone item with no terminal at all),
+    `--label-delimiter` (labels shown, values printed), `--selected '*'`, the cursor,
+    selected, and unselected prefixes, and piped standard input naming the items selected
+    when the items are arguments.
+  - `filter`: `--strict`/`--no-strict` (the typed text as an answer), `--fuzzy` and
+    `--fuzzy-sort` (and `--no-` of each), `--reverse`, `--width`, `--height`, `--indicator`,
+    the prefixes, `--selected`, `--select-if-one`, gum's look (`•`, `◉`/`○`), and plain
+    prompts under `ACCESSIBLE=1`. Both lists take gum's keys: ctrl+q submits, left/right
+    (h/l) page, up/down go round past either end, ctrl+a chooses all.
+  - `input`: `--width` (wider text scrolls sideways), `--cursor.mode blink|static|hide`, and
+    its value from standard input when piped.
+  - `write`: ctrl+e opens the text in `$EDITOR`, lines wrap between words at `--width`,
+    `--show-line-numbers`, `--show-cursor-line`, `--max-lines`, a value from standard input,
+    and plain lines under `ACCESSIBLE=1`.
+  - `confirm`: the prompt as its argument (`Are you sure?` by default), `--show-output`,
+    `--default=false` and `--no-default` beside `--default no`, an empty `--negative` for one
+    button, and `q` for no.
+  - `spin`: `--show-output`, `--show-stdout`, `--show-stderr`, `--show-error`, gum's eleven
+    spinners at gum's pace (`dot`, `minidot`, `jump`, `monkey`, `meter`, `hamburger`, ...),
+    and `--align`. On POSIX the command runs on a pseudo-terminal, as in gum, so it keeps its
+    colors and can open `/dev/tty`; Ctrl-C and `--timeout` stop its whole process group, and
+    a command that cannot run gives 126 or 127.
+  - `table`: `--file`, `--return-column`, `--hide-count` (the row count leads the help line),
+    `--lazy-quotes`, `--fields-per-record`, `-b` for `--border`, any one character as
+    `--separator`, q and ctrl+q to quit as esc does; its columns narrow to fit the terminal.
+  - `pager`: the text as the argument (gum's `pager "$text"`) as well as a file or standard
+    input, in gum's rounded box (`--border`, `--width`, `--height`, `--foreground`), lines
+    numbered and soft-wrapped (`--no-show-line-numbers`, `--no-soft-wrap` with sideways
+    scrolling), colored input keeping its colors, and `/` searching for a regular
+    expression (smart case) with every match highlighted and n/N going round them.
+  - `file`: permissions and sizes (`--no-permissions`, `--no-size`), `--directory` to choose
+    a directory, `--no-file`, `-c/--cursor`, `--header`, `--height`, and the path from
+    `TERMANCY_FILE_PATH`.
+  - `style`: `--trim`, `--strip-ansi`, and `--align top|middle|bottom` for every style group.
+    `format`: gum's `pink` style sheet by default and gum's template functions in all their
+    spellings. `log`: `--structured`, `--format` (printf), `--formatter`, the `none` level,
+    gum's `--time` layout names (`kitchen`, `ansic`, `rfc822`, ...) in the local time zone,
+    a status of 1 after `fatal`, and a style group for each part.
+- **`cli` flag groups:** a group's place (`cli.GroupPlace`, shareable between flags
+  structs) takes `.separator` (`"."` spells `--cursor.foreground`) and `.env_prefix`;
+  `FlagOptions.env_prefix` gives every flag of a set a variable, the prefix and the flag's
+  name in SCREAMING_SNAKE, unless the flag names its own `.env` (`.env = ""` for none). A
+  flag set with many groups no longer runs out of compile-time branches.
+  `cli.Theme.accent` is what interactive prompts highlight, and `tui.Options.timeout` ends a
+  program after a while, with `Outcome.timed_out` set.
+- **Components** gained what those commands needed: `List.wrap`, paging, and
+  `styles.cursor_text`; `MultiSelect.order`, `cursor_mark`, and `toggle_all`; `Filter`'s
+  `strict`, `fuzzy`, `sort`, `reverse`, `fill`, and `toggleAll` (an empty query now keeps the
+  items' order, as documented); `input`'s `width` and `scroll`; `textarea`'s `width` with
+  word wrapping, `max_lines`, `end_of_buffer`, cursor-line styles, and `cursorPosition`;
+  `confirm`'s ctrl+n/ctrl+p, `q`, and an empty `negative`; `pager`'s `line_numbers`,
+  `soft_wrap`, regular-expression search, colored text, and `styles.text`; `filepicker`'s
   `show_permissions`, `show_size`, `allow_files`, `allow_directories`, `header`, and
-  `height`. `term.Regex.searchFrom` searches on from an offset.
-- **`termancy ui spin` and `ui table` work as gum's.** `spin` takes `--show-output`,
-  `--show-stdout`, `--show-stderr`, and `--show-error`, gum's spinner names at gum's pace
-  (`minidot`, `jump`, `monkey`, `meter`, `hamburger`, and the rest), `--align`, `--timeout`,
-  `--padding`, and `--spinner.*` and `--title.*` styles. On POSIX the command runs on a
-  pseudo-terminal, as in gum, so it keeps its colors and can open `/dev/tty`; its standard
-  error stays a pipe apart. Ctrl-C and `--timeout` stop the command's whole process group,
-  and standard input reaches the command. `table` takes `--file`, `--return-column`,
-  `--hide-count` (the row count leads the help line), `--lazy-quotes`, `--fields-per-record`,
-  `-b` for `--border`, any one UTF-8 character as `--separator`, q and ctrl+q to quit as esc
-  does, `--timeout`, `--padding`, and `--header.*`, `--cell.*`, `--selected.*`, and
-  `--border.*` styles over the theme's colors; its columns narrow to fit the terminal. Both
-  read their flags from `TERMANCY_SPIN_*` and `TERMANCY_TABLE_*` variables.
-- `term.live.frames.dot`, gum's `dot` spinner. The `table` component fits the terminal's
-  height when it has no `height` (leaving `reserved` rows to the rest of the view), narrows
-  its widest columns to the terminal's width, and cancels on q and ctrl+q too.
-  `term.Pty.SpawnOptions` takes `stdin` and `stdout` files and `pipe_stderr` (`Pty.errors`).
-- **`termancy ui input`, `write`, and `confirm` work as gum's:** `input` takes `--width`
-  (text wider scrolls sideways), `--cursor.mode blink|static|hide` (the terminal's own
-  cursor), and its value from standard input when piped; `write` opens the text in `$EDITOR`
-  with ctrl+e, wraps lines between words at `--width`, asks with plain lines under
-  `ACCESSIBLE=1`, and takes `--show-line-numbers`, `--show-cursor-line`, `--max-lines`, and
-  a value from standard input; `confirm` takes `--show-output`, `--timeout` (the highlighted
-  answer, not an error), `--default=false` and `--no-default` beside `--default no`, an
-  empty `--negative` for one button, and `q` for no. All three take `--header`, `--padding`,
-  `--show-help`, style groups (`--cursor.foreground`, `--selected.background`,
-  `--line-number.foreground`), and `TERMANCY_INPUT_*`, `TERMANCY_WRITE_*`, and
-  `TERMANCY_CONFIRM_*` variables. Components: `input`'s `width` and `scroll`; `textarea`'s
-  `width` (lines wrap between words, up and down move by rows), `max_lines`,
-  `end_of_buffer`, `cursor_line` styles, and `cursorPosition`; `confirm`'s ctrl+n/ctrl+p,
-  `q`, and an empty `negative`. `sys.process.editText` takes `.at`.
-- **`sys.timezone`: the local time zone,** its offset and abbreviation at any instant,
-  from `TZ` (a POSIX rule such as `CET-1CEST,M3.5.0,M10.5.0/3`, or a zone name read from
+  `height`; and `table`, which fits the terminal's height and width when it has no
+  `height`, and cancels on q and ctrl+q.
+- **`sys.timezone`: the local time zone,** its offset and abbreviation at any instant, from
+  `TZ` (a POSIX rule such as `CET-1CEST,M3.5.0,M10.5.0/3`, or a zone name read from
   zoneinfo), else `/etc/localtime`, else on Windows the system's zone; TZif versions 1 to 3
   with their footer rule; UTC when nothing can be read. `sys.log.Logger.zone` writes times
-  in it (`writeTimeAs` takes the offset), and `termancy ui log --time` uses the local zone,
-  as gum's does.
-- **`termancy ui style`, `format`, `join`, and `log` work as gum's:** a variable for every
-  flag (`TERMANCY_STYLE_TRIM`, `TERMANCY_FORMAT_THEME`, `TERMANCY_JOIN_ALIGN`,
-  `TERMANCY_LOG_FORMATTER`); `style --trim` and `--strip-ansi`; `--align top|middle|bottom`
-  for every style group (where text sits in a taller block); `format --strip-ansi`, gum's
-  `pink` style sheet by default (`notty` without color, where it was `dark` or `light`), and
-  gum's template functions in all their spellings (`Color` with one color, `Foreground` and
-  `Background` with none, `Overline`); `log --structured`, `--format` (printf),
-  `--formatter`, the `none` level, gum's `--time` layout names (`kitchen`, `ansic`,
-  `rfc822`, `stampmilli`, ...), `--min-level` from `TERMANCY_LOG_LEVEL`, a status of 1 after
-  `fatal`, and a style group for each part (`--level.foreground`, `--key.faint`). `sys.log`
-  grows what that takes: `Styles`, charm's look part by part; `TimeFormat`'s Go layouts
-  (`goLayout`); `Level.charmColor`. `cli.flags`: `.env = ""` gives a flag no variable under
-  an `env_prefix`.
-- **`ui choose` and `ui filter` take the rest of gum's flags.** `choose`: `--ordered`,
-  `--select-if-one` (prints a lone item with no terminal at all), `--label-delimiter`
-  (labels shown, values printed), `--selected '*'`, `--cursor-prefix`, `--selected-prefix`,
-  `--unselected-prefix`, and piped standard input naming the items selected when the items
-  are arguments; `--header` is gum's `Choose:` unless given, and `a` chooses all only with
-  `--no-limit`, as in gum. `filter`: `--strict`/`--no-strict` (the typed text as an answer),
-  `--fuzzy`/`--no-fuzzy`, `--fuzzy-sort`/`--no-fuzzy-sort`, `--reverse`, `--width`,
-  `--height` (0, now the default, fills the terminal on the alternate screen),
-  `--indicator`, the prefixes, `--selected`, `--select-if-one`, `--timeout`, the shared
-  flags, style groups for each part, and `TERMANCY_FILTER_*` variables; its rows have gum's
-  look (`•` before the highlighted one, `◉`/`○` marks). With `ACCESSIBLE=1`, `filter` asks
-  for a query, then numbers its matches. gum's keys: ctrl+q submits, left/right (h/l)
-  page, up/down go round past either end, and ctrl+a (or a) chooses all.
-- **Components:** `MultiSelect.order` keeps the order items were chosen in, `cursor_mark`
-  marks the highlighted one, `toggle_all` turns off a/ctrl+a, and tab and ctrl+space toggle;
-  a chosen item's text is in `styles.chosen` too. `Filter` has `strict`, `fuzzy`, `sort`,
-  `reverse`, and `fill`, shift+tab, ctrl+space, and ctrl+a (`toggleAll`), and
-  `styles.unchosen`; an empty query keeps the items' order, as documented. `List.wrap` goes
-  round past either end, left/right (h/l) page, and ctrl+q submits `Select`, `MultiSelect`,
-  and `Filter`. `List.styles`
-  has `cursor_text`, styling the highlighted text apart from its prefix (`textStyle`). A
-  `cli.flags` set with many groups no longer runs out of compile-time branches.
-- **Flag group spelling and variables:** a group's place (`cli.GroupPlace`, the same type in
-  any flags struct, so one can be shared) takes `.separator` (`"."` spells
-  `--cursor.foreground`) and `.env_prefix`; `FlagOptions.env_prefix` gives every flag of a set
-  a variable, the prefix and the flag's name in SCREAMING_SNAKE (`APP_` gives
-  `--cursor.foreground` `APP_CURSOR_FOREGROUND`), unless it names its own `.env`.
-  `tui.Options.timeout` ends a program after a while, as Ctrl-C does, with
-  `Outcome.timed_out` set; `cli.Theme.accent` is what interactive prompts highlight.
-- **`termancy ui` takes gum's shared flags** (`choose` first): `--timeout 500ms` (a
-  `cfg.Duration`: status 124 and `timed out` on stderr), `--show-help`/`--no-show-help` (the
-  keys under the component), `--padding` around it, `--strip-ansi`, `--input-delimiter`, and
-  `--output-delimiter` (typed with escapes: `\n`, `\t`, `\0`); style groups for each part
-  (`--cursor.foreground 212`, `--header.bold`, `--selected.background`) with the theme's
-  colors as defaults; and every flag from a variable, `TERMANCY_CHOOSE_HEIGHT`,
-  `TERMANCY_CHOOSE_CURSOR_FOREGROUND`.
+  in it (`writeTimeAs` takes the offset); `sys.log` also gains `Styles` (charm's look part by
+  part), Go's named time layouts (`goLayout`), and `Level.charmColor`.
+- `term.Regex.searchFrom` searches on from an offset; `term.Pty.SpawnOptions` takes `stdin`
+  and `stdout` files and `pipe_stderr` (`Pty.errors`); `term.live.frames.dot` is gum's `dot`
+  spinner; `sys.process.editText` takes `.at`.
 - `Config.initFor(X, gpa)`: a configuration that knows its settings type, and its defaults,
   from the start. `field.Reason`, a writer that keeps the template and arguments a check gave
   `field.fail`. `input.Report.cursor` and `ansi.queryCursorPosition` (DECXCPR), and
