@@ -323,7 +323,7 @@ pub fn readPng(gpa: Allocator, data: []const u8) DecodeError!Image {
     while (at + 12 <= data.len) {
         const len = std.mem.readInt(u32, data[at..][0..4], .big);
         const kind = data[at + 4 ..][0..4];
-        if (at + 12 + len > data.len) return error.InvalidImage;
+        if (len > data.len - at - 12) return error.InvalidImage;
         const body = data[at + 8 ..][0..len];
         at += 12 + len;
         if (std.mem.eql(u8, kind, "IHDR")) {
@@ -1763,6 +1763,11 @@ test "PNG round trips, opaque and with alpha" {
         for (img.pixels, back.pixels) |a, b| try testing.expect(a.eql(b));
     }
     try testing.expectError(error.InvalidImage, readPng(gpa, "not a png"));
+    // A chunk's length past the end: adding it to where it starts overflowed 32 bits.
+    try testing.expectError(
+        error.InvalidImage,
+        readPng(gpa, "\x89PNG\r\n\x1a\n\xff\xff\xff\xf4IHDR\x00\x00\x00\x00"),
+    );
 }
 
 test "GIF frames: few colors exactly, many approximately, unchanged frames merged" {
