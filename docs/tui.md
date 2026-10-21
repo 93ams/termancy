@@ -131,10 +131,10 @@ it.
 | `spinner` | |
 | `progress`, `multiprogress` | gradients and spring animation |
 | `table`, `tree`, `chart` | data: sparklines and bars in `chart` |
-| `pager`, `viewport`, `markdown` | scrolling areas; `viewport` embeds, both ways; `markdown` is a reader |
+| `pager`, `viewport`, `markdown` | scrolling areas; `viewport` embeds, both ways; `pager` searches, with line numbers; `markdown` is a reader |
 | `paginator`, `tabs`, `help` | |
 | `stopwatch`, `timer` | |
-| `filepicker` | |
+| `filepicker` | permissions and sizes; files, directories, or both to choose |
 | `form` | huh: inputs, texts, selects with filtering, multi-selects, confirms, files, notes, pages, conditions, and themes |
 | `prompts` | questions for a `cli.Flow`, asked with the components |
 | `shell` | a line editor with history and tab completion, for `cli.repl` |
