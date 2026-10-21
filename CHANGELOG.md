@@ -480,8 +480,9 @@ From a review before the repository went public:
   (its nonce is not ours) instead of failing with `InvalidResponse`.
 - A security key that keeps sending keepalives, or a busy other channel, can no longer hold
   `ctap.Channel` (and `passkey get`) forever: each request ends with `error.Timeout` after
-  the new `Channel.deadline_ms` (five minutes), which `ctap.assert` takes from the request's
-  `timeout_ms`.
+  the new `Channel.deadline_ms` (five minutes). `ctap.assert` takes it from the request's
+  `timeout` as browsers do, as a hint: 0 or absent is WebAuthn's recommended default, and
+  other values are held within its recommended range (`RequestOptions.ceremonyTimeoutMs`).
 - `webauthn.verifyAssertion` (and so `verify` and `Registration.credential`) refuses
   authenticator data flagged backed up (BS) but not backup eligible (BE), as WebAuthn
   requires.

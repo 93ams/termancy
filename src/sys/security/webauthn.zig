@@ -92,6 +92,19 @@ pub const RequestOptions = struct {
         try jw.endObject();
     }
 
+    /// How long the ceremony may take, in milliseconds: `timeout_ms` as a hint, the way
+    /// browsers take it, within WebAuthn's recommended range (§15.1), and its recommended
+    /// default when absent or 0. The range is 30 s to 3 min (default 2 min) when user
+    /// verification is discouraged, else 5 to 10 min (default 5 min).
+    pub fn ceremonyTimeoutMs(options: RequestOptions) u32 {
+        const min: u32, const max: u32, const default: u32 = switch (options.user_verification) {
+            .discouraged => .{ 30_000, 180_000, 120_000 },
+            .required, .preferred => .{ 300_000, 600_000, 300_000 },
+        };
+        const ms = options.timeout_ms orelse 0;
+        return if (ms == 0) default else std.math.clamp(ms, min, max);
+    }
+
     /// Parses the JSON form into `arena`.
     pub fn parseJson(arena: Allocator, json: []const u8) JsonObject.Error!RequestOptions {
         const object: JsonObject = try .parse(arena, json);
@@ -781,6 +794,28 @@ test "RequestOptions JSON round trip" {
     const transports = back.allow_credentials[0].transports;
     try std.testing.expectEqualSlices(Transport, &.{ .usb, .smart_card }, transports);
     try std.testing.expectEqual(.required, back.user_verification);
+}
+
+test "RequestOptions.ceremonyTimeoutMs: the request's timeout as a hint" {
+    const timeout = struct {
+        fn ms(given: ?u32, verification: UserVerification) u32 {
+            const options: RequestOptions = .{
+                .challenge = "",
+                .timeout_ms = given,
+                .user_verification = verification,
+            };
+            return options.ceremonyTimeoutMs();
+        }
+    }.ms;
+    const eq = std.testing.expectEqual;
+    try eq(300_000, timeout(null, .preferred));
+    try eq(300_000, timeout(0, .required));
+    try eq(300_000, timeout(20, .preferred));
+    try eq(450_000, timeout(450_000, .preferred));
+    try eq(600_000, timeout(std.math.maxInt(u32), .required));
+    try eq(120_000, timeout(null, .discouraged));
+    try eq(30_000, timeout(1, .discouraged));
+    try eq(180_000, timeout(999_999, .discouraged));
 }
 
 test "RequestOptions.parseJson defaults and refusals" {

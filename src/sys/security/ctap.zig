@@ -120,7 +120,8 @@ pub const Channel = struct {
     timeout_ms: u32 = 5_000,
     /// How long one request may take in all, keepalives and other channels' reports
     /// included, so a key that keeps sending them cannot hold us forever. WebAuthn's
-    /// recommended default for a ceremony; `assert` takes the request's `timeout_ms`.
+    /// recommended default for a ceremony; `assert` takes the request's
+    /// (`RequestOptions.ceremonyTimeoutMs`).
     deadline_ms: u32 = 300_000,
 
     pub const broadcast: u32 = 0xffff_ffff;
@@ -522,7 +523,7 @@ pub const AssertOptions = struct {
 /// A whole `navigator.credentials.get()` against one key: builds clientDataJSON for
 /// `options` and `origin`, asks the key, and returns the assertion, in `arena`. The RP ID
 /// defaults to the host of `origin`, and must be that host or a domain it is under. Each
-/// exchange with the key takes at most the request's `timeout_ms`, when it has one.
+/// exchange with the key takes at most `options.ceremonyTimeoutMs()`.
 pub fn assert(
     arena: Allocator,
     channel: *Channel,
@@ -533,7 +534,7 @@ pub fn assert(
     const rp_id = webauthn.rpIdFor(options.rp_id, origin) orelse return error.InvalidOrigin;
     const deadline = channel.deadline_ms;
     defer channel.deadline_ms = deadline;
-    if (options.timeout_ms) |ms| channel.deadline_ms = ms;
+    channel.deadline_ms = options.ceremonyTimeoutMs();
     var client: Io.Writer.Allocating = .init(arena);
     const data: webauthn.ClientData = .{ .challenge = options.challenge, .origin = origin };
     data.writeJson(&client.writer) catch return error.OutOfMemory;
@@ -1281,15 +1282,23 @@ test "Channel: a key that keeps sending keepalives meets the deadline" {
     };
     var out: [Channel.max_payload]u8 = undefined;
     try testing.expectError(error.Timeout, channel.transact(.ping, "", &out, null));
+}
 
-    // `assert` waits as long as the request's `timeout_ms`, then leaves the deadline be.
+test "assert takes the request's timeout as a hint: 0 is the default" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
-    channel.deadline_ms = 300_000;
-    const options: webauthn.RequestOptions = .{ .challenge = "0123456789abcdef", .timeout_ms = 20 };
-    const got = assert(arena.allocator(), &channel, options, "https://example.com", .{});
-    try testing.expectError(error.Timeout, got);
-    try testing.expectEqual(300_000, channel.deadline_ms);
+    var key: FakeKey = .{ .pair = .generate(testing.io) };
+    var channel: Channel = try .open(testing.io, key.device());
+    channel.deadline_ms = 1234;
+    for ([_]?u32{ 0, 1, null }) |timeout| {
+        const options: webauthn.RequestOptions = .{
+            .challenge = "0123456789abcdef",
+            .timeout_ms = timeout,
+            .allow_credentials = &.{.{ .id = key.credential_id }},
+        };
+        _ = try assert(arena.allocator(), &channel, options, "https://example.com", .{});
+        try testing.expectEqual(1234, channel.deadline_ms);
+    }
 }
 
 test "Channel.open waits past another program's INIT" {
