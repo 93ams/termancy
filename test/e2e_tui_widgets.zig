@@ -208,12 +208,13 @@ const cases = [_]Case{
         .args = &.{ "ui", "table", "-p", "--border", "ascii" },
         .env = &force_color,
         .stdin = "a,b\n1,2\n",
-        .stdout = "\x1b[38;5;238m+---+---+\x1b[0m\n" ++
-            "\x1b[38;5;238m|\x1b[0m\x1b[1;38;5;99m a \x1b[0m\x1b[38;5;238m|\x1b[0m" ++
-            "\x1b[1;38;5;99m b \x1b[0m\x1b[38;5;238m|\x1b[0m\n" ++
-            "\x1b[38;5;238m+---+---+\x1b[0m\n" ++
-            "\x1b[38;5;238m|\x1b[0m 1 \x1b[38;5;238m|\x1b[0m 2 \x1b[38;5;238m|\x1b[0m\n" ++
-            "\x1b[38;5;238m+---+---+\x1b[0m\n",
+        // The theme's: the heading's bold magenta, a dim border.
+        .stdout = "\x1b[2m+---+---+\x1b[0m\n" ++
+            "\x1b[2m|\x1b[0m\x1b[1;35m a \x1b[0m\x1b[2m|\x1b[0m" ++
+            "\x1b[1;35m b \x1b[0m\x1b[2m|\x1b[0m\n" ++
+            "\x1b[2m+---+---+\x1b[0m\n" ++
+            "\x1b[2m|\x1b[0m 1 \x1b[2m|\x1b[0m 2 \x1b[2m|\x1b[0m\n" ++
+            "\x1b[2m+---+---+\x1b[0m\n",
     },
     .{
         .name = "table --print: TSV, titles, widths, no border",
@@ -429,6 +430,60 @@ const cases = [_]Case{
             usage("confirm"),
         .status = 2,
     },
+    // spin/table (gum parity)
+    .{
+        .name = "table --print --file, a separator, and a double border",
+        .args = &.{ "ui", "table", "-p", "-f", "app.env", "-s", "=", "-b", "double" },
+        .stdout =
+        \\╔══════════════╦══════╗
+        \\║ APP_NAME     ║ demo ║
+        \\╠══════════════╬══════╣
+        \\║ SERVER__PORT ║ 80   ║
+        \\╚══════════════╩══════╝
+        \\
+        ,
+    },
+    .{
+        .name = "table --print: the border from TERMANCY_TABLE_BORDER",
+        .args = &.{ "ui", "table", "-p" },
+        .env = &.{.{ "TERMANCY_TABLE_BORDER", "ascii" }},
+        .stdin = "a,b\n1,2\n",
+        .stdout = "+---+---+\n| a | b |\n+---+---+\n| 1 | 2 |\n+---+---+\n",
+    },
+    .{
+        .name = "table --file that does not exist",
+        .args = &.{ "ui", "table", "-p", "-f", "missing.csv" },
+        .stderr = "termancy: missing.csv: no such file\n",
+        .status = 1,
+    },
+    .{
+        .name = "table: a stray quote, as gum's CSV reader has it",
+        .args = &.{ "ui", "table", "-p" },
+        .stdin = "a\nb\"c\n",
+        .stderr = "termancy: standard input: line 2: a quote in an unquoted field " ++
+            "(--lazy-quotes allows it)\n",
+        .status = 1,
+    },
+    .{
+        .name = "table --lazy-quotes",
+        .args = &.{ "ui", "table", "-p", "--lazy-quotes", "-b", "none" },
+        .stdin = "a\nb\"c\n",
+        .stdout = "a  \nb\"c\n",
+    },
+    .{
+        .name = "table: a line short of fields",
+        .args = &.{ "ui", "table", "-p" },
+        .stdin = "a,b\n1\n",
+        .stderr = "termancy: standard input: line 2: expected 2 fields, found 1 " ++
+            "(see --fields-per-record)\n",
+        .status = 1,
+    },
+    .{
+        .name = "table --fields-per-record -1: short lines padded",
+        .args = &.{ "ui", "table", "-p", "--fields-per-record=-1", "-b", "none" },
+        .stdin = "a,b\n1\n",
+        .stdout = "a  b\n1   \n",
+    },
 };
 
 /// Cases run with no controlling terminal (under `setsid`).
@@ -523,6 +578,19 @@ const detached_cases = [_]Case{
         .stdin = "apple\nbanana\ncherry\n",
         .stdout = "banana\n",
     },
+    // spin/table (gum parity): no terminal at all
+    .{
+        .name = "spin --timeout stops the command",
+        .args = &.{ "ui", "spin", "--timeout", "200ms", "--", "sleep", "10" },
+        .stderr = "timed out\n",
+        .status = 124,
+    },
+    .{
+        .name = "spin: standard input reaches the command",
+        .args = &.{ "ui", "spin", "--", "cat" },
+        .stdin = "piped\n",
+        .stdout = "piped\n",
+    },
 };
 
 /// A command run in a pseudo-terminal, with keys typed into it.
@@ -546,6 +614,10 @@ const PtyCase = struct {
     /// Run under `test/jobctl.zig` (`$JOBCTL`), which stops and continues the command as a
     /// shell's job control does.
     jobctl: bool = false,
+    /// Text the terminal must have shown by the end, and text it must never have shown
+    /// (the log begins with the command, so spell it differently there: `a""b`).
+    shows: []const u8 = "",
+    hides: []const u8 = "",
 };
 
 /// `cfg edit` of a fresh `app.toml` holding `a = 1`, with `reedit.sh` as the editor (a
@@ -957,17 +1029,105 @@ const pty_cases = [_]PtyCase{
         .stdout = "Are you sure? No\n",
         .status = 1,
     },
+    // spin/table (gum parity)
+    .{
+        // Standard output a terminal: the output is hidden, the status passed on.
+        .name = "spin on a terminal: the command's status, its output hidden",
+        .command = "(\"$TERMANCY\" ui spin -- sh -c 'echo quiet\"\"-text; exit 7' > /dev/tty)",
+        .keys = "",
+        .hides = "quiet-text",
+        .status = 7,
+    },
+    .{
+        .name = "spin --show-error: the output when the command fails",
+        .command = "(\"$TERMANCY\" ui spin --show-error -- sh -c 'echo oops\"\"-text; exit 3' " ++
+            "> /dev/tty)",
+        .keys = "",
+        .shows = "oops-text",
+        .status = 3,
+    },
+    .{
+        .name = "spin --show-error: nothing when it succeeds",
+        .command = "(\"$TERMANCY\" ui spin --show-error -- sh -c 'echo fine\"\"-text' > /dev/tty)",
+        .keys = "",
+        .hides = "fine-text",
+    },
+    .{
+        .name = "spin --show-stdout",
+        .command = "(\"$TERMANCY\" ui spin --show-stdout -- " ++
+            "sh -c 'echo out\"\"-text; echo err\"\"-text >&2' > /dev/tty)",
+        .keys = "",
+        .shows = "out-text",
+        .hides = "err-text",
+    },
+    .{
+        .name = "spin --show-stderr",
+        .command = "(\"$TERMANCY\" ui spin --show-stderr -- " ++
+            "sh -c 'echo out\"\"-text; echo err\"\"-text >&2' > /dev/tty)",
+        .keys = "",
+        .shows = "err-text",
+        .hides = "out-text",
+    },
+    .{
+        .name = "spin --spinner monkey, gum's name",
+        .command = "\"$TERMANCY\" ui spin -s monkey -- sleep 0.3",
+        .keys = "",
+        .shows = "🙈",
+    },
+    .{
+        .name = "spin --timeout on a terminal",
+        .command = "sh -c '\"$TERMANCY\" ui spin --timeout 200ms -- sleep 10 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        .name = "spin: the title from TERMANCY_SPIN_TITLE",
+        .command = "\"$TERMANCY\" ui spin -- sleep 0.3",
+        .keys = "",
+        .env = &.{.{ "TERMANCY_SPIN_TITLE", "from-env" }},
+        .shows = "from-env",
+    },
+    .{
+        .name = "table --file --return-column",
+        .command = "\"$TERMANCY\" ui table -f app.env -s = -r 2",
+        .keys = "\\r",
+        .stdout = "80\n",
+    },
+    .{
+        .name = "table: the row count on the help line",
+        .command = "printf 'n\\n1\\n2\\n' | \"$TERMANCY\" ui table",
+        .keys = "j\\r",
+        .shows = "1/2 • ",
+        .stdout = "2\n",
+    },
+    .{
+        .name = "table: q quits, as esc does",
+        .command = "printf 'n\\n1\\n' | \"$TERMANCY\" ui table",
+        .keys = "q",
+        .status = 1,
+    },
+    .{
+        // gum's pseudo-terminal: the command's standard output is a terminal.
+        .name = "spin: the command runs on a terminal",
+        .command = "(\"$TERMANCY\" ui spin --show-stdout -- " ++
+            "sh -c 'test -t 1 && echo on-a\"\"-tty' > /dev/tty)",
+        .keys = "",
+        .shows = "on-a-tty",
+    },
 };
 
 /// Runs `$3` (a shell command) in a pseudo-terminal with `TERMANCY=$1`, types `$2` once the
 /// terminal shows `$4` (for a `tui` command, the end of its first frame: synchronized
 /// output ends with `2026l`), then `$6` once it has shown `$5` `$7` times (when `$5` is
 /// set), and prints what the command wrote to standard output. Exits with the command's
-/// status (124 on a timeout, or 142 where perl's alarm stands in for `timeout`).
+/// status (124 on a timeout, or 142 where perl's alarm stands in for `timeout`), or 98
+/// when the terminal never showed `$9` or showed `$10`.
 /// Works with util-linux `script` (`-qfc command log`) and BSD `script`, as macOS has it
 /// (`-qF log command...`); the status goes through a file, since only util-linux has `-e`.
 const pty_driver =
     \\termancy=$1 keys=$2 command=$3 wait=$4 then_wait=$5 then_keys=$6 then_count=$7 jobctl=$8
+    \\shows=$9 hides=${10}
     \\dir=$(mktemp -d) || exit 99
     \\trap 'rm -f "$dir/log" "$dir/out" "$dir/status"; rmdir "$dir"' EXIT
     \\# A minute at most: with `timeout`, else perl's alarm (macOS has no `timeout`).
@@ -1011,6 +1171,14 @@ const pty_driver =
     \\  echo >&2
     \\fi
     \\[ -f "$dir/status" ] && status=$(cat "$dir/status")
+    \\if [ -n "$shows" ] && ! grep -aqF "$shows" "$dir/log"; then
+    \\  echo "the terminal never showed: $shows" >&2
+    \\  status=98
+    \\fi
+    \\if [ -n "$hides" ] && grep -aqF "$hides" "$dir/log"; then
+    \\  echo "the terminal showed: $hides" >&2
+    \\  status=98
+    \\fi
     \\cat "$dir/out" 2> /dev/null
     \\exit $status
 ;
@@ -1073,6 +1241,7 @@ fn addPtyCase(
     run.addArgs(&.{ case.keys, case.command, case.wait_for });
     run.addArgs(&.{ case.then_wait_for, case.then_keys, b.fmt("{d}", .{case.then_count}) });
     if (jobctl) |j| run.addArtifactArg(j) else run.addArg("");
+    run.addArgs(&.{ case.shows, case.hides });
     run.setCwd(b.path("test/fixtures"));
     run.clearEnvironment();
     run.color = .manual;
