@@ -30,6 +30,7 @@ const Io = std.Io;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Ed25519 = std.crypto.sign.Ed25519;
 const Version = @import("version.zig");
+const system_files = @import("../system/files.zig");
 
 // 1. Lookup.
 
@@ -541,6 +542,12 @@ const max_path = Io.Dir.max_path_bytes;
 /// Writes `bytes` as the executable at `exe_path` (relative to `dir`), keeping a rollback
 /// copy at `<exe>.old` until the new file is in place and accepted. When `exe_path` does
 /// not exist yet, the file is simply created.
+///
+/// Crash-safe: the new file and the rollback copy are synced before either is renamed
+/// into place, and the directory after the swap and after a rollback, so a power loss
+/// leaves the old or the new executable, never an empty one, and an update that was
+/// rolled back stays rolled back. With `move_aside` there is a moment between its two
+/// renames when only `<exe>.old` exists; `removeLeftovers` puts it back.
 pub fn install(
     io: Io,
     dir: Io.Dir,
@@ -570,18 +577,34 @@ pub fn install(
             return error.Rejected;
         };
     }
+    // The swap is made durable before the backup goes, so a crash cannot keep the deletion
+    // and lose the rename. Best effort: the new executable is in place either way.
+    syncParent(io, dir, exe_path) catch {};
     // Windows refuses to delete the running image; `removeLeftovers` retries later.
     if (backed_up) dir.deleteFile(io, old_path) catch {};
 }
 
 /// Deletes `<exe>.old`, `<exe>.new`, and `<exe>.zip` left by an earlier `install` or
-/// `extractExecutable` cut short; call it on start.
+/// `extractExecutable` cut short; call it on start (or from whatever launches the
+/// program). If the executable itself is missing, as after a crash between the two
+/// renames of `move_aside`, `<exe>.old` is put back in its place instead of deleted.
 /// Files that do not exist are not an error.
 pub fn removeLeftovers(io: Io, dir: Io.Dir, exe_path: []const u8) error{
     NameTooLong,
     CleanupFailed,
 }!void {
     var buffer: [max_path]u8 = undefined;
+    if (dir.access(io, exe_path, .{})) |_| {} else |err| switch (err) {
+        error.FileNotFound => {
+            const old_path = try sibling(&buffer, exe_path, ".old");
+            dir.rename(old_path, dir, exe_path, io) catch |e| switch (e) {
+                error.FileNotFound => {},
+                else => return error.CleanupFailed,
+            };
+            syncParent(io, dir, exe_path) catch return error.CleanupFailed;
+        },
+        else => return error.CleanupFailed,
+    }
     for ([_][]const u8{ ".old", ".new", ".zip" }) |suffix| {
         const path = try sibling(&buffer, exe_path, suffix);
         dir.deleteFile(io, path) catch |err| switch (err) {
@@ -589,6 +612,20 @@ pub fn removeLeftovers(io: Io, dir: Io.Dir, exe_path: []const u8) error{
             else => return error.CleanupFailed,
         };
     }
+}
+
+/// Syncs the directory holding `path`, so renames and deletions in it survive a crash.
+fn syncParent(io: Io, dir: Io.Dir, path: []const u8) system_files.SyncDirError!void {
+    return system_files.syncDir(io, dir, std.fs.path.dirname(path) orelse ".");
+}
+
+/// `dir.copyFile`, then a sync of the copy: `copyFile` leaves the data in memory, and a
+/// rollback renames this copy over the executable.
+fn copySynced(io: Io, dir: Io.Dir, from: []const u8, to: []const u8) !void {
+    try dir.copyFile(from, dir, to, io, .{});
+    const copy = try dir.openFile(io, to, .{ .mode = .read_write });
+    defer copy.close(io);
+    try copy.sync(io);
 }
 
 fn sibling(buffer: []u8, exe_path: []const u8, suffix: []const u8) error{NameTooLong}![]const u8 {
@@ -622,7 +659,7 @@ fn backUp(
     strategy: Strategy,
 ) InstallError!bool {
     const result = switch (strategy) {
-        .rename_over => dir.copyFile(exe_path, dir, old_path, io, .{}),
+        .rename_over => copySynced(io, dir, exe_path, old_path),
         .move_aside => renameImage(io, dir, exe_path, old_path),
     };
     result catch |err| switch (err) {
@@ -672,9 +709,12 @@ fn rollBack(
             error.FileNotFound => {},
             else => return error.RollbackFailed,
         };
-        return;
+    } else {
+        renameImage(io, dir, old_path, exe_path) catch return error.RollbackFailed;
     }
-    renameImage(io, dir, old_path, exe_path) catch return error.RollbackFailed;
+    // Without this, a crash can keep the swap to the rejected build and lose the rename
+    // that undid it. Best effort: the old executable is back in place either way.
+    syncParent(io, dir, exe_path) catch {};
 }
 
 // 5. Fetch, and the flow.
@@ -1314,6 +1354,24 @@ test "removeLeftovers: deletes what is there, ignores what is not" {
     try expectMissing(tmp.dir, "app.old");
     try expectMissing(tmp.dir, "app.new");
     try expectMissing(tmp.dir, "app.zip");
+}
+
+test "removeLeftovers: a missing executable is restored from <exe>.old, not deleted" {
+    // What a crash between `move_aside`'s two renames leaves: the old build moved aside,
+    // the new one still staged.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.old", .data = "old" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.new", .data = "new" });
+    try removeLeftovers(testing.io, tmp.dir, "app");
+    try expectFile(tmp.dir, "app", "old");
+    try expectMissing(tmp.dir, "app.old");
+    try expectMissing(tmp.dir, "app.new");
+    // Nothing at all to restore is not an error either.
+    var empty = testing.tmpDir(.{});
+    defer empty.cleanup();
+    try removeLeftovers(testing.io, empty.dir, "app");
+    try expectMissing(empty.dir, "app");
 }
 
 /// An in-memory transport: a URL-to-body map, recording what was requested.

@@ -2,7 +2,9 @@
 //! private state store.
 //!
 //! - `writeAtomic` writes to an unnamed or temporary file and renames it over the target,
-//!   so readers see the old contents or the new, never a torn mix.
+//!   so readers see the old contents or the new, never a torn mix; with `sync` (the
+//!   default) it also syncs the directory, so a write that returned survives a crash.
+//! - `syncDir` makes the entries of a directory (creations, renames, deletions) durable.
 //! - `Lock` is a lock file created exclusively with the owner's PID inside. A lock whose
 //!   PID is no longer running is stale and is broken on the next `acquire`, as is one
 //!   left empty or unparsable for longer than `Lock.stale_grace`. Advisory: it binds only
@@ -35,13 +37,14 @@ pub const WriteOptions = struct {
     /// Creates missing parent directories.
     make_path: bool = false,
     /// Flushes the data to the device before the rename, so a crash cannot leave an empty
-    /// file under the target name.
+    /// file under the target name, and the directory after it, so a crash cannot undo a
+    /// write that returned (the rename alone may still be in memory).
     sync: bool = true,
 };
 
 /// Errors from `writeAtomic`.
 pub const AtomicWriteError = Io.Dir.CreateFileAtomicError || Io.File.Writer.Error ||
-    Io.File.SyncError || Io.File.Atomic.ReplaceError;
+    Io.File.SyncError || Io.File.Atomic.ReplaceError || SyncDirError;
 
 /// Replaces `sub_path` in `dir` with `bytes` atomically: the data goes to a temporary
 /// file in the same directory, which is then renamed over the target. On failure the
@@ -62,6 +65,31 @@ pub fn writeAtomic(
     try atomic.file.writeStreamingAll(io, bytes);
     if (options.sync) try atomic.file.sync(io);
     try atomic.replace(io);
+    if (options.sync) try syncDir(io, dir, std.fs.path.dirname(sub_path) orelse ".");
+}
+
+/// Errors from `syncDir`.
+pub const SyncDirError = Io.File.OpenError || Io.File.SyncError;
+
+/// Flushes the entries of the directory `sub_path` in `dir` (`"."` for `dir` itself):
+/// files created, renamed, or deleted in it survive a crash once this returns. `fsync` of
+/// a file does not cover the name it was given, so a rename that publishes a file is
+/// durable only after this. On Windows a directory cannot be opened for flushing (NTFS
+/// journals its changes itself); the errors saying so are ignored there, so the same call
+/// works on every OS and under a simulated `Io`.
+pub fn syncDir(io: Io, dir: Io.Dir, sub_path: []const u8) SyncDirError!void {
+    const handle = dir.openFile(io, sub_path, .{}) catch |err| switch (err) {
+        error.IsDir, error.AccessDenied, error.PermissionDenied => {
+            if (builtin.os.tag == .windows) return;
+            return err;
+        },
+        else => |e| return e,
+    };
+    defer handle.close(io);
+    handle.sync(io) catch |err| switch (err) {
+        error.AccessDenied => if (builtin.os.tag != .windows) return err,
+        else => |e| return e,
+    };
 }
 
 /// An advisory lock held through a lock file containing the owner's PID.
@@ -359,6 +387,17 @@ test "writeAtomic into a missing directory fails without make_path" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     try testing.expectError(error.FileNotFound, writeAtomic(testing.io, tmp.dir, "x/y", "", .{}));
+}
+
+test "syncDir: an existing directory syncs on every OS, a missing one is an error" {
+    // That a crash keeps the entries is checked under simulated power loss, by TARDIS's
+    // suite for termancy; here, that the call works against the real filesystem.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(testing.io, "sub", .default_dir);
+    try syncDir(testing.io, tmp.dir, ".");
+    try syncDir(testing.io, tmp.dir, "sub");
+    try testing.expectError(error.FileNotFound, syncDir(testing.io, tmp.dir, "missing"));
 }
 
 test "lock: acquire, contend, release" {

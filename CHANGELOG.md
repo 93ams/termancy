@@ -480,6 +480,17 @@ From a review before the repository went public:
 
 ### Fixed
 
+- **Crash safety of `sys.files` and `sys.update`**, found by testing them under simulated
+  power loss with TARDIS, a deterministic simulator for `std.Io`:
+  - `writeAtomic` (so `Store` and every file termancy writes) syncs the directory after
+    the rename, so a write that returned survives a crash; it could come back as the old
+    contents. The new `sys.files.syncDir` does that for any directory, and is a no-op
+    where Windows cannot flush one.
+  - `update.install` syncs the rollback copy (`copyFile` never did), and the directory
+    after the swap and after a rollback: a power loss could leave an empty executable on
+    XFS after a rolled-back update, or bring a rejected build back on ext4.
+  - `update.removeLeftovers` puts `<exe>.old` back when the executable is missing, as a
+    crash between `move_aside`'s two renames leaves it, instead of deleting the only copy.
 - `passkey get` and `create` check the RP ID against `--origin` before anything else, on
   every system: `create` away from Windows said it needs Windows Hello instead.
 - `ctap.getPinToken` wipes the PIN's hash, the secret shared with the key, its ephemeral
