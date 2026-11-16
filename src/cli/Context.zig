@@ -356,6 +356,7 @@ pub fn warn(ctx: *Context, comptime fmt: []const u8, args: anytype) void {
 /// (`Command.check`), not here.
 pub fn flags(ctx: *Context, comptime X: type) FlagsError!sets.FlagSet(X).Value {
     const T = sets.FlagSet(X).Value;
+    @setEvalBranchQuota(10_000 + 20_000 * comptime flagPaths(T, "").len);
     var result: T = comptime field.initDefaults(T);
     const owner = @typeName(T);
     inline for (comptime flagPaths(T, "")) |path| {

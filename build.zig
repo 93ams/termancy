@@ -691,10 +691,12 @@ fn addSite(b: *std.Build, step: *std.Build.Step, site: Site) void {
 /// The names of the tapes in `docs/tapes`, sorted.
 fn tapes(b: *std.Build) []const []const u8 {
     const io = b.graph.io;
-    b.dependOnDirectoryMetadata(b.path("docs/tapes"));
-    var dir = b.root.openDir(io, "docs/tapes", .{ .iterate = true }) catch |err| {
-        std.debug.panic("docs/tapes: {t}", .{err});
+    var dir = b.root.openDir(io, "docs/tapes", .{ .iterate = true }) catch |err| switch (err) {
+        // A package fetched as a dependency ships no docs (build.zig.zon's paths).
+        error.FileNotFound => return &.{},
+        else => std.debug.panic("docs/tapes: {t}", .{err}),
     };
+    b.dependOnDirectoryMetadata(b.path("docs/tapes"));
     defer dir.close(io);
     var names: std.ArrayList([]const u8) = .empty;
     var it = dir.iterate();
