@@ -361,6 +361,7 @@ fn argNames(comptime A: type) []const [2][]const u8 {
 
 fn checkFlags(comptime F: type, ctx: *Context, comptime skip: []const []const u8) !usize {
     const T = F.Value;
+    @setEvalBranchQuota(10_000 + 20_000 * F.list.len);
     const value = try ctx.flags(T);
     var failures: usize = 0;
     // A choice's variant may need a flag only once it is picked.
@@ -486,6 +487,7 @@ fn settled(
     comptime name: []const u8,
     comptime sources: []const [2][]const u8,
 ) []const Flag {
+    @setEvalBranchQuota(10_000 + 2_000 * list.len * (1 + sources.len));
     var out: [list.len]Flag = list[0..list.len].*;
     for (&out) |*flag| {
         if (!std.mem.startsWith(u8, flag.field, name ++ ".")) continue;
@@ -781,9 +783,21 @@ fn manyCommands() [40]Command {
     return out;
 }
 
+/// Where else each of `ManyFlags`' fields is set: `fN` from `$FN`.
+fn manySources() [48][2][]const u8 {
+    @setEvalBranchQuota(100_000);
+    var out: [48][2][]const u8 = undefined;
+    for (&out, 0..) |*source, i| source.* = .{
+        std.fmt.comptimePrint("f{d}", .{i}),
+        std.fmt.comptimePrint("$F{d}", .{i}),
+    };
+    return out;
+}
+
 // Built in their own evaluations, so their raised quotas do not leak into `command` below.
 const many_flags = ManyFlags();
 const many_commands = manyCommands();
+const many_sources = manySources();
 
 test "large trees stay within the compile-time budget" {
     const big = comptime command(.{
@@ -818,4 +832,27 @@ test "large trees stay within the compile-time budget" {
         },
     });
     try testing.expectEqual(16, inline_tree.subcommands.len);
+}
+
+test "a handler decodes and checks many flags, as settings too, within the budget" {
+    const Settled = struct { settings: many_flags = .{} };
+    const handlers = struct {
+        fn load(ctx: *Context) !many_flags {
+            return (try ctx.flags(Settled)).settings;
+        }
+        fn run(_: *Context, f: Settled) !void {
+            if (f.settings.f0 != 1 or f.settings.f47 != 9) return error.Wrong;
+        }
+    };
+    const set = sets.flags(Settled, field_.none, .{ .fields = .{ .settings = .{ .name = "" } } });
+    const root = comptime command(.{
+        .name = "app",
+        .flags = set,
+        .settings = .{ .field = .settings, .load = handlers.load, .sources = &many_sources },
+        .run = handlers.run,
+    });
+    const app: @import("App.zig") = .{ .root = &root };
+    const result = try @import("testing.zig").run(app, &.{ "--f0", "1", "--f47", "9" }, .{});
+    defer result.deinit();
+    try result.expect(0, "", "");
 }
