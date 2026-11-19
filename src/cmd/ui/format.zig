@@ -1,4 +1,4 @@
-//! `termancy ui format`: format text for the terminal, as gum's `format`: Markdown (rendered
+//! `termancy ui format`: format text for the terminal: Markdown (rendered
 //! by `term.markdown`), code (highlighted by `term.highlight`), emoji shortcodes, or a
 //! template of styling functions.
 
@@ -21,7 +21,7 @@ const Flags = struct {
 const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
     .type = .{ .help = "What the text is" },
     .language = .{ .help = "The language of code (--type code)" },
-    .theme = .{ .help = "Markdown's style sheet (pink, as gum's, or notty where colors " ++
+    .theme = .{ .help = "Markdown's style sheet (pink, or notty where colors " ++
         "are not shown; dark, light, dracula, tokyo-night, ascii, notty, or a JSON " ++
         "file), or code's theme (charm, dracula, monokai, tokyo-night, github, ansi)" },
     .width = .{ .help = "Columns to wrap Markdown to (default: the terminal's)" },
@@ -40,11 +40,11 @@ pub const command = cli.command(.{
     .description =
     \\Format the arguments (one per line), or standard input. As Markdown (the default):
     \\headings, emphasis, lists, quotes, tables, task lists, links, and highlighted code
-    \\blocks, wrapped to the width, in gum's pink style sheet (--theme picks another). As
+    \\blocks, wrapped to the width, in the pink style sheet (--theme picks another). As
     \\code: highlighted for --language. As emoji: :shortcodes: replaced.
     \\
-    \\As a template, gum's functions: {{ Bold "x" }}, and Italic, Faint, Underline,
-    \\CrossOut, Blink, Reverse, and Overline (which changes nothing, as in gum) alike;
+    \\As a template, these functions: {{ Bold "x" }}, and Italic, Faint, Underline,
+    \\CrossOut, Blink, Reverse, and Overline (which changes nothing) alike;
     \\{{ Color "fg" "x" }} or {{ Color "fg" "bg" "x" }}; {{ Foreground "fg" "x" }};
     \\{{ Background "bg" "x" }}; and pipes, which pass the text last:
     \\{{ "x" | Bold | Color "212" }}. Arguments are double-quoted strings; Go's if,
@@ -109,7 +109,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
     try term.writeStyled(ctx.out, out.written(), color);
 }
 
-/// The style sheet `name` names (or a JSON file of one); by default pink, as gum's, or
+/// The style sheet `name` names (or a JSON file of one); by default pink, or
 /// notty without color.
 fn styleSheet(
     ctx: *cli.Context,
@@ -198,7 +198,7 @@ fn pipeline(w: *Writer, source: []const u8) TemplateError!void {
     try w.writeAll(value);
 }
 
-/// Applies one of gum's template functions (its format/formats.go): an attribute's paints
+/// Applies one of the template functions: an attribute's paints
 /// its first argument; a color's paints its last, in the colors before it.
 fn apply(w: *Writer, name: []const u8, args: []const []const u8) TemplateError!void {
     const attributes = [_]struct { []const u8, tui.Style }{
@@ -279,7 +279,7 @@ test renderTemplate {
         "a \x1b[1mb\x1b[0m \x1b[31m\x1b[3mc\x1b[0m\x1b[0m d",
         w.buffered(),
     );
-    // gum's other spellings: two-argument Color, one-argument Foreground, Overline.
+    // The other spellings: two-argument Color, one-argument Foreground, Overline.
     w = .fixed(&buffer);
     try renderTemplate(&w, "{{ Color \"2\" \"x\" }}{{ \"y\" | Foreground }}{{ Overline \"z\" }}" ++
         "{{ Background \"4\" \"w\" }}{{ Bold \"a\" \"b\" }}");

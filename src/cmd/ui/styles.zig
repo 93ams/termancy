@@ -1,4 +1,4 @@
-//! The style flags the gum-style commands share, as gum's `style.Styles`: one group per
+//! The style flags the `termancy ui` commands share: one group per
 //! part of a component, spelled with a dot (`--cursor.foreground 212`, `--header.bold`),
 //! and the same fields at the top level for `ui style`.
 //!
@@ -12,7 +12,7 @@
 //! ```
 //!
 //! A field not given keeps the part's own default (`over`), so the defaults come from where
-//! the group is used, from `cli.Theme`. As in gum, help shows a group's colors and hides
+//! the group is used, from `cli.Theme`. Help shows a group's colors and hides
 //! the rest, which still work.
 
 const std = @import("std");
@@ -155,7 +155,7 @@ pub const top: cli.GroupPlace(Styles) = .{ .name = "", .fields = .{
     .border = .{ .value_name = "style" },
 } };
 
-/// A part's group, as gum spells it: `--<name>.foreground`, help showing only the colors.
+/// A part's group: `--<name>.foreground`, help showing only the colors.
 pub fn group(comptime name: []const u8) cli.GroupPlace(Styles) {
     const hide: @FieldType(cli.GroupPlace(Styles), "fields") = .{
         .border = .{ .hidden = true, .value_name = "style" },
@@ -175,7 +175,7 @@ pub fn group(comptime name: []const u8) cli.GroupPlace(Styles) {
     return .{ .name = name, .separator = ".", .fields = hide };
 }
 
-/// `group`, all hidden, as gum hides `--item.*`.
+/// `group`, all hidden (as `--item.*`).
 pub fn hiddenGroup(comptime name: []const u8) cli.GroupPlace(Styles) {
     var place = group(name);
     place.hidden = true;

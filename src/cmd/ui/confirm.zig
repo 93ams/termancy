@@ -1,5 +1,4 @@
-//! `termancy ui confirm`: ask a yes/no question; the answer is the exit status, as gum's
-//! `confirm`.
+//! `termancy ui confirm`: ask a yes/no question; the answer is the exit status.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -11,7 +10,7 @@ const plain = @import("plain.zig");
 const styles = @import("styles.zig");
 const Confirm = @import("../tui/registry/confirm.zig");
 
-/// The answer `--default` gives: `yes` or `no`, also spelled as gum's `--default=false`
+/// The answer `--default` gives: `yes` or `no`, also spelled `--default=false`
 /// (any of cli's words for true and false), or `y` and `n`.
 pub const Answer = enum {
     yes,
@@ -65,9 +64,9 @@ pub const command = cli.command(.{
     \\for no. Nothing is printed, unless --show-output asks for the question and the
     \\answer.
     \\
-    \\--default says which answer is highlighted at the start: yes or no, or as gum
-    \\spells it, --default=false (--no-default too). --timeout is not an error here: when
-    \\it passes, the highlighted answer is taken, as gum takes it.
+    \\--default says which answer is highlighted at the start: yes or no, or
+    \\--default=false (--no-default too). --timeout is not an error here: when
+    \\it passes, the highlighted answer is taken.
     \\
     \\Keys: left/right, tab, h/l, or ctrl+n/ctrl+p switch buttons, enter answers, y
     \\answers yes and n or q no, esc answers no (status 1), Ctrl-C interrupts (status 130).
@@ -118,7 +117,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
 }
 
 /// Ends with the answer: status 0 for yes, 1 for no, and with `--show-output` the question
-/// and the answer's label on standard output, as gum prints them.
+/// and the answer's label on standard output.
 fn answer(ctx: *cli.Context, flags: Flags, prompt: []const u8, yes: bool) !void {
     if (flags.show_output) {
         try ctx.out.print("{s} {s}\n", .{ prompt, if (yes) flags.affirmative else flags.negative });
@@ -128,7 +127,7 @@ fn answer(ctx: *cli.Context, flags: Flags, prompt: []const u8, yes: bool) !void 
 
 /// The model for `prompt`, `default` highlighted, in the flags' styles over the theme's.
 pub fn build(prompt: []const u8, default: bool, flags: Flags, theme: *const cli.Theme) Confirm {
-    // gum's layout: the prompt a column in, each button padded 3 and a column apart from
+    // The layout: the prompt a column in, each button padded 3 and a column apart from
     // its neighbors.
     const button: tui.Style.Sides = .symmetric(0, 3);
     const margin: tui.Style.Sides = .symmetric(0, 1);
@@ -197,7 +196,7 @@ test "yes, with custom labels" {
         .{},
     );
     defer d.deinit();
-    // gum's margins: the prompt a column in, the buttons a column apart on each side.
+    // The margins: the prompt a column in, the buttons a column apart on each side.
     try d.expectFrame(" Are you sure?\n\n    Ship        Wait    ");
     try d.press("y");
     try testing.expect(accepted(d.model().*, false));
@@ -215,7 +214,7 @@ test "esc is no; a timeout takes the answer highlighted" {
     try testing.expect(!accepted(plainBuild("Sure?", false, .{}), true));
 }
 
-test "--default as termancy and gum spell it" {
+test "--default's spellings" {
     try testing.expectEqual(Answer.no, try Answer.parse("no"));
     try testing.expectEqual(Answer.no, try Answer.parse("false"));
     try testing.expectEqual(Answer.no, try Answer.parse("N"));

@@ -1,4 +1,4 @@
-//! What the gum-style commands share: running a model on the terminal, the Unix rules for
+//! What the `termancy ui` commands share: running a model on the terminal, the Unix rules for
 //! how they end, reading items from standard input, and writing styled output.
 //!
 //! The rules (docs/machine-output.md): the interface always draws on the terminal
@@ -7,7 +7,7 @@
 //! interactive command fails at once with a usage error, never waiting. Ctrl-C ends with
 //! status 130 and esc with status 1, both printing nothing.
 //!
-//! What gum's commands share, here for every command to use the same way:
+//! What every command uses the same way:
 //!
 //! - `--timeout <duration>` (`cfg.Duration`, `0` for none): `timed` puts it in the
 //!   options, and `run` then ends with status 124 and `timed out` on stderr. A command
@@ -28,7 +28,7 @@ const Io = std.Io;
 /// The status after Ctrl-C: 128 + `SIGINT`, as shells report it.
 pub const interrupted_status: u8 = 130;
 
-/// The status after `--timeout` passed, as gum's (and `timeout(1)`'s).
+/// The status after `--timeout` passed, as `timeout(1)`'s.
 pub const timed_out_status: u8 = 124;
 
 /// Help for the flags the commands share, worded once.
@@ -77,7 +77,7 @@ pub fn runOutcome(
     return program.run(&terminal);
 }
 
-/// `options` ending after `timeout` (`--timeout`); zero waits forever, as gum's.
+/// `options` ending after `timeout` (`--timeout`); zero waits forever.
 pub fn timed(options: tui.Options, timeout: cfg.Duration) tui.Options {
     var with = options;
     if (timeout.ns > 0) with.timeout = timeout.toIo();
@@ -105,7 +105,7 @@ pub fn exitInterrupted(ctx: *cli.Context) cli.Context.Exit {
     return ctx.exit(interrupted_status);
 }
 
-/// Ends with status 124 after `--timeout`, writing `timed out` to stderr as gum does. The
+/// Ends with status 124 after `--timeout`, writing `timed out` to stderr. The
 /// terminal must already be restored.
 pub fn exitTimedOut(ctx: *cli.Context) cli.Context.Exit {
     ctx.err.writeAll("timed out\n") catch {};
@@ -178,7 +178,7 @@ fn writeUnescaped(w: *Io.Writer, text: []const u8) Io.Writer.Error!void {
 }
 
 /// Writes `chosen` with the delimiter (as typed, see `unescape`) between them and a line
-/// break after, as gum prints results (`--output-delimiter`).
+/// break after, as results are printed (`--output-delimiter`).
 pub fn writeJoined(
     w: *Io.Writer,
     chosen: []const []const u8,
@@ -258,7 +258,7 @@ pub fn writeStyled(
 pub const Hints = tui.Keymap(enum { hint });
 pub const Hint = Hints.Binding;
 
-/// `Inner` with what gum puts around every component: above it, `--header`; below it,
+/// `Inner` with what goes around every component: above it, `--header`; below it,
 /// after a blank line, the help line of its keys (`--show-help`); around it all,
 /// `--padding`. The component sees the terminal smaller by the padding and the help line
 /// (and no wider than `max_width`), so it cuts its rows to fit. The inner model's `cursor`
@@ -277,7 +277,7 @@ pub fn Framed(comptime Inner: type) type {
         hints: []const Hint = &.{},
         /// The most columns the component gets (`--width`); null for the terminal's.
         max_width: ?usize = null,
-        /// Written on the help line before the keys, as gum's table writes `2/10 • `.
+        /// Written on the help line before the keys, as the table writes `2/10 • `.
         status: ?*const fn (inner: *const Inner, w: *Io.Writer) Io.Writer.Error!void = null,
         /// The terminal's width less the padding, for cutting the help line.
         width: ?usize = null,

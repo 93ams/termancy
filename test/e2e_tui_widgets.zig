@@ -1,4 +1,4 @@
-//! End-to-end tests for the gum-style `termancy ui` commands, run as processes in
+//! End-to-end tests for the `termancy ui` commands, run as processes in
 //! `test/fixtures` with an empty environment plus what each case sets.
 //!
 //! Three kinds of case:
@@ -185,7 +185,7 @@ const cases = [_]Case{
         .name = "format, FORCE_COLOR",
         .args = &.{ "ui", "format", "# T", "*i* `c`" },
         .env = &force_color,
-        // gum's default style sheet, pink.
+        // The default style sheet, pink.
         .stdout = "\n  \x1b[1;4;38;5;212mT\x1b[0m\n\n  \x1b[3;38;5;212mi\x1b[0m " ++
             "\x1b[38;5;212mc\x1b[0m\n",
     },
@@ -296,14 +296,14 @@ const cases = [_]Case{
             usage("spin"),
         .status = 2,
     },
-    // choose/filter (gum parity)
+    // choose/filter
     .{
         .name = "choose: an item without the --label-delimiter",
         .args = &.{ "ui", "choose", "--label-delimiter", ":", "a:1", "b" },
         .stderr = "termancy: item \"b\" has no --label-delimiter \":\"\n",
         .status = 1,
     },
-    // style/format/join/log (gum parity)
+    // style/format/join/log
     .{
         .name = "style --trim",
         .args = &.{ "ui", "style", "--trim", "--border", "normal" },
@@ -323,17 +323,17 @@ const cases = [_]Case{
         .stdout = " \n \nx\n",
     },
     .{
-        .name = "format: gum's template functions",
+        .name = "format: the template functions",
         .args = &.{
             "ui",
             "format",
             "-t",
             "template",
-            "{{ Color \"99\" \"0\" \" Gum \" }}{{ \"x\" | Bold | Foreground \"212\" }}" ++
+            "{{ Color \"99\" \"0\" \" Hey \" }}{{ \"x\" | Bold | Foreground \"212\" }}" ++
                 "{{ Color \"1\" \"y\" }}{{ Overline \"o\" }}",
         },
         .env = &force_color,
-        .stdout = "\x1b[38;5;99;40m Gum \x1b[0m\x1b[38;5;212m\x1b[1mx\x1b[0m\x1b[0m" ++
+        .stdout = "\x1b[38;5;99;40m Hey \x1b[0m\x1b[38;5;212m\x1b[1mx\x1b[0m\x1b[0m" ++
             "\x1b[31my\x1b[0mo\n",
     },
     .{
@@ -423,7 +423,7 @@ const cases = [_]Case{
             usage("log"),
         .status = 2,
     },
-    // input/write/confirm (gum parity)
+    // input/write/confirm
     .{
         .name = "confirm --default that is not an answer",
         .args = &.{ "ui", "confirm", "--default", "maybe" },
@@ -431,7 +431,7 @@ const cases = [_]Case{
             usage("confirm"),
         .status = 2,
     },
-    // spin/table (gum parity)
+    // spin/table
     .{
         .name = "table --print --file, a separator, and a double border",
         .args = &.{ "ui", "table", "-p", "-f", "app.env", "-s", "=", "-b", "double" },
@@ -458,7 +458,7 @@ const cases = [_]Case{
         .status = 1,
     },
     .{
-        .name = "table: a stray quote, as gum's CSV reader has it",
+        .name = "table: a stray quote, as Go's CSV reader has it",
         .args = &.{ "ui", "table", "-p" },
         .stdin = "a\nb\"c\n",
         .stderr = "termancy: standard input: line 2: a quote in an unquoted field " ++
@@ -485,7 +485,7 @@ const cases = [_]Case{
         .stdin = "a,b\n1\n",
         .stdout = "a  b\n1   \n",
     },
-    // pager/file (gum parity)
+    // pager/file
     .{
         .name = "file with nothing to choose",
         .args = &.{ "ui", "file", "--no-file" },
@@ -573,7 +573,7 @@ const detached_cases = [_]Case{
         .stderr = "termancy: termancy-e2e-no-such-command: command not found\n",
         .status = 127,
     },
-    // choose/filter (gum parity)
+    // choose/filter
     .{
         // Standard input and output redirected, and no terminal at all: none is needed.
         .name = "choose --select-if-one: the lone item's value",
@@ -587,7 +587,7 @@ const detached_cases = [_]Case{
         .stdin = "apple\nbanana\ncherry\n",
         .stdout = "banana\n",
     },
-    // spin/table (gum parity): no terminal at all
+    // spin/table: no terminal at all
     .{
         .name = "spin --timeout stops the command",
         .args = &.{ "ui", "spin", "--timeout", "200ms", "--", "sleep", "10" },
@@ -658,7 +658,7 @@ const pty_cases = [_]PtyCase{
         .stdout = "a\nc\n",
     },
     .{
-        // gum's timeout: nothing chosen, `timed out` on stderr, status 124. (The inner
+        // The timeout: nothing chosen, `timed out` on stderr, status 124. (The inner
         // shell puts stderr where the driver puts stdout.)
         .name = "choose --timeout",
         .command = "sh -c '\"$TERMANCY\" ui choose --timeout 100ms a b c 2>&1'",
@@ -707,7 +707,7 @@ const pty_cases = [_]PtyCase{
     },
     .{ .name = "input: esc", .command = "\"$TERMANCY\" ui input", .keys = "abc\\033", .status = 1 },
     .{
-        // alt+enter starts a line (enter would submit, as gum's); Ctrl-D submits too.
+        // alt+enter starts a line (enter would submit); Ctrl-D submits too.
         .name = "write: alt+enter, then Ctrl-D",
         .command = "\"$TERMANCY\" ui write",
         .keys = "one\\033\\rtwo\\004",
@@ -861,7 +861,7 @@ const pty_cases = [_]PtyCase{
         .stdout = "a = 1\n",
         .status = 1,
     },
-    // choose/filter (gum parity)
+    // choose/filter
     .{
         .name = "choose: $(...) captures only the result",
         .command = "x=$(\"$TERMANCY\" ui choose a b c); echo \"got:$x\"",
@@ -947,7 +947,7 @@ const pty_cases = [_]PtyCase{
         .wait_for = "Filter",
         .stdout = "ban\nbanana\n",
     },
-    // input/write/confirm (gum parity)
+    // input/write/confirm
     .{
         .name = "input: the value from standard input",
         .command = "printf '  piped value\\n' | \"$TERMANCY\" ui input",
@@ -978,7 +978,7 @@ const pty_cases = [_]PtyCase{
         .stdout = "hi there\n",
     },
     .{
-        // Enter submits, as gum's.
+        // Enter submits.
         .name = "write: the value from standard input, enter submits",
         .command = "printf 'line one\\r\\nline two\\n' | \"$TERMANCY\" ui write",
         .keys = "\\r",
@@ -993,7 +993,7 @@ const pty_cases = [_]PtyCase{
         .stdout = "one\nappended-line\n",
     },
     .{
-        // ctrl+j (LF) starts a line, as gum's.
+        // ctrl+j (LF) starts a line.
         .name = "write --show-line-numbers --max-lines 2",
         .command = "\"$TERMANCY\" ui write --show-line-numbers --max-lines 2",
         .keys = "a\\nb\\nc\\r",
@@ -1008,7 +1008,7 @@ const pty_cases = [_]PtyCase{
         .stdout = "one\n\ntwo\n",
     },
     .{
-        // gum's timeout: no error, the answer highlighted (the default) is taken.
+        // The timeout: no error, the answer highlighted (the default) is taken.
         .name = "confirm --timeout takes the default, yes",
         .command = "sh -c '\"$TERMANCY\" ui confirm --timeout 100ms 2>&1'",
         .keys = "",
@@ -1036,7 +1036,7 @@ const pty_cases = [_]PtyCase{
         .stdout = "Are you sure? No\n",
         .status = 1,
     },
-    // spin/table (gum parity)
+    // spin/table
     .{
         // Standard output a terminal: the output is hidden, the status passed on.
         .name = "spin on a terminal: the command's status, its output hidden",
@@ -1076,7 +1076,7 @@ const pty_cases = [_]PtyCase{
         .hides = "out-text",
     },
     .{
-        .name = "spin --spinner monkey, gum's name",
+        .name = "spin --spinner monkey",
         .command = "\"$TERMANCY\" ui spin -s monkey -- sleep 0.3",
         .keys = "",
         .shows = "🙈",
@@ -1115,14 +1115,14 @@ const pty_cases = [_]PtyCase{
         .status = 1,
     },
     .{
-        // gum's pseudo-terminal: the command's standard output is a terminal.
+        // The pseudo-terminal: the command's standard output is a terminal.
         .name = "spin: the command runs on a terminal",
         .command = "(\"$TERMANCY\" ui spin --show-stdout -- " ++
             "sh -c 'test -t 1 && echo on-a\"\"-tty' > /dev/tty)",
         .keys = "",
         .shows = "on-a-tty",
     },
-    // pager/file (gum parity). The driver can only wait for something to show, so a case
+    // pager/file. The driver can only wait for something to show, so a case
     // that waits for what only the feature draws has a --timeout: were it never drawn, the
     // timeout would end the command with 124, not 0.
     .{
@@ -1163,7 +1163,7 @@ const pty_cases = [_]PtyCase{
         .stdout = "env\n",
     },
     .{
-        // 1234 bytes, as gum writes the size.
+        // 1234 bytes, as a short size.
         .name = "file: sizes shown",
         .command = "(d=$(mktemp -d); head -c 1234 /dev/zero > \"$d/f\"; " ++
             "p=$(\"$TERMANCY\" ui file --timeout 8s \"$d\"); s=$?; " ++
@@ -1180,7 +1180,7 @@ const pty_cases = [_]PtyCase{
         .status = 124,
     },
     .{
-        // TERMANCY_FILE_PATH stands in for the argument, as GUM_FILE_PATH does.
+        // TERMANCY_FILE_PATH stands in for the argument.
         .name = "file: the path and header from TERMANCY_FILE_* variables",
         .command = "\"$TERMANCY\" ui file | sed \"s|^$PWD/||\"",
         .keys = "\\r",

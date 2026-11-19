@@ -1,4 +1,4 @@
-//! `termancy ui join`: put blocks of text side by side or one above another, as gum's `join`,
+//! `termancy ui join`: put blocks of text side by side or one above another,
 //! lining up styled and wide text by its display width.
 
 const std = @import("std");
@@ -26,7 +26,7 @@ pub const command = cli.command(.{
     .summary = "Join blocks of text side by side or vertically",
     .description =
     \\Join the arguments, each a block of lines, side by side (or one above another with
-    \\--vertical), padding each to line up, as gum's join. Side by side, --align places
+    \\--vertical), padding each to line up. Side by side, --align places
     \\shorter blocks at the top (left, the default), middle (center), or bottom (right);
     \\stacked, it places narrower blocks left, center, or right. Escape sequences take no
     \\room, so blocks from termancy ui style join cleanly. Every flag can also come from a

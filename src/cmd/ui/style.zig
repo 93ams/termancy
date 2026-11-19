@@ -1,5 +1,4 @@
 //! `termancy ui style`: print text in colors, with padding, a border, and alignment, as
-//! gum's `style`.
 
 const std = @import("std");
 const cli = @import("cli");

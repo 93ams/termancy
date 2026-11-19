@@ -23,7 +23,7 @@ affirmative: []const u8 = "Yes",
 negative: []const u8 = "No",
 /// The highlighted button: true for `affirmative`. Its starting value is the default.
 value: bool = true,
-/// Between the buttons; gum's command leaves it empty, spacing them with margins.
+/// Between the buttons; `termancy ui confirm` leaves it empty, spacing them with margins.
 gap: []const u8 = "  ",
 /// The screen row this is drawn from, for mouse clicks.
 top: usize = 0,

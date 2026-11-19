@@ -79,7 +79,7 @@ pub const command = cli.command(.{
     \\input or --file: the first line holds the column titles unless --columns gives them.
     \\Fields may be quoted ("a, b"), with "" for a quote inside. Every line must have as
     \\many fields as the first (see --fields-per-record), and a stray quote is an error
-    \\unless --lazy-quotes, as in gum.
+    \\unless --lazy-quotes.
     \\
     \\Interactively, up/down move, enter prints the chosen row as a line of the same
     \\format (or with --return-column, one of its fields), esc or q cancels (status 1), and
@@ -238,7 +238,7 @@ pub fn framed(gpa: Allocator, table: Table, flags: Flags) term.Framed(Table) {
     };
 }
 
-/// gum's row count before the keys: ` 2/12 • `, as wide as the count of rows.
+/// The row count before the keys: ` 2/12 • `, as wide as the count of rows.
 fn writeCount(table: *const Table, w: *Writer) Writer.Error!void {
     const total = table.rows.len;
     const at = @min(table.cursor + 1, total);
@@ -250,7 +250,7 @@ fn writeCount(table: *const Table, w: *Writer) Writer.Error!void {
 }
 
 /// Writes the chosen row, or its field `column` (1 is the first; 0, or one past the
-/// columns, writes the row, as gum does), as a record.
+/// columns, writes the row), as a record.
 pub fn writeChosen(
     w: *Writer,
     table: *const Table,
@@ -263,7 +263,7 @@ pub fn writeChosen(
     try writeRecord(w, &.{cell}, separator);
 }
 
-/// A CSV reader as Go's `encoding/csv`, which gum uses: fields end at `separator`,
+/// A CSV reader as Go's `encoding/csv`: fields end at `separator`,
 /// records at a line break (`\n` or `\r\n`). A field in double quotes may hold separators
 /// and line breaks, with `""` standing for a quote. Blank lines are skipped, and so is a
 /// byte-order mark at the start.

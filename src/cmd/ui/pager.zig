@@ -37,8 +37,8 @@ pub const command = cli.command(.{
     .summary = "Scroll through text",
     .description =
     \\Show text full screen in a rounded border, its lines numbered and wrapped to the
-    \\terminal's width. The argument is a file to show, or else the text itself (as gum's
-    \\`pager "$text"`); with no argument, standard input. Colors in the text stay (`git
+    \\terminal's width. The argument is a file to show, or else the text itself
+    \\(`pager "$text"`); with no argument, standard input. Colors in the text stay (`git
     \\diff --color`); other escape sequences go. Tabs become four spaces, and an overstruck
     \\character (one, backspace, another, as `man` writes bold) the last one.
     \\
@@ -82,11 +82,11 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
     defer model.pager.deinit();
     look(&model.pager, flags, ctx.theme, model.box);
     const options = term.timed(.{ .alt_screen = true }, flags.timeout);
-    // q and esc both just close the pager, as gum's: there is no answer to cancel.
+    // q and esc both just close the pager: there is no answer to cancel.
     if (try term.run(ctx, Viewer, &model, options)) return term.exitInterrupted(ctx);
 }
 
-/// The border around the pager: gum's, rounded in the accent and padded a column each
+/// The border around the pager: rounded in the accent and padded a column each
 /// side, with the top-level style flags over it.
 fn boxStyle(flags: Flags, theme: *const cli.Theme) tui.Style {
     const base: tui.Style = .{
@@ -124,7 +124,7 @@ const quit: term.Hint = .{ .keys = &.{"q"}, .action = .hint, .help = "quit" };
 const search: term.Hint = .{ .keys = &.{"/"}, .action = .hint, .help = "search" };
 const next: term.Hint = .{ .keys = &.{"n"}, .action = .hint, .help = "next match" };
 const previous: term.Hint = .{ .keys = &.{"N"}, .action = .hint, .help = "previous match" };
-// n and N last, left out until there is a search, as gum's.
+// n and N last, left out until there is a search.
 const wrapped_hints = [_]term.Hint{ navigate, quit, search, next, previous };
 const sideways_hints = [_]term.Hint{ navigate, scroll, quit, search, next, previous };
 
@@ -230,7 +230,7 @@ const Viewer = struct {
 const Source = struct { text: []const u8, path: ?[]const u8 = null };
 
 /// The file the argument names, or else the argument itself; with no argument (or an
-/// empty one, as gum), standard input. Fails when there is no text.
+/// empty one), standard input. Fails when there is no text.
 fn read(ctx: *cli.Context) !Source {
     const argument = if (ctx.args.len > 0) ctx.args[0] else "";
     if (argument.len > 0) {
@@ -251,7 +251,7 @@ fn read(ctx: *cli.Context) !Source {
 }
 
 /// `text` with each tab as four spaces and each overstruck character (one, backspace,
-/// another, as `man` writes bold and underlines) as the last one, as gum shows it.
+/// another, as `man` writes bold and underlines) as the last one.
 fn clean(arena: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error![]const u8 {
     if (std.mem.indexOfAny(u8, text, "\t\x08") == null) return text;
     var out: std.ArrayList(u8) = try .initCapacity(arena, text.len);
