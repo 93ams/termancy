@@ -16,15 +16,17 @@ const Flags = struct {
     language: []const u8 = "",
     theme: []const u8 = "",
     width: ?u16 = null,
+    strip_ansi: bool = true,
 };
 const flags_flags = cli.flags(Flags, field.Set(.{field.Spec(Flags){ .fields = .{
     .type = .{ .help = "What the text is" },
     .language = .{ .help = "The language of code (--type code)" },
-    .theme = .{ .help = "Markdown's style sheet (dark, light, dracula, tokyo-night, " ++
-        "pink, ascii, notty, or a JSON file), or code's theme (charm, dracula, monokai, " ++
-        "tokyo-night, github, ansi)" },
+    .theme = .{ .help = "Markdown's style sheet (pink, as gum's, or notty where colors " ++
+        "are not shown; dark, light, dracula, tokyo-night, ascii, notty, or a JSON " ++
+        "file), or code's theme (charm, dracula, monokai, tokyo-night, github, ansi)" },
     .width = .{ .help = "Columns to wrap Markdown to (default: the terminal's)" },
-} }}), .{ .fields = .{
+    .strip_ansi = .{ .help = term.help.strip_ansi },
+} }}), .{ .env_prefix = "TERMANCY_FORMAT_", .fields = .{
     .type = .{ .short = 't' },
     .language = .{ .short = 'l' },
     .width = .{ .short = 'w' },
@@ -38,12 +40,19 @@ pub const command = cli.command(.{
     .description =
     \\Format the arguments (one per line), or standard input. As Markdown (the default):
     \\headings, emphasis, lists, quotes, tables, task lists, links, and highlighted code
-    \\blocks, wrapped to the width. As code: highlighted for --language. As emoji:
-    \\:shortcodes: replaced. As a template: {{ Bold "x" }}, {{ Italic "x" }},
-    \\{{ Faint "x" }}, {{ Underline "x" }}, {{ CrossOut "x" }}, {{ Color "fg" "bg" "x" }},
-    \\{{ Foreground "fg" "x" }}, {{ Background "bg" "x" }}, and pipes:
-    \\{{ "x" | Bold | Color "212" "" }}. Colors are written only where standard output
-    \\shows them (as for termancy ui style).
+    \\blocks, wrapped to the width, in gum's pink style sheet (--theme picks another). As
+    \\code: highlighted for --language. As emoji: :shortcodes: replaced.
+    \\
+    \\As a template, gum's functions: {{ Bold "x" }}, and Italic, Faint, Underline,
+    \\CrossOut, Blink, Reverse, and Overline (which changes nothing, as in gum) alike;
+    \\{{ Color "fg" "x" }} or {{ Color "fg" "bg" "x" }}; {{ Foreground "fg" "x" }};
+    \\{{ Background "bg" "x" }}; and pipes, which pass the text last:
+    \\{{ "x" | Bold | Color "212" }}. Arguments are double-quoted strings; Go's if,
+    \\range, variables, and parentheses are not there.
+    \\
+    \\Escape sequences in standard input are removed (--no-strip-ansi keeps them). Colors
+    \\are written only where standard output shows them (as for termancy ui style).
+    \\Every flag can also come from a variable: TERMANCY_FORMAT_THEME.
     ,
     .args = .{ .max = null, .usage = "[text...]" },
     .flags = flags_flags,
@@ -52,17 +61,14 @@ pub const command = cli.command(.{
     \\termancy ui format < CHANGELOG.md
     \\termancy ui format -t code -l zig < build.zig
     \\termancy ui format -t emoji ":rocket: shipped"
-    \\termancy ui format -t template '{{ Bold "Hello" }} {{ "world" | Color "212" "" }}'
+    \\termancy ui format -t template '{{ Bold "Hello" }} {{ Color "99" "0" " world " }}'
+    \\echo '{{ "done" | Italic | Foreground "212" }}' | termancy ui format -t template
     ,
     .run = run,
 });
 
 fn run(ctx: *cli.Context, flags: Flags) !void {
-    const source = if (ctx.args.len > 0)
-        try std.mem.join(ctx.arena, "\n", ctx.args)
-    else
-        try term.readStdin(ctx) orelse
-            return ctx.usageError("no text: give it as arguments or on standard input", .{});
+    const source = try term.inputText(ctx, flags.strip_ansi);
     const color = try term.stdoutColor(ctx);
     var out: Writer.Allocating = .init(ctx.arena);
     switch (flags.type) {
@@ -103,17 +109,14 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
     try term.writeStyled(ctx.out, out.written(), color);
 }
 
-/// The style sheet `name` names (or a JSON file of one); by default dark, or light when
-/// the terminal's background is (by `COLORFGBG`), or notty without color.
+/// The style sheet `name` names (or a JSON file of one); by default pink, as gum's, or
+/// notty without color.
 fn styleSheet(
     ctx: *cli.Context,
     name: []const u8,
     color: tui.capability.Color,
 ) !markdown.StyleSheet {
-    if (name.len == 0) {
-        if (color == .none) return .notty;
-        return if (lightBackground(ctx.environ)) .light else .dark;
-    }
+    if (name.len == 0) return if (color == .none) .notty else .pink;
     if (markdown.StyleSheet.named(name)) |sheet| return sheet;
     const json = std.Io.Dir.cwd().readFileAlloc(ctx.io, name, ctx.arena, .limited(1 << 20)) catch
         return ctx.usageError("no style sheet named {s}", .{name});
@@ -140,7 +143,7 @@ fn templateMessage(err: TemplateError) []const u8 {
     return switch (err) {
         error.Unterminated => "a {{ without its }}",
         error.UnknownFunction => "an unknown function (Bold, Italic, Faint, Underline, " ++
-            "CrossOut, Blink, Reverse, Color, Foreground, Background)",
+            "CrossOut, Blink, Reverse, Overline, Color, Foreground, Background)",
         error.BadArgument => "a function given the wrong arguments",
         error.InvalidColor => "not a color",
         error.WriteFailed => "out of memory",
@@ -195,6 +198,8 @@ fn pipeline(w: *Writer, source: []const u8) TemplateError!void {
     try w.writeAll(value);
 }
 
+/// Applies one of gum's template functions (its format/formats.go): an attribute's paints
+/// its first argument; a color's paints its last, in the colors before it.
 fn apply(w: *Writer, name: []const u8, args: []const []const u8) TemplateError!void {
     const attributes = [_]struct { []const u8, tui.Style }{
         .{ "Bold", .{ .bold = true } },
@@ -204,25 +209,24 @@ fn apply(w: *Writer, name: []const u8, args: []const []const u8) TemplateError!v
         .{ "CrossOut", .{ .strikethrough = true } },
         .{ "Blink", .{ .blink = true } },
         .{ "Reverse", .{ .reverse = true } },
+        .{ "Overline", .{} },
     };
-    for (attributes) |pair| if (std.mem.eql(u8, name, pair[0])) {
-        if (args.len != 1) return error.BadArgument;
-        return pair[1].paint(w, args[0]);
-    };
+    if (args.len == 0) return error.BadArgument;
+    for (attributes) |pair| if (std.mem.eql(u8, name, pair[0])) return pair[1].paint(w, args[0]);
+    var style: tui.Style = .{};
+    const colors = args[0 .. args.len - 1];
     if (std.mem.eql(u8, name, "Color")) {
-        if (args.len != 3) return error.BadArgument;
-        const style: tui.Style = .{ .fg = try parseColor(args[0]), .bg = try parseColor(args[1]) };
-        return style.paint(w, args[2]);
-    }
-    if (std.mem.eql(u8, name, "Foreground")) {
-        if (args.len != 2) return error.BadArgument;
-        return (tui.Style{ .fg = try parseColor(args[0]) }).paint(w, args[1]);
-    }
-    if (std.mem.eql(u8, name, "Background")) {
-        if (args.len != 2) return error.BadArgument;
-        return (tui.Style{ .bg = try parseColor(args[0]) }).paint(w, args[1]);
-    }
-    return error.UnknownFunction;
+        if (colors.len > 2) return error.BadArgument;
+        if (colors.len > 0) style.fg = try parseColor(colors[0]);
+        if (colors.len > 1) style.bg = try parseColor(colors[1]);
+    } else if (std.mem.eql(u8, name, "Foreground")) {
+        if (colors.len > 1) return error.BadArgument;
+        if (colors.len > 0) style.fg = try parseColor(colors[0]);
+    } else if (std.mem.eql(u8, name, "Background")) {
+        if (colors.len > 1) return error.BadArgument;
+        if (colors.len > 0) style.bg = try parseColor(colors[0]);
+    } else return error.UnknownFunction;
+    return style.paint(w, args[args.len - 1]);
 }
 
 fn parseColor(text: []const u8) error{InvalidColor}!tui.Color {
@@ -275,7 +279,14 @@ test renderTemplate {
         "a \x1b[1mb\x1b[0m \x1b[31m\x1b[3mc\x1b[0m\x1b[0m d",
         w.buffered(),
     );
+    // gum's other spellings: two-argument Color, one-argument Foreground, Overline.
     w = .fixed(&buffer);
+    try renderTemplate(&w, "{{ Color \"2\" \"x\" }}{{ \"y\" | Foreground }}{{ Overline \"z\" }}" ++
+        "{{ Background \"4\" \"w\" }}{{ Bold \"a\" \"b\" }}");
+    try testing.expectEqualStrings("\x1b[32mx\x1b[0myz\x1b[44mw\x1b[0m\x1b[1ma\x1b[0m", w.buffered());
+    w = .fixed(&buffer);
+    try testing.expectError(error.BadArgument, renderTemplate(&w, "{{ Color \"1\" \"2\" \"3\" \"x\" }}"));
+    try testing.expectError(error.BadArgument, renderTemplate(&w, "{{ Bold }}"));
     try testing.expectError(error.UnknownFunction, renderTemplate(&w, "{{ Shout \"x\" }}"));
     try testing.expectError(error.Unterminated, renderTemplate(&w, "{{ Bold \"x\""));
 }

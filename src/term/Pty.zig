@@ -54,6 +54,8 @@ io: Io,
 output: File,
 /// Where its input goes; the same file as `output` except on Windows.
 input: File,
+/// The read end of its standard error, with `SpawnOptions.pipe_stderr`.
+errors: ?File = null,
 process: Process,
 exited: ?Exit = null,
 
@@ -88,6 +90,12 @@ pub const SpawnOptions = struct {
     /// Its working directory; null for this process's.
     cwd: ?[]const u8 = null,
     size: Size = .{ .width = 80, .height = 24 },
+    /// POSIX only: files the program takes as its standard input or output instead of
+    /// the terminal, which stays its controlling terminal (`/dev/tty`).
+    stdin: ?File = null,
+    stdout: ?File = null,
+    /// POSIX only: standard error goes to a pipe read from `Pty.errors`, not the terminal.
+    pipe_stderr: bool = false,
 };
 
 /// What `spawn` can fail with.
@@ -189,7 +197,10 @@ pub fn deinit(p: *Pty) void {
             p.input.close(p.io);
             p.output.close(p.io);
         },
-        else => p.output.close(p.io),
+        else => {
+            p.output.close(p.io);
+            if (p.errors) |errors| errors.close(p.io);
+        },
     }
     p.* = undefined;
 }
@@ -247,30 +258,51 @@ fn spawnPosix(io: Io, gpa: Allocator, options: SpawnOptions) SpawnError!Pty {
     var report: [2]posix.fd_t = undefined;
     if (!sys.pipeCloexec(&report)) return error.PtyUnavailable;
     defer _ = sys.close(report[0]);
+    var errors: [2]posix.fd_t = .{ -1, -1 };
+    if (options.pipe_stderr and !sys.pipeCloexec(&errors)) {
+        _ = sys.close(report[1]);
+        return error.PtyUnavailable;
+    }
+    errdefer if (errors[0] >= 0) {
+        _ = sys.close(errors[0]);
+    };
+    const streams: [3]?posix.fd_t = .{
+        if (options.stdin) |f| f.handle else null,
+        if (options.stdout) |f| f.handle else null,
+        if (options.pipe_stderr) errors[1] else null,
+    };
 
     const pid = sys.fork();
     if (pid < 0) {
         _ = sys.close(report[1]);
+        if (errors[1] >= 0) _ = sys.close(errors[1]);
         return error.SpawnFailed;
     }
-    if (pid == 0) child(master, slave_path, &winsize, report[1], program, argv, envp, cwd);
+    if (pid == 0) child(master, slave_path, &winsize, report[1], streams, program, argv, envp, cwd);
     _ = sys.close(report[1]);
+    if (errors[1] >= 0) _ = sys.close(errors[1]);
     var errno: [4]u8 = undefined;
     if (sys.readAll(report[0], &errno) > 0) {
         _ = sys.waitpid(pid) catch {};
         return error.SpawnFailed;
     }
     const file: File = .{ .handle = master, .flags = .{ .nonblocking = false } };
-    return .{ .io = io, .output = file, .input = file, .process = .{ .pid = pid } };
+    var pty: Pty = .{ .io = io, .output = file, .input = file, .process = .{ .pid = pid } };
+    if (options.pipe_stderr) {
+        pty.errors = .{ .handle = errors[0], .flags = .{ .nonblocking = false } };
+    }
+    return pty;
 }
 
 /// Runs in the child: becomes a session leader whose controlling terminal is the slave,
-/// with it as standard input, output, and error, then runs the program.
+/// with it as standard input, output, and error (but for those `streams` gives), then runs
+/// the program.
 fn child(
     master: posix.fd_t,
     slave_path: [*:0]const u8,
     winsize: *const posix.winsize,
     report: posix.fd_t,
+    streams: [3]?posix.fd_t,
     program: [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
     envp: [*:null]const ?[*:0]const u8,
@@ -283,7 +315,7 @@ fn child(
     // Again: macOS forgets a size set before the slave side was first opened.
     _ = sys.ioctl(slave, tty.IOCSWINSZ, @intFromPtr(winsize));
     _ = sys.ioctl(slave, tty.IOCSCTTY, @as(usize, 0));
-    for ([_]posix.fd_t{ 0, 1, 2 }) |fd| _ = sys.dup2(slave, fd);
+    for (streams, 0..) |stream, fd| _ = sys.dup2(stream orelse slave, @intCast(fd));
     if (slave > 2) _ = sys.close(slave);
     if (cwd) |dir| if (sys.chdir(dir) != 0) sys.fail(report);
     _ = sys.execve(program, argv, envp);

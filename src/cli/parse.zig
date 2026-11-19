@@ -1688,3 +1688,40 @@ test "an unknown word before a subcommand is a usage error from the app" {
     const message = "app: unknown command \"nosuch\" for \"app\"";
     try testing.expect(std.mem.startsWith(u8, run.err, message));
 }
+
+const Paint = struct { fg: []const u8 = "", bold: bool = true };
+const DottedFlags = struct { paint: Paint = .{} };
+const dotted_flags = sets.flags(DottedFlags, field.Set(.{field.Spec(Paint){ .fields = .{
+    .fg = .{ .help = "Color" },
+} }}), .{ .env_prefix = "APP_", .fields = .{ .paint = .{ .separator = "." } } });
+
+fn dottedRun(ctx: *Context, flags: DottedFlags) !void {
+    try ctx.out.print("{s} {}\n", .{ flags.paint.fg, flags.paint.bold });
+}
+
+const dotted_root = spec.command(.{ .name = "app", .flags = dotted_flags, .run = dottedRun });
+
+test "a group spelled with dots: values, negation, variables, and help" {
+    const app: App = .{ .root = &dotted_root };
+    const spellings = [_][]const []const u8{
+        &.{ "--paint.fg", "red", "--no-paint.bold" },
+        &.{ "--paint.fg=red", "--paint.bold=false" },
+    };
+    for (spellings) |args| {
+        const run = try cli_testing.run(app, args, .{});
+        defer run.deinit();
+        try run.expect(0, "red false\n", "");
+    }
+    const env: []const [2][]const u8 = &.{ .{ "APP_PAINT_FG", "blue" }, .{ "APP_PAINT_BOLD", "0" } };
+    const from_env = try cli_testing.run(app, &.{}, .{ .env = env });
+    defer from_env.deinit();
+    try from_env.expect(0, "blue false\n", "");
+    // Names match whole: a prefix of one is unknown.
+    const prefix = try cli_testing.run(app, &.{"--paint.f=red"}, .{});
+    defer prefix.deinit();
+    try testing.expectEqual(App.exit_usage, prefix.status);
+    const help = try cli_testing.run(app, &.{"--help"}, .{});
+    defer help.deinit();
+    try testing.expect(std.mem.indexOf(u8, help.out, "--paint.fg <string>   Color " ++
+        "[env: APP_PAINT_FG]") != null);
+}

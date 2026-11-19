@@ -91,6 +91,114 @@ element in JSON, say) is rewritten whole, losing its comments, with a warning.
 `format`, `join`, `log`: in the spirit of [gum](https://github.com/charmbracelet/gum).
 `ACCESSIBLE=1` asks with plain lines.
 
+The commands share gum's conventions, each where it applies:
+
+- **Variables:** every flag can come from `TERMANCY_<COMMAND>_<FLAG>`, its name in
+  SCREAMING_SNAKE: `TERMANCY_CHOOSE_HEIGHT=5`, `TERMANCY_CHOOSE_CURSOR_FOREGROUND=212`. The
+  command line wins.
+- **`--timeout <duration>`** (`500ms`, `5s`, `1m30s`; `0`, the default, waits forever): ends
+  with status 124 and `timed out` on stderr, unless the command's help says what a timeout
+  answers instead.
+- **Style groups:** `--<part>.<style>` styles one part of a component, such as
+  `--cursor.foreground 212`, `--header.bold`, `--header.border rounded`. The styles are
+  `ui style`'s flags: `foreground`, `background`, `border`, `border-foreground`,
+  `border-background`, `align`, `width`, `height`, `margin`, `padding`, `bold`, `faint`,
+  `italic`, `strikethrough`, `underline`. Colors are 0-255, `#rrggbb`, or a name. Help lists
+  each part's colors; the rest work without being listed, as in gum. Unset, a part keeps the
+  theme's look: the accent for the cursor and chosen items, the heading style for headers.
+- **`--show-help`** (on; `--no-show-help` turns it off): the keys, under the component.
+- **`--padding`:** space around the whole component: `1`, `1 2`, or `1 2 1 2`.
+- **Standard input:** `--strip-ansi` (on) removes escape sequences, `--input-delimiter`
+  splits it into items, and `--output-delimiter` separates the items printed (both `\n` by
+  default, typed with escapes: `\n`, `\t`, `\0`, `\\`).
+
+`choose` and `filter` take gum's flags too:
+
+- **`choose`:** `--limit N` or `--no-limit` (space chooses, `a` chooses all), `--ordered`
+  (the items sorted, and several printed in the order chosen), `--selected` (repeated or
+  comma-separated; `*` for all, up to the limit; with `--limit 1`, the item highlighted). With
+  the items as arguments, piped standard input names the ones selected.
+  `--label-delimiter :` shows `Red` of `Red:#f00` and prints `#f00`. `--select-if-one`
+  prints a lone item without asking, no terminal needed. The marks are `--cursor-prefix`,
+  `--selected-prefix`, and `--unselected-prefix`; `--header` is `Choose:` unless given.
+- **`filter`:** fuzzy matching, best first (`--no-fuzzy-sort` keeps the items' order;
+  `--no-fuzzy` matches the typed text anywhere, ignoring case). `--strict`, the default,
+  prints only a match; `--no-strict` offers the typed text as the first row, to print as it
+  is. `--height 0`, the default, fills the terminal; `--reverse` puts the query at the bottom;
+  `--width` caps the columns. `--indicator`, `--selected-prefix`, `--unselected-prefix`,
+  `--value`, `--placeholder`, `--prompt`, `--selected`, and `--select-if-one` (on the matches
+  of `--value`) as gum's. With `ACCESSIBLE=1`, it asks for the query, then numbers the
+  matches.
+
+```sh
+color=$(termancy ui choose --label-delimiter : "Red:#f00" "Green:#0f0" "Blue:#00f")
+branch=$(git branch --format='%(refname:short)' | termancy ui filter --no-strict --height 10)
+printf 'b\nc\n' | termancy ui choose --no-limit a b c d   # b and c chosen at the start
+```
+
+The output commands, as gum's:
+
+- **`style`** lays the arguments (one per line) or standard input out as a block in the
+  style flags, at the top level: `--width` wraps at spaces, `--align top|middle|bottom`
+  places the text in a `--height` taller than it, `--trim` removes the whitespace around
+  each line first.
+- **`format`** renders Markdown (in gum's `pink` style sheet where colors show, `notty`
+  where not; `--theme` picks another), code (`-t code -l zig`), emoji shortcodes, or a
+  template of gum's functions: `{{ Bold "x" }}` (and `Italic`, `Faint`, `Underline`,
+  `CrossOut`, `Blink`, `Reverse`, `Overline`), `{{ Color "fg" "x" }}`,
+  `{{ Color "fg" "bg" "x" }}`, `Foreground`, `Background`, and pipes:
+  `{{ "x" | Bold | Color "212" }}`. Arguments are double-quoted strings; Go's `if`,
+  `range`, variables, and parentheses are not there.
+- **`join`** puts blocks side by side, shorter ones at the `--align` `top`, `middle`, or
+  `bottom` (`left`, `center`, `right` say the same), or stacked with `--vertical`,
+  narrower ones `left`, `center`, or `right`.
+- **`log`** writes one record on standard error: the arguments joined by spaces; with
+  `-s`, a message and `key value` pairs; with `-f`, a printf format (`%s`, `%d`, `%v`, a
+  width such as `%-8s`, `%%`) and its arguments. `--level none` (the default) writes no
+  level; `--formatter text|json|logfmt`; `--time` takes Go's layout names, as gum's
+  (`kitchen`, `rfc3339`, `datetime`, `stampmilli`, ...), in local time (`TZ`, else the
+  system's zone), and JSON and logfmt keep RFC 3339; `--min-level` or `TERMANCY_LOG_LEVEL` leaves out lower levels, never a record
+  with no level; `fatal` ends with status 1. `--level.*`, `--time.*`, `--prefix.*`,
+  `--message.*`, `--key.*`, `--value.*`, and `--separator.*` style the parts.
+
+`ui input` and `ui write` start from `--value`, or else from standard input when it is
+piped; their cursor is the terminal's own (`--cursor.mode blink`, `static`, or `hide`).
+`write` submits with enter, starts a line with ctrl+j (or alt+enter), and opens the text in
+`$VISUAL` or `$EDITOR` with ctrl+e; with `ACCESSIBLE=1` it reads plain lines until an empty
+line twice or Ctrl-D. `ui confirm` answers with its status (0 yes, 1 no);
+`--show-output` prints the question and the answer, `--default` takes `yes`/`no` or gum's
+`--default=false`, and `--timeout` takes the highlighted answer instead of failing.
+
+**`ui spin -- <command>`** runs the command under a spinner and exits with its status, as
+gum's does. Where standard output is a terminal, the command's output stays hidden:
+`--show-output` (or `--show-stdout`, `--show-stderr`) shows it under the spinner as it comes
+and prints it if the command succeeds, and `--show-error` prints it if the command fails.
+Elsewhere (`x=$(termancy ui spin -- cmd)`) its standard output goes straight through and its
+standard error follows the spinner. On POSIX the command runs on a pseudo-terminal, as in gum, so
+it keeps its colors and can open `/dev/tty`; its standard error is a pipe apart (on Windows
+both are pipes). `--spinner` takes gum's names (`dot`, the default,
+`line`, `minidot`, `jump`, `pulse`, `points`, `globe`, `moon`, `monkey`, `meter`,
+`hamburger`), at gum's pace; `--align right` puts it after the title. Ctrl-C and
+`--timeout` stop the command's whole process group.
+
+**`ui table`** reads CSV from standard input or `--file` as gum does, with Go's
+`encoding/csv` rules: every line has as many fields as the first (`--fields-per-record`
+says otherwise; `-1` allows any), and a quote in an unquoted field, or a lone one in a quoted
+field, is an error unless `--lazy-quotes`. Enter prints the chosen row as CSV, or with
+`--return-column n` its nth field. `--height` counts the table's lines, header and border
+included (`0`, the default, fits the terminal); the row count leads the help line unless
+`--hide-count`; esc, q, and ctrl+q quit (status 1); columns narrow to fit the terminal;
+`--separator` is any one character; `--print` writes the whole table to standard output
+instead.
+
+`ui pager [file|text]` shows a file, else the argument itself, else standard input, in a
+rounded border with numbered, wrapped lines (`--no-show-line-numbers`, `--no-soft-wrap`);
+colored input keeps its colors; `/` searches for a regular expression (smart case),
+highlighting every match, and n/N step through them; q and Esc both exit 0. `ui file
+[path]` shows permissions and sizes (`--no-permissions`, `--no-size`) and prints the
+absolute path chosen; `--directory` lets enter choose a directory (right opens one), and
+the path can come from `TERMANCY_FILE_PATH`.
+
 ## Terminal output and media
 
 | command | |

@@ -147,6 +147,11 @@ pub fn Driver(comptime Model: type) type {
             return d.program.interrupted;
         }
 
+        /// Whether `Options.timeout` ended the program.
+        pub fn timedOut(d: *const Self) bool {
+            return d.program.timed_out;
+        }
+
         /// Runs background work at once, lends the terminal out while the program asks
         /// to, then syncs the screen.
         fn lend(d: *Self) Error!void {
@@ -649,6 +654,21 @@ test "Driver: Ctrl-C interrupts without reaching the model" {
     // Nothing reaches a finished program.
     try d.press("down");
     try testing.expectEqual(0, d.model().cursor);
+}
+
+test "Driver: the timeout ends the program without the model" {
+    var d: MenuDriver = undefined;
+    try startMenu(&d, .{ .program = .{ .timeout = .fromMilliseconds(250) } });
+    defer d.deinit();
+    try d.press("down");
+    // Timers fire as before it (the menu ticks every 100ms).
+    try d.advance(.fromMilliseconds(249));
+    try testing.expect(!d.done());
+    try testing.expectEqual(2, d.model().ticks);
+    try testing.expectEqual(250 * std.time.ns_per_ms, d.program.nextDeadline().?.nanoseconds);
+    try d.advance(.fromMilliseconds(1));
+    try testing.expect(d.done() and d.timedOut() and !d.interrupted());
+    try testing.expectEqual(1, d.model().cursor);
 }
 
 test "Driver: with interrupt off, Ctrl-C is a key" {

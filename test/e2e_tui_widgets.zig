@@ -25,6 +25,8 @@ const Case = struct {
     stdin: ?[]const u8 = null,
     stdout: []const u8 = "",
     stderr: []const u8 = "",
+    /// Checked instead of `stderr` when set: a part standard error must hold (around a time).
+    stderr_match: ?[]const u8 = null,
     status: u8 = 0,
 };
 
@@ -183,9 +185,9 @@ const cases = [_]Case{
         .name = "format, FORCE_COLOR",
         .args = &.{ "ui", "format", "# T", "*i* `c`" },
         .env = &force_color,
-        .stdout = "\n  \x1b[1;38;5;228;48;5;63m \x1b[0m\x1b[1;38;5;228;48;5;63mT\x1b[0m" ++
-            "\x1b[1;38;5;228;48;5;63m \x1b[0m\n\n  \x1b[3;38;5;252mi\x1b[0m\x1b[38;5;252m " ++
-            "\x1b[0m\x1b[38;5;203;48;5;236m c \x1b[0m\n",
+        // gum's default style sheet, pink.
+        .stdout = "\n  \x1b[1;4;38;5;212mT\x1b[0m\n\n  \x1b[3;38;5;212mi\x1b[0m " ++
+            "\x1b[38;5;212mc\x1b[0m\n",
     },
     // table --print
     .{
@@ -206,12 +208,13 @@ const cases = [_]Case{
         .args = &.{ "ui", "table", "-p", "--border", "ascii" },
         .env = &force_color,
         .stdin = "a,b\n1,2\n",
-        .stdout = "\x1b[38;5;238m+---+---+\x1b[0m\n" ++
-            "\x1b[38;5;238m|\x1b[0m\x1b[1;38;5;99m a \x1b[0m\x1b[38;5;238m|\x1b[0m" ++
-            "\x1b[1;38;5;99m b \x1b[0m\x1b[38;5;238m|\x1b[0m\n" ++
-            "\x1b[38;5;238m+---+---+\x1b[0m\n" ++
-            "\x1b[38;5;238m|\x1b[0m 1 \x1b[38;5;238m|\x1b[0m 2 \x1b[38;5;238m|\x1b[0m\n" ++
-            "\x1b[38;5;238m+---+---+\x1b[0m\n",
+        // The theme's: the heading's bold magenta, a dim border.
+        .stdout = "\x1b[2m+---+---+\x1b[0m\n" ++
+            "\x1b[2m|\x1b[0m\x1b[1;35m a \x1b[0m\x1b[2m|\x1b[0m" ++
+            "\x1b[1;35m b \x1b[0m\x1b[2m|\x1b[0m\n" ++
+            "\x1b[2m+---+---+\x1b[0m\n" ++
+            "\x1b[2m|\x1b[0m 1 \x1b[2m|\x1b[0m 2 \x1b[2m|\x1b[0m\n" ++
+            "\x1b[2m+---+---+\x1b[0m\n",
     },
     .{
         .name = "table --print: TSV, titles, widths, no border",
@@ -265,16 +268,229 @@ const cases = [_]Case{
         .status = 2,
     },
     .{
-        .name = "pager with a missing file",
-        .args = &.{ "ui", "pager", "missing.txt" },
-        .stderr = "termancy: missing.txt: no such file\n",
-        .status = 1,
+        // The variable is read as the flag would be, before any terminal.
+        .name = "choose: TERMANCY_CHOOSE_LIMIT=0",
+        .args = &.{ "ui", "choose", "a" },
+        .env = &.{.{ "TERMANCY_CHOOSE_LIMIT", "0" }},
+        .stderr = "termancy: --limit must be at least 1\n" ++ usage("choose"),
+        .status = 2,
+    },
+    .{
+        .name = "choose --timeout that is not a duration",
+        .args = &.{ "ui", "choose", "--timeout", "soon", "a" },
+        .stderr = "termancy: invalid value \"soon\" for flag --timeout: expected duration\n" ++
+            usage("choose"),
+        .status = 2,
+    },
+    .{
+        .name = "pager with no text",
+        .args = &.{ "ui", "pager" },
+        .stderr = "termancy: no text: give a file, the text, or standard input\n" ++
+            usage("pager"),
+        .status = 2,
     },
     .{
         .name = "spin without a command",
         .args = &.{ "ui", "spin" },
         .stderr = "termancy: \"termancy ui spin\" requires at least 1 argument, received 0\n" ++
             usage("spin"),
+        .status = 2,
+    },
+    // choose/filter (gum parity)
+    .{
+        .name = "choose: an item without the --label-delimiter",
+        .args = &.{ "ui", "choose", "--label-delimiter", ":", "a:1", "b" },
+        .stderr = "termancy: item \"b\" has no --label-delimiter \":\"\n",
+        .status = 1,
+    },
+    // style/format/join/log (gum parity)
+    .{
+        .name = "style --trim",
+        .args = &.{ "ui", "style", "--trim", "--border", "normal" },
+        .stdin = "  a  \n\t bb\n",
+        .stdout = "┌──┐\n│a │\n│bb│\n└──┘\n",
+    },
+    .{
+        .name = "style: TERMANCY_STYLE_TRIM, escapes stripped from standard input",
+        .args = &.{ "ui", "style" },
+        .env = &.{ .{ "TERMANCY_STYLE_TRIM", "1" }, .{ "FORCE_COLOR", "3" } },
+        .stdin = "  \x1b[31mred\x1b[0m \n",
+        .stdout = "red\n",
+    },
+    .{
+        .name = "style --height --align bottom",
+        .args = &.{ "ui", "style", "--height", "3", "--align", "bottom", "x" },
+        .stdout = " \n \nx\n",
+    },
+    .{
+        .name = "format: gum's template functions",
+        .args = &.{
+            "ui",
+            "format",
+            "-t",
+            "template",
+            "{{ Color \"99\" \"0\" \" Gum \" }}{{ \"x\" | Bold | Foreground \"212\" }}" ++
+                "{{ Color \"1\" \"y\" }}{{ Overline \"o\" }}",
+        },
+        .env = &force_color,
+        .stdout = "\x1b[38;5;99;40m Gum \x1b[0m\x1b[38;5;212m\x1b[1mx\x1b[0m\x1b[0m" ++
+            "\x1b[31my\x1b[0mo\n",
+    },
+    .{
+        .name = "format: a template on standard input, TERMANCY_FORMAT_TYPE",
+        .args = &.{ "ui", "format" },
+        .env = &.{.{ "TERMANCY_FORMAT_TYPE", "template" }},
+        .stdin = "{{ Italic \"hi\" }} there\n",
+        .stdout = "hi there\n",
+    },
+    .{
+        .name = "format --type code",
+        .args = &.{ "ui", "format", "--type", "code", "-l", "zig", "--theme", "ansi" },
+        .env = &force_color,
+        .stdin = "const x = 1;\n",
+        .stdout = "\x1b[35mconst\x1b[0m x = \x1b[36m1\x1b[0m;\n",
+    },
+    .{
+        .name = "format --type emoji",
+        .args = &.{ "ui", "format", "--type", "emoji", ":rocket: shipped :tada:" },
+        .stdout = "🚀 shipped 🎉\n",
+    },
+    .{
+        .name = "join side by side, at the bottom",
+        .args = &.{ "ui", "join", "--align", "bottom", "a\nb\nc", "x" },
+        .stdout = "a \nb \ncx\n",
+    },
+    .{
+        .name = "join side by side, in the middle by TERMANCY_JOIN_ALIGN",
+        .args = &.{ "ui", "join", "a\nb\nc", "x" },
+        .env = &.{.{ "TERMANCY_JOIN_ALIGN", "middle" }},
+        .stdout = "a \nbx\nc \n",
+    },
+    .{
+        .name = "join stacked, centered",
+        .args = &.{ "ui", "join", "--vertical", "--align", "center", "a", "bbb" },
+        .stdout = " a \nbbb\n",
+    },
+    .{
+        .name = "log: the arguments as one message, no level",
+        .args = &.{ "ui", "log", "two", "words" },
+        .stderr = "two words\n",
+    },
+    .{
+        .name = "log --structured",
+        .args = &.{ "ui", "log", "-s", "-l", "warn", "disk", "used", "93%", "path", "/var log" },
+        .stderr = "WARN disk used=93% path=\"/var log\"\n",
+    },
+    .{
+        .name = "log -f, as printf",
+        .args = &.{ "ui", "log", "-f", "%s took %ds", "build", "42" },
+        .stderr = "build took 42s\n",
+    },
+    .{
+        .name = "log --formatter json",
+        .args = &.{
+            "ui",           "log", "--formatter", "json", "-l", "info", "--prefix", "app",
+            "--structured", "up",  "port",        "80",
+        },
+        .stderr = "{\"level\":\"info\",\"prefix\":\"app\",\"msg\":\"up\",\"port\":\"80\"}\n",
+    },
+    .{
+        .name = "log: TERMANCY_LOG_LEVEL leaves out lower levels",
+        .args = &.{ "ui", "log", "-l", "info", "left out" },
+        .env = &.{.{ "TERMANCY_LOG_LEVEL", "warn" }},
+    },
+    .{
+        .name = "log: TERMANCY_LOG_LEVEL lets the rest through",
+        .args = &.{ "ui", "log", "-l", "error", "written" },
+        .env = &.{.{ "TERMANCY_LOG_LEVEL", "warn" }},
+        .stderr = "ERROR written\n",
+    },
+    .{
+        .name = "log --time kitchen",
+        .args = &.{ "ui", "log", "-t", "kitchen", "-l", "info", "hi" },
+        .stderr_match = "M INFO hi\n",
+    },
+    .{
+        .name = "log --level fatal ends with status 1",
+        .args = &.{ "ui", "log", "-l", "fatal", "boom" },
+        .stderr = "FATAL boom\n",
+        .status = 1,
+    },
+    .{
+        .name = "log: --format is printf's switch, not the formatter",
+        .args = &.{ "ui", "log", "--format=json", "x" },
+        .stderr = "termancy: invalid value \"json\" for flag --format: expected true or false\n" ++
+            usage("log"),
+        .status = 2,
+    },
+    // input/write/confirm (gum parity)
+    .{
+        .name = "confirm --default that is not an answer",
+        .args = &.{ "ui", "confirm", "--default", "maybe" },
+        .stderr = "termancy: invalid value \"maybe\" for flag --default: expected yes|no\n" ++
+            usage("confirm"),
+        .status = 2,
+    },
+    // spin/table (gum parity)
+    .{
+        .name = "table --print --file, a separator, and a double border",
+        .args = &.{ "ui", "table", "-p", "-f", "app.env", "-s", "=", "-b", "double" },
+        .stdout =
+        \\╔══════════════╦══════╗
+        \\║ APP_NAME     ║ demo ║
+        \\╠══════════════╬══════╣
+        \\║ SERVER__PORT ║ 80   ║
+        \\╚══════════════╩══════╝
+        \\
+        ,
+    },
+    .{
+        .name = "table --print: the border from TERMANCY_TABLE_BORDER",
+        .args = &.{ "ui", "table", "-p" },
+        .env = &.{.{ "TERMANCY_TABLE_BORDER", "ascii" }},
+        .stdin = "a,b\n1,2\n",
+        .stdout = "+---+---+\n| a | b |\n+---+---+\n| 1 | 2 |\n+---+---+\n",
+    },
+    .{
+        .name = "table --file that does not exist",
+        .args = &.{ "ui", "table", "-p", "-f", "missing.csv" },
+        .stderr = "termancy: missing.csv: no such file\n",
+        .status = 1,
+    },
+    .{
+        .name = "table: a stray quote, as gum's CSV reader has it",
+        .args = &.{ "ui", "table", "-p" },
+        .stdin = "a\nb\"c\n",
+        .stderr = "termancy: standard input: line 2: a quote in an unquoted field " ++
+            "(--lazy-quotes allows it)\n",
+        .status = 1,
+    },
+    .{
+        .name = "table --lazy-quotes",
+        .args = &.{ "ui", "table", "-p", "--lazy-quotes", "-b", "none" },
+        .stdin = "a\nb\"c\n",
+        .stdout = "a  \nb\"c\n",
+    },
+    .{
+        .name = "table: a line short of fields",
+        .args = &.{ "ui", "table", "-p" },
+        .stdin = "a,b\n1\n",
+        .stderr = "termancy: standard input: line 2: expected 2 fields, found 1 " ++
+            "(see --fields-per-record)\n",
+        .status = 1,
+    },
+    .{
+        .name = "table --fields-per-record -1: short lines padded",
+        .args = &.{ "ui", "table", "-p", "--fields-per-record=-1", "-b", "none" },
+        .stdin = "a,b\n1\n",
+        .stdout = "a  b\n1   \n",
+    },
+    // pager/file (gum parity)
+    .{
+        .name = "file with nothing to choose",
+        .args = &.{ "ui", "file", "--no-file" },
+        .stderr = "termancy: --no-file needs --directory: there would be nothing to choose\n" ++
+            usage("file"),
         .status = 2,
     },
 };
@@ -357,6 +573,33 @@ const detached_cases = [_]Case{
         .stderr = "termancy: termancy-e2e-no-such-command: command not found\n",
         .status = 127,
     },
+    // choose/filter (gum parity)
+    .{
+        // Standard input and output redirected, and no terminal at all: none is needed.
+        .name = "choose --select-if-one: the lone item's value",
+        .args = &.{ "ui", "choose", "--select-if-one", "--label-delimiter", ":" },
+        .stdin = "Only one:1\n",
+        .stdout = "1\n",
+    },
+    .{
+        .name = "filter --select-if-one: the only match of --value",
+        .args = &.{ "ui", "filter", "--select-if-one", "--value", "ban" },
+        .stdin = "apple\nbanana\ncherry\n",
+        .stdout = "banana\n",
+    },
+    // spin/table (gum parity): no terminal at all
+    .{
+        .name = "spin --timeout stops the command",
+        .args = &.{ "ui", "spin", "--timeout", "200ms", "--", "sleep", "10" },
+        .stderr = "timed out\n",
+        .status = 124,
+    },
+    .{
+        .name = "spin: standard input reaches the command",
+        .args = &.{ "ui", "spin", "--", "cat" },
+        .stdin = "piped\n",
+        .stdout = "piped\n",
+    },
 };
 
 /// A command run in a pseudo-terminal, with keys typed into it.
@@ -380,6 +623,10 @@ const PtyCase = struct {
     /// Run under `test/jobctl.zig` (`$JOBCTL`), which stops and continues the command as a
     /// shell's job control does.
     jobctl: bool = false,
+    /// Text the terminal must have shown by the end, and text it must never have shown
+    /// (the log begins with the command, so spell it differently there: `a""b`).
+    shows: []const u8 = "",
+    hides: []const u8 = "",
 };
 
 /// `cfg edit` of a fresh `app.toml` holding `a = 1`, with `reedit.sh` as the editor (a
@@ -410,6 +657,34 @@ const pty_cases = [_]PtyCase{
         .keys = " jj \\r",
         .stdout = "a\nc\n",
     },
+    .{
+        // gum's timeout: nothing chosen, `timed out` on stderr, status 124. (The inner
+        // shell puts stderr where the driver puts stdout.)
+        .name = "choose --timeout",
+        .command = "sh -c '\"$TERMANCY\" ui choose --timeout 100ms a b c 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        .name = "choose: flags from TERMANCY_CHOOSE_* variables",
+        .command = choose_abc,
+        .keys = "\\r",
+        .env = &.{
+            .{ "TERMANCY_CHOOSE_HEADER", "Pick one" },
+            .{ "TERMANCY_CHOOSE_SELECTED", "c" },
+        },
+        .wait_for = "Pick one",
+        .stdout = "c\n",
+    },
+    .{
+        // Escapes go from standard input, and the delimiters are typed with escapes.
+        .name = "choose: --input-delimiter, --output-delimiter, --strip-ansi",
+        .command = "printf 'x,\\033[31my\\033[0m\\n' | " ++
+            "\"$TERMANCY\" ui choose --input-delimiter , --output-delimiter '\\t' --no-limit",
+        .keys = "a\\r",
+        .stdout = "x\ty\n",
+    },
     .{ .name = "confirm: y", .command = "\"$TERMANCY\" ui confirm Sure?", .keys = "y" },
     .{ .name = "confirm: n", .command = "\"$TERMANCY\" ui confirm", .keys = "n", .status = 1 },
     .{
@@ -432,9 +707,10 @@ const pty_cases = [_]PtyCase{
     },
     .{ .name = "input: esc", .command = "\"$TERMANCY\" ui input", .keys = "abc\\033", .status = 1 },
     .{
-        .name = "write: lines until Ctrl-D",
+        // alt+enter starts a line (enter would submit, as gum's); Ctrl-D submits too.
+        .name = "write: alt+enter, then Ctrl-D",
         .command = "\"$TERMANCY\" ui write",
-        .keys = "one\\rtwo\\004",
+        .keys = "one\\033\\rtwo\\004",
         .stdout = "one\ntwo\n",
     },
     .{
@@ -460,7 +736,6 @@ const pty_cases = [_]PtyCase{
         .name = "pager from standard input: esc",
         .command = "printf 'text\\n' | \"$TERMANCY\" ui pager",
         .keys = "\\033",
-        .status = 1,
     },
     .{
         // No standard stream a terminal: the keys come through the controlling terminal
@@ -468,7 +743,6 @@ const pty_cases = [_]PtyCase{
         .name = "pager with every stream redirected: esc",
         .command = "printf 'text\\n' | \"$TERMANCY\" ui pager 2>/dev/null",
         .keys = "\\033",
-        .status = 1,
     },
     .{
         .name = "spin on a terminal",
@@ -587,17 +861,346 @@ const pty_cases = [_]PtyCase{
         .stdout = "a = 1\n",
         .status = 1,
     },
+    // choose/filter (gum parity)
+    .{
+        .name = "choose: $(...) captures only the result",
+        .command = "x=$(\"$TERMANCY\" ui choose a b c); echo \"got:$x\"",
+        .keys = "j\\r",
+        .stdout = "got:b\n",
+    },
+    .{
+        .name = "choose --label-delimiter: labels shown and selected, the value printed",
+        .command = "\"$TERMANCY\" ui choose --label-delimiter : --selected Green " ++
+            "Red:#f00 Green:#0f0",
+        .keys = "\\r",
+        .stdout = "#0f0\n",
+    },
+    .{
+        .name = "choose --selected '*': all, up to the limit",
+        .command = "\"$TERMANCY\" ui choose --limit 2 --selected '*' a b c",
+        .keys = "\\r",
+        .stdout = "a\nb\n",
+    },
+    .{
+        // Sorted to a b c; c chosen first, then a.
+        .name = "choose --ordered: sorted, printed in the order chosen",
+        .command = "\"$TERMANCY\" ui choose --ordered --no-limit c a b",
+        .keys = "G g \\r",
+        .stdout = "c\na\n",
+    },
+    .{
+        .name = "choose: items as arguments, the ones selected piped in",
+        .command = "printf 'c\\n' | \"$TERMANCY\" ui choose --no-limit a b c",
+        .keys = "\\r",
+        .stdout = "c\n",
+    },
+    .{
+        .name = "filter --strict: enter needs a match",
+        .command = "printf 'apple\\nbanana\\n' | \"$TERMANCY\" ui filter",
+        .keys = "kiwi\\r\\033",
+        .status = 1,
+    },
+    .{
+        .name = "filter --no-strict: the typed text",
+        .command = "printf 'apple\\nbanana\\n' | \"$TERMANCY\" ui filter --no-strict",
+        .keys = "kiwi\\r",
+        .stdout = "kiwi\n",
+    },
+    .{
+        .name = "filter --reverse: up goes to the next match",
+        .command = "printf 'apple\\nbanana\\ncherry\\n' | " ++
+            "\"$TERMANCY\" ui filter --reverse --height 5",
+        .keys = "\\033[A\\r",
+        .stdout = "banana\n",
+    },
+    .{
+        .name = "filter: --value from TERMANCY_FILTER_VALUE",
+        .command = "printf 'apple\\nbanana\\n' | \"$TERMANCY\" ui filter",
+        .keys = "\\r",
+        .env = &.{.{ "TERMANCY_FILTER_VALUE", "ban" }},
+        .stdout = "banana\n",
+    },
+    .{
+        // Labels numbered, values printed, and enter takes the item selected.
+        .name = "ACCESSIBLE: choose --label-delimiter --selected",
+        .command = "\"$TERMANCY\" ui choose --label-delimiter : --selected B A:1 B:2 C:3",
+        .keys = "\\r",
+        .env = &accessible,
+        .wait_for = "Number (1-3, enter for 2)",
+        .stdout = "2\n",
+    },
+    .{
+        // A query that matches nothing is asked again; then the matches are numbered.
+        .name = "ACCESSIBLE: filter, strict",
+        .command = "printf 'apple\\nbanana\\ncherry\\n' | \"$TERMANCY\" ui filter",
+        .keys = "zz\\ra\\r2\\r",
+        .env = &accessible,
+        .wait_for = "Filter",
+        .stdout = "banana\n",
+    },
+    .{
+        .name = "ACCESSIBLE: filter --no-strict --no-limit, the typed text first",
+        .command = "printf 'apple\\nbanana\\n' | " ++
+            "\"$TERMANCY\" ui filter --no-strict --no-limit",
+        .keys = "ban\\r2 1\\r",
+        .env = &accessible,
+        .wait_for = "Filter",
+        .stdout = "ban\nbanana\n",
+    },
+    // input/write/confirm (gum parity)
+    .{
+        .name = "input: the value from standard input",
+        .command = "printf '  piped value\\n' | \"$TERMANCY\" ui input",
+        .keys = "!\\r",
+        .stdout = "piped value!\n",
+    },
+    .{
+        // The dots are drawn before enter is typed.
+        .name = "input --password shows dots",
+        .command = "\"$TERMANCY\" ui input --password --no-show-help",
+        .keys = "s3cret",
+        .then_wait_for = "••••••",
+        .then_keys = "\\r",
+        .stdout = "s3cret\n",
+    },
+    .{
+        // The interface goes to the terminal; only the answer is captured.
+        .name = "input in $(...): only the result",
+        .command = "x=$(\"$TERMANCY\" ui input --header Name); printf '[%s]\\n' \"$x\"",
+        .keys = "Ada\\r",
+        .stdout = "[Ada]\n",
+    },
+    .{
+        .name = "input: flags from TERMANCY_INPUT_* variables",
+        .command = "\"$TERMANCY\" ui input",
+        .keys = " there\\r",
+        .env = &.{.{ "TERMANCY_INPUT_VALUE", "hi" }},
+        .stdout = "hi there\n",
+    },
+    .{
+        // Enter submits, as gum's.
+        .name = "write: the value from standard input, enter submits",
+        .command = "printf 'line one\\r\\nline two\\n' | \"$TERMANCY\" ui write",
+        .keys = "\\r",
+        .stdout = "line one\nline two\n",
+    },
+    .{
+        .name = "write: ctrl+e edits the text in $EDITOR",
+        .command = "EDITOR=\"sh $PWD/append.sh\" \"$TERMANCY\" ui write --value one",
+        .keys = "\\005",
+        .then_wait_for = "appended-line",
+        .then_keys = "\\r",
+        .stdout = "one\nappended-line\n",
+    },
+    .{
+        // ctrl+j (LF) starts a line, as gum's.
+        .name = "write --show-line-numbers --max-lines 2",
+        .command = "\"$TERMANCY\" ui write --show-line-numbers --max-lines 2",
+        .keys = "a\\nb\\nc\\r",
+        .stdout = "a\nbc\n",
+    },
+    .{
+        .name = "ACCESSIBLE: write, ended by an empty line twice",
+        .command = "\"$TERMANCY\" ui write --header Notes",
+        .keys = "one\\r\\rtwo\\r\\r\\r",
+        .env = &accessible,
+        .wait_for = "ends it.",
+        .stdout = "one\n\ntwo\n",
+    },
+    .{
+        // gum's timeout: no error, the answer highlighted (the default) is taken.
+        .name = "confirm --timeout takes the default, yes",
+        .command = "sh -c '\"$TERMANCY\" ui confirm --timeout 100ms 2>&1'",
+        .keys = "",
+    },
+    .{
+        .name = "confirm --timeout takes the default, no",
+        .command = "sh -c '\"$TERMANCY\" ui confirm --default=false --timeout 100ms 2>&1'",
+        .keys = "",
+        .status = 1,
+    },
+    .{
+        .name = "confirm --show-output",
+        .command = "\"$TERMANCY\" ui confirm --show-output --affirmative Ship 'Deploy?'",
+        .keys = "y",
+        .stdout = "Deploy? Ship\n",
+    },
+    .{
+        .name = "confirm: flags from TERMANCY_CONFIRM_* variables",
+        .command = "\"$TERMANCY\" ui confirm",
+        .keys = "\\r",
+        .env = &.{
+            .{ "TERMANCY_CONFIRM_DEFAULT", "false" },
+            .{ "TERMANCY_CONFIRM_SHOW_OUTPUT", "1" },
+        },
+        .stdout = "Are you sure? No\n",
+        .status = 1,
+    },
+    // spin/table (gum parity)
+    .{
+        // Standard output a terminal: the output is hidden, the status passed on.
+        .name = "spin on a terminal: the command's status, its output hidden",
+        .command = "(\"$TERMANCY\" ui spin -- sh -c 'echo quiet\"\"-text; exit 7' > /dev/tty)",
+        .keys = "",
+        .hides = "quiet-text",
+        .status = 7,
+    },
+    .{
+        .name = "spin --show-error: the output when the command fails",
+        .command = "(\"$TERMANCY\" ui spin --show-error -- sh -c 'echo oops\"\"-text; exit 3' " ++
+            "> /dev/tty)",
+        .keys = "",
+        .shows = "oops-text",
+        .status = 3,
+    },
+    .{
+        .name = "spin --show-error: nothing when it succeeds",
+        .command = "(\"$TERMANCY\" ui spin --show-error -- sh -c 'echo fine\"\"-text' > /dev/tty)",
+        .keys = "",
+        .hides = "fine-text",
+    },
+    .{
+        .name = "spin --show-stdout",
+        .command = "(\"$TERMANCY\" ui spin --show-stdout -- " ++
+            "sh -c 'echo out\"\"-text; echo err\"\"-text >&2' > /dev/tty)",
+        .keys = "",
+        .shows = "out-text",
+        .hides = "err-text",
+    },
+    .{
+        .name = "spin --show-stderr",
+        .command = "(\"$TERMANCY\" ui spin --show-stderr -- " ++
+            "sh -c 'echo out\"\"-text; echo err\"\"-text >&2' > /dev/tty)",
+        .keys = "",
+        .shows = "err-text",
+        .hides = "out-text",
+    },
+    .{
+        .name = "spin --spinner monkey, gum's name",
+        .command = "\"$TERMANCY\" ui spin -s monkey -- sleep 0.3",
+        .keys = "",
+        .shows = "🙈",
+    },
+    .{
+        .name = "spin --timeout on a terminal",
+        .command = "sh -c '\"$TERMANCY\" ui spin --timeout 200ms -- sleep 10 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        .name = "spin: the title from TERMANCY_SPIN_TITLE",
+        .command = "\"$TERMANCY\" ui spin -- sleep 0.3",
+        .keys = "",
+        .env = &.{.{ "TERMANCY_SPIN_TITLE", "from-env" }},
+        .shows = "from-env",
+    },
+    .{
+        .name = "table --file --return-column",
+        .command = "\"$TERMANCY\" ui table -f app.env -s = -r 2",
+        .keys = "\\r",
+        .stdout = "80\n",
+    },
+    .{
+        .name = "table: the row count on the help line",
+        .command = "printf 'n\\n1\\n2\\n' | \"$TERMANCY\" ui table",
+        .keys = "j\\r",
+        .shows = "1/2 • ",
+        .stdout = "2\n",
+    },
+    .{
+        .name = "table: q quits, as esc does",
+        .command = "printf 'n\\n1\\n' | \"$TERMANCY\" ui table",
+        .keys = "q",
+        .status = 1,
+    },
+    .{
+        // gum's pseudo-terminal: the command's standard output is a terminal.
+        .name = "spin: the command runs on a terminal",
+        .command = "(\"$TERMANCY\" ui spin --show-stdout -- " ++
+            "sh -c 'test -t 1 && echo on-a\"\"-tty' > /dev/tty)",
+        .keys = "",
+        .shows = "on-a-tty",
+    },
+    // pager/file (gum parity). The driver can only wait for something to show, so a case
+    // that waits for what only the feature draws has a --timeout: were it never drawn, the
+    // timeout would end the command with 124, not 0.
+    .{
+        // Line 200 is off the first screen until the search, a regular expression,
+        // scrolls to it, highlighted.
+        .name = "pager: search scrolls to a match",
+        .command = "seq 300 | sed 's/^200$/the needle here/' | \"$TERMANCY\" ui pager --timeout 8s",
+        .keys = "/ne+dle\\r",
+        .then_wait_for = "needle",
+        .then_keys = "q",
+    },
+    .{
+        // Text right after the border's padding: with line numbers, the gutter (in its own
+        // style) comes between.
+        .name = "pager --no-show-line-numbers",
+        .command = "printf 'alpha\\n' | \"$TERMANCY\" ui pager --timeout 8s --no-show-line-numbers",
+        .keys = "q",
+        .wait_for = " alpha",
+    },
+    .{
+        .name = "pager: colored input keeps its colors",
+        .command = "printf 'say \\033[31mhello\\033[0m\\n' | \"$TERMANCY\" ui pager --timeout 8s",
+        .keys = "q",
+        .wait_for = "\x1b[31mhello",
+    },
+    .{
+        .name = "pager --timeout",
+        .command = "sh -c '\"$TERMANCY\" ui pager --timeout 100ms notes.txt 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        // Directories come first: enter chooses env/ rather than opening it.
+        .name = "file --directory: enter chooses a directory",
+        .command = "\"$TERMANCY\" ui file --directory | sed \"s|^$PWD/||\"",
+        .keys = "\\r",
+        .stdout = "env\n",
+    },
+    .{
+        // 1234 bytes, as gum writes the size.
+        .name = "file: sizes shown",
+        .command = "(d=$(mktemp -d); head -c 1234 /dev/zero > \"$d/f\"; " ++
+            "p=$(\"$TERMANCY\" ui file --timeout 8s \"$d\"); s=$?; " ++
+            "rm -rf \"$d\"; basename \"$p\"; exit $s)",
+        .keys = "\\r",
+        .wait_for = "1.2kB",
+        .stdout = "f\n",
+    },
+    .{
+        .name = "file --timeout",
+        .command = "sh -c '\"$TERMANCY\" ui file --timeout 100ms 2>&1'",
+        .keys = "",
+        .stdout = "timed out\n",
+        .status = 124,
+    },
+    .{
+        // TERMANCY_FILE_PATH stands in for the argument, as GUM_FILE_PATH does.
+        .name = "file: the path and header from TERMANCY_FILE_* variables",
+        .command = "\"$TERMANCY\" ui file | sed \"s|^$PWD/||\"",
+        .keys = "\\r",
+        .env = &.{ .{ "TERMANCY_FILE_PATH", "env" }, .{ "TERMANCY_FILE_HEADER", "Pick one" } },
+        .wait_for = "Pick one",
+        .stdout = "env/termancy.env\n",
+    },
 };
 
 /// Runs `$3` (a shell command) in a pseudo-terminal with `TERMANCY=$1`, types `$2` once the
 /// terminal shows `$4` (for a `tui` command, the end of its first frame: synchronized
 /// output ends with `2026l`), then `$6` once it has shown `$5` `$7` times (when `$5` is
 /// set), and prints what the command wrote to standard output. Exits with the command's
-/// status (124 on a timeout, or 142 where perl's alarm stands in for `timeout`).
+/// status (124 on a timeout, or 142 where perl's alarm stands in for `timeout`), or 98
+/// when the terminal never showed `$9` or showed `$10`.
 /// Works with util-linux `script` (`-qfc command log`) and BSD `script`, as macOS has it
 /// (`-qF log command...`); the status goes through a file, since only util-linux has `-e`.
 const pty_driver =
     \\termancy=$1 keys=$2 command=$3 wait=$4 then_wait=$5 then_keys=$6 then_count=$7 jobctl=$8
+    \\shows=$9 hides=${10}
     \\dir=$(mktemp -d) || exit 99
     \\trap 'rm -f "$dir/log" "$dir/out" "$dir/status"; rmdir "$dir"' EXIT
     \\# A minute at most: with `timeout`, else perl's alarm (macOS has no `timeout`).
@@ -641,6 +1244,14 @@ const pty_driver =
     \\  echo >&2
     \\fi
     \\[ -f "$dir/status" ] && status=$(cat "$dir/status")
+    \\if [ -n "$shows" ] && ! grep -aqF "$shows" "$dir/log"; then
+    \\  echo "the terminal never showed: $shows" >&2
+    \\  status=98
+    \\fi
+    \\if [ -n "$hides" ] && grep -aqF "$hides" "$dir/log"; then
+    \\  echo "the terminal showed: $hides" >&2
+    \\  status=98
+    \\fi
     \\cat "$dir/out" 2> /dev/null
     \\exit $status
 ;
@@ -684,7 +1295,7 @@ fn addCase(b: *std.Build, step: *std.Build.Step, run: *std.Build.Step.Run, case:
     if (case.stdin) |bytes| run.setStdIn(.{ .bytes = bytes });
     run.addArgs(case.args);
     run.expectStdOutEqual(case.stdout);
-    run.expectStdErrEqual(case.stderr);
+    if (case.stderr_match) |part| run.expectStdErrMatch(part) else run.expectStdErrEqual(case.stderr);
     run.expectExitCode(case.status);
     step.dependOn(&run.step);
 }
@@ -703,6 +1314,7 @@ fn addPtyCase(
     run.addArgs(&.{ case.keys, case.command, case.wait_for });
     run.addArgs(&.{ case.then_wait_for, case.then_keys, b.fmt("{d}", .{case.then_count}) });
     if (jobctl) |j| run.addArtifactArg(j) else run.addArg("");
+    run.addArgs(&.{ case.shows, case.hides });
     run.setCwd(b.path("test/fixtures"));
     run.clearEnvironment();
     run.color = .manual;

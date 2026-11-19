@@ -4,14 +4,14 @@
 //! | command   | does                                              | prints              |
 //! |-----------|---------------------------------------------------|---------------------|
 //! | `choose`  | pick from arguments or stdin lines                | the chosen items    |
-//! | `confirm` | ask yes/no                                        | nothing (status)    |
+//! | `confirm` | ask yes/no (`--show-output` prints the answer)    | nothing (status)    |
 //! | `input`   | read a line (`--password`)                        | the line            |
-//! | `write`   | read several lines (Ctrl-D submits)               | the text            |
+//! | `write`   | read several lines (enter submits, ctrl+j breaks) | the text            |
 //! | `filter`  | fuzzy-find among stdin lines                      | the chosen lines    |
 //! | `spin`    | run a command behind a spinner                    | the command's output|
 //! | `table`   | show CSV/TSV, pick a row (`--print` to render)    | the chosen row      |
-//! | `pager`   | scroll through a file or stdin                    | nothing             |
-//! | `file`    | browse directories, choose a file                 | its absolute path   |
+//! | `pager`   | scroll and search a file, text, or stdin          | nothing (status 0)  |
+//! | `file`    | browse directories, choose a file or directory    | its absolute path   |
 //! | `style`   | style text: colors, border, padding, alignment    | the styled text     |
 //! | `format`  | Markdown, code, emoji, or a template              | the rendered text   |
 //! | `join`    | blocks side by side or stacked                    | the joined text     |
@@ -19,11 +19,21 @@
 //!
 //! Interactive commands draw on the terminal (`/dev/tty` when stdio is redirected) and
 //! print results to standard output, so they compose in `$(...)` and pipes. Without any
-//! terminal they fail at once with status 2. Esc ends with status 1 and Ctrl-C with 130,
-//! printing nothing. With `ACCESSIBLE=1`, `choose`, `confirm`, and `input` ask with plain
-//! lines instead, numbered choices and typed answers, for screen readers (plain.zig).
+//! terminal they fail at once with status 2. Esc ends with status 1 (the pager's with 0)
+//! and Ctrl-C with 130, printing nothing. With `ACCESSIBLE=1`, `choose`, `filter`,
+//! `confirm`, `input`, and `write` ask
+//! with plain lines instead, numbered choices and typed answers, for screen readers
+//! (plain.zig).
 //! `style`, `format`, and `table --print` write escapes only where
 //! standard output shows them, honoring `NO_COLOR` and `FORCE_COLOR`. See term.zig.
+//!
+//! gum's shared flags, each where it applies (term.zig and styles.zig hold them):
+//! `TERMANCY_<COMMAND>_<FLAG>` variables for every flag (`.env_prefix` on the flag set);
+//! `--timeout <duration>`, which ends with status 124 and `timed out` on stderr unless the
+//! command takes it as an answer; style groups per part (`--cursor.foreground`,
+//! `--header.bold`; help lists only the colors), defaulting to `cli.Theme`'s look;
+//! `--show-help` and `--padding` around the component (`term.Framed`); and `--strip-ansi`,
+//! `--input-delimiter`, and `--output-delimiter` (`term.items`, `term.writeJoined`).
 
 const std = @import("std");
 
@@ -69,6 +79,7 @@ pub const command = cli.command(.{
 test {
     std.testing.refAllDecls(demo);
     std.testing.refAllDecls(@import("term.zig"));
+    std.testing.refAllDecls(@import("styles.zig"));
     std.testing.refAllDecls(@import("plain.zig"));
     std.testing.refAllDecls(choose_zig);
     std.testing.refAllDecls(confirm_zig);
@@ -123,8 +134,8 @@ test "style: plain without color, escapes when forced" {
 test "format: Markdown marks become styles, or go" {
     const args: []const []const u8 = &.{ "format", "# Hi", "a **b**" };
     try expectRun(args, &.{.{ "NO_COLOR", "1" }}, 0, "\n  # Hi\n\n  a b\n", "");
-    const colored = "\n  \x1b[1;38;5;228;48;5;63m \x1b[0m\x1b[1;38;5;228;48;5;63mHi\x1b[0m" ++
-        "\x1b[1;38;5;228;48;5;63m \x1b[0m\n\n  \x1b[38;5;252ma \x1b[0m\x1b[1;38;5;252mb\x1b[0m\n";
+    // gum's default style sheet, pink.
+    const colored = "\n  \x1b[1;4;38;5;212mHi\x1b[0m\n\n  a \x1b[1;38;5;212mb\x1b[0m\n";
     try expectRun(args, &.{.{ "FORCE_COLOR", "3" }}, 0, colored, "");
 }
 
@@ -151,14 +162,14 @@ test "join and log" {
         "",
     );
     try expectRun(
-        &.{ "log", "-f", "logfmt", "-l", "warn", "full", "used", "93%" },
+        &.{ "log", "--formatter", "logfmt", "-s", "-l", "warn", "full", "used", "93%" },
         &.{},
         0,
         "",
         "level=warn msg=full used=93%\n",
     );
-    try expectRun(&.{ "log", "x", "odd" }, &.{}, 2, "", "termancy: fields come in key value pairs\n" ++
-        "Run 'termancy log --help' for usage.\n");
+    try expectRun(&.{ "log", "-s", "x", "odd" }, &.{}, 2, "", "termancy: fields come in key " ++
+        "value pairs\nRun 'termancy log --help' for usage.\n");
 }
 
 test "usage errors come before any input or terminal" {
@@ -169,8 +180,8 @@ test "usage errors come before any input or terminal" {
         "Run 'termancy filter --help' for usage.\n");
     try expectRun(&.{ "table", "--separator", ";;" }, &.{}, 2, "", "termancy: invalid --separator " ++
         "\";;\" (use one character, or \\t)\nRun 'termancy table --help' for usage.\n");
-    try expectRun(&.{ "pager", "termancy-no-such-file" }, &.{}, 1, "", "termancy: termancy-no-such-file: " ++
-        "no such file\n");
+    // A name that is no file is the text to show, but a directory cannot be shown.
+    try expectRun(&.{ "pager", "." }, &.{}, 1, "", "termancy: .: IsDir\n");
     try expectRun(&.{ "file", "termancy-no-such-dir" }, &.{}, 1, "", "termancy: termancy-no-such-dir: " ++
         "no such directory\n");
 }

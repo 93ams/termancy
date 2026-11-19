@@ -2488,6 +2488,9 @@ const ShellCase = struct {
     stdout: []const u8,
 };
 
+/// The help of a style group's color flags, as completion describes them.
+const color_help = "Text color (0-255, #rrggbb, or a name such as red or bright-blue)\n";
+
 const bash_cases = [_]ShellCase{
     .{
         .words = &.{ "cfg", "" },
@@ -2498,6 +2501,11 @@ const bash_cases = [_]ShellCase{
     .{ .words = &.{ "cfg", "get", "-o", "y" }, .stdout = "yaml\n" },
     .{ .words = &.{ "cfg", "get", "--pro" }, .stdout = "--profile\n" },
     .{ .words = &.{ "cfg", "get", "server.p" }, .stdout = "server.port\n" },
+    // A group spelled with dots (`ui choose --cursor.foreground`); the rest of it is hidden.
+    .{
+        .words = &.{ "ui", "choose", "--cursor." },
+        .stdout = "--cursor.foreground\n--cursor.background\n",
+    },
     // Directives: files of the formats termancy reads, directories.
     .{ .words = &.{ "cfg", "-c", "se" }, .stdout = "seeds.toml\nservers.toml\n" },
     // A file name that is also a pattern stays as it is.
@@ -2523,6 +2531,7 @@ const zsh_cases = [_]ShellCase{
     },
     .{ .words = &.{ "cfg", "show", "--layer", "f" }, .stdout = "file:\nflag:\n" },
     .{ .words = &.{ "cfg", "get", "--o" }, .stdout = "--output:Output format\n" },
+    .{ .words = &.{ "ui", "choose", "--cursor.f" }, .stdout = "--cursor.foreground:" ++ color_help },
     // Nothing to offer: the script falls back to file names.
     .{ .words = &.{ "cfg", "get", "k" }, .stdout = "<files>\n" },
     .{
@@ -2541,6 +2550,7 @@ const fish_cases = [_]ShellCase{
     .{ .words = &.{ "cfg", "show", "--layer", "f" }, .stdout = "file\nflag\n" },
     .{ .words = &.{ "cfg", "get", "--o" }, .stdout = "--output\tOutput format\n" },
     .{ .words = &.{ "cfg", "explain", "server.h" }, .stdout = "server.host\n" },
+    .{ .words = &.{ "ui", "choose", "--cursor.f" }, .stdout = "--cursor.foreground\t" ++ color_help },
     .{ .words = &.{ "cfg", "-c", "se" }, .stdout = "seeds.toml\nservers.toml\n" },
     .{ .words = &.{ "cli", "docs", "--dir", "y" }, .stdout = "yaml/\n" },
     .{
@@ -2563,6 +2573,7 @@ const powershell_cases = [_]ShellCase{
         .stdout = "seeds.toml\tseeds.toml\nservers.toml\tservers.toml\n",
     },
     .{ .words = &.{ "cfg", "get", "--o" }, .stdout = "--output\tOutput format\n" },
+    .{ .words = &.{ "ui", "choose", "--cursor.f" }, .stdout = "--cursor.foreground\t" ++ color_help },
     .{
         .words = &.{ "cfg", "--config=se" },
         .stdout = "--config=seeds.toml\t--config=seeds.toml\n" ++

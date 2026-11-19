@@ -303,7 +303,14 @@ pub const Match = struct { start: usize, end: usize };
 
 /// The leftmost match in `text`, or null.
 pub fn search(re: *const Regex, text: []const u8) ?Match {
-    var start: usize = 0;
+    return re.searchFrom(text, 0);
+}
+
+/// The leftmost match in `text` starting at `from` or later, or null. Anchors and `\b`
+/// still see the text before `from`, so a later match in the same text is found as it
+/// would be in one pass.
+pub fn searchFrom(re: *const Regex, text: []const u8, from: usize) ?Match {
+    var start: usize = from;
     while (start <= text.len) : (start += 1) {
         var m: Matcher = .{ .re = re, .text = text, .whole = false };
         const k: Continuation = .{ .what = .{ .node = re.root }, .next = null };
@@ -509,6 +516,14 @@ test "groups, alternation, quantifiers" {
     try expectSearch("x{3}", "xxxx", "xxx");
     try expectSearch("(?:ab){2,}", "abababx", "ababab");
     try expectSearch("(a|ab)(c|bcd)", "abcd", "abcd");
+}
+
+test searchFrom {
+    var re = try compile(testing.allocator, "\\bab");
+    defer re.deinit(testing.allocator);
+    // From inside "xab", the boundary before "ab" is still not one.
+    try testing.expectEqual(Match{ .start = 5, .end = 7 }, re.searchFrom("xab, ab", 1).?);
+    try testing.expectEqual(null, re.searchFrom("xab, ab", 6));
 }
 
 test matchesWhole {

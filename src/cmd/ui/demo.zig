@@ -222,7 +222,7 @@ fn confirm(r: *Runner) !void {
 fn filepicker(r: *Runner) !void {
     var model: registry.FilePicker = try .init(r.ctx.gpa, r.ctx.io, ".", .{});
     defer model.deinit();
-    model.list.height = 8;
+    model.height = 8;
     try r.show(registry.FilePicker, &model, term.inline_options);
 }
 

@@ -70,7 +70,7 @@ What the first native run found, and what changed:
   are set.
 - **Tests that skipped Windows now run there:** `process.which` (Windows rules), `capture`
   (output, status, cwd, environment, limits, timeout kill), `stream`, `editText`, plugins
-  on `PATH` (`cli`, `examples/kv`), help through the pager, `ui spin`'s `runChild`, raw
+  on `PATH` (`cli`, `examples/kv`), help through the pager, `ui spin`'s `Job`, raw
   mode on a non-terminal, `Pty` on ConPTY, `explain` and `record`, and `sandbox`
   links where Windows allows them. Test-only fixes: a TOML literal string for a temp path,
   file timestamps set through the file (`Dir.setTimestamps` is a TODO panic in 0.17), the

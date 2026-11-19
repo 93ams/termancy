@@ -57,6 +57,8 @@ const Timestamp = Io.Timestamp;
 /// Spinner frame sets.
 pub const frames = struct {
     pub const dots = [_][]const u8{ "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" };
+    /// gum's `dot`.
+    pub const dot = [_][]const u8{ "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" };
     pub const line = [_][]const u8{ "-", "\\", "|", "/" };
     pub const mini_dot = [_][]const u8{ "⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈" };
     pub const points = [_][]const u8{ "∙∙∙", "●∙∙", "∙●∙", "∙∙●" };
