@@ -591,6 +591,10 @@ From a review before the repository went public:
     XFS after a rolled-back update, or bring a rejected build back on ext4.
   - `update.removeLeftovers` puts `<exe>.old` back when the executable is missing, as a
     crash between `move_aside`'s two renames leaves it, instead of deleting the only copy.
+- termancy works as a dependency again: its `build.zig` no longer panics when `docs/tapes`
+  is missing (a fetched package ships no `docs`), and `Context.flags`, the flags checks, and
+  `.settings` flags raise their compile-time quota with the number of flags, so a command
+  with about 30 flags or more compiles.
 - `passkey get` and `create` check the RP ID against `--origin` before anything else, on
   every system: `create` away from Windows said it needs Windows Hello instead.
 - `ctap.getPinToken` wipes the PIN's hash, the secret shared with the key, its ephemeral
