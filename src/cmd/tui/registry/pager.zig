@@ -21,8 +21,7 @@
 //! widths, and search see only the visible text. Lines are word-wrapped to the terminal
 //! width (again on every resize); with `soft_wrap` off, each line is one row cut at the
 //! width, and left/right (h/l) scroll sideways. With `line_numbers`, a gutter numbers the
-//! lines, blank on the rows a line wraps onto and `~` past the end, as gum's pager draws
-//! it. Tabs are not expanded: expand them first.
+//! lines, blank on the rows a line wraps onto and `~` past the end. Tabs are not expanded: expand them first.
 
 const std = @import("std");
 const tui = @import("tui");
@@ -99,7 +98,7 @@ pub const Styles = struct {
     message: tui.Style = .{ .fg = .{ .indexed = 203 } },
 };
 
-/// Columns a sideways scroll moves, as gum's.
+/// Columns a sideways scroll moves.
 const x_step = 6;
 
 /// A pager over `text`, wrapped for an 80-column terminal until the first resize.
@@ -167,7 +166,7 @@ fn load(pager: *Pager) Allocator.Error!void {
 /// Splits `plain` into rows at the current width, after the gutter.
 fn wrap(pager: *Pager) Allocator.Error!void {
     pager.rows.clearRetainingCapacity();
-    // The number, at least four columns as gum's, then " │ ".
+    // The number, at least four columns, then " │ ".
     const lines_total = std.mem.count(u8, pager.plain, "\n") + 1;
     pager.gutter = if (pager.line_numbers) @max(4, digits(lines_total)) + 3 else 0;
     const limit = if (pager.soft_wrap) pager.textWidth() else std.math.maxInt(usize);

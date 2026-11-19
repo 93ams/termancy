@@ -138,7 +138,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
         return term.writeJoined(ctx.out, &.{items[matches[0].index]}, flags.output_delimiter);
     }
     if (plain.wanted(ctx)) return askPlainly(ctx, items, flags);
-    // gum's: unless a height is given, the whole screen.
+    // Unless a height is given, the whole screen.
     const full: tui.Options = .{ .alt_screen = true };
     const options = term.timed(if (flags.height == 0) full else term.inline_options, flags.timeout);
     if (try term.run(ctx, @TypeOf(model), &model, options)) return term.exitInterrupted(ctx);
@@ -196,7 +196,7 @@ pub fn build(
     model.fill = flags.height == 0;
     model.list.height = @max(flags.height, 1);
     model.list.wrap = true;
-    // As gum: the indicator, then a space with a limit of one, or else the marks.
+    // The indicator, then a space with a limit of one, or else the marks.
     const one = model.limit == 1;
     model.list.cursor_prefix = if (one)
         try std.mem.concat(arena, u8, &.{ flags.indicator, " " })
@@ -311,7 +311,7 @@ fn start(arena: *std.heap.ArenaAllocator, flags: Flags) !Driver(Filter) {
     return .init(testing.allocator, model, .{});
 }
 
-test "a starting query and one choice, in gum's look" {
+test "a starting query and one choice, as it looks" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var d = try start(&arena, .{ .value = "ta" });
@@ -322,7 +322,7 @@ test "a starting query and one choice, in gum's look" {
     try testing.expectEqualStrings("delta\n", try answer(&arena, d.model()));
 }
 
-test "no limit: tab chooses several, the marks gum's" {
+test "no limit: tab chooses several, with marks" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var d = try start(&arena, .{ .no_limit = true, .placeholder = "", .header = "Pick" });

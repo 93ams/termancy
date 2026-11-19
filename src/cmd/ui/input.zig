@@ -1,5 +1,4 @@
 //! `termancy ui input` and `termancy ui write`: read a line, or several, from the user, as
-//! gum's `input` and `write`.
 
 const std = @import("std");
 const cli = @import("cli");
@@ -30,7 +29,7 @@ fn cursorStyle(mode: CursorMode, flags: styles.Styles, theme: *const cli.Theme) 
 }
 
 /// `--value`, or else standard input (when it is not a terminal) without escapes (with
-/// `strip_ansi`) and the white space around it, as gum takes it.
+/// `strip_ansi`) and the white space around it.
 fn startingValue(ctx: *cli.Context, value: []const u8, strip_ansi: bool) ![]const u8 {
     if (value.len > 0) return value;
     var text = try term.readStdin(ctx) orelse return "";
@@ -202,7 +201,7 @@ pub fn buildLine(
             .placeholder = flags.placeholder,
             .password = flags.password,
             .char_limit = if (flags.char_limit == 0) null else flags.char_limit,
-            // gum's width is the text's; the cursor takes a column after it.
+            // The width is the text's; the cursor takes a column after it.
             .width = if (flags.width == 0) null else tui.width.of(flags.prompt) + flags.width + 1,
             .styles = .{
                 .prompt = flags.prompt_style.over(.{}),
@@ -335,7 +334,7 @@ const write_hints = [_]term.Hint{
     .{ .keys = &.{"enter"}, .action = .hint, .help = "submit" },
 };
 
-/// The editor of `write`, with gum's keys: enter submits, ctrl+j (or alt+enter) starts a
+/// The editor of `write`, with these keys: enter submits, ctrl+j (or alt+enter) starts a
 /// line, and ctrl+e hands the text to `$EDITOR`.
 pub const Area = struct {
     area: Textarea,
@@ -493,7 +492,7 @@ test "input: header, help line, cursor, starting value, and the limit" {
     try testing.expectEqual(.submitted, d.model().inner.input.status);
 }
 
-test "input: --password masks, and the limit is gum's" {
+test "input: --password masks, and the default limit" {
     const line = try buildLine(testing.allocator, .{ .password = true }, "", &plain_theme);
     var d: tui.testing.Driver(Line) = try .init(testing.allocator, line, .{});
     defer d.deinit();

@@ -1,5 +1,5 @@
 //! The component registry: source files that `termancy tui add` copies into a project and that
-//! termancy itself compiles, for the gum-style commands and for their tests.
+//! termancy itself compiles, for the `termancy ui` commands and for their tests.
 //!
 //! Each component is one file importing only `std`, `tui`, and the sibling files it
 //! requires, so a copy builds wherever `tui` is a dependency. `registry.zon` lists the

@@ -1,4 +1,4 @@
-//! `termancy ui`: the gum-style commands, small interactive pieces for shell scripts built on
+//! `termancy ui`: small interactive pieces for shell scripts built on
 //! the registry components compiled into termancy, and `demo`, which shows those components.
 //!
 //! | command   | does                                              | prints              |
@@ -27,7 +27,7 @@
 //! `style`, `format`, and `table --print` write escapes only where
 //! standard output shows them, honoring `NO_COLOR` and `FORCE_COLOR`. See term.zig.
 //!
-//! gum's shared flags, each where it applies (term.zig and styles.zig hold them):
+//! The shared flags, each where it applies (term.zig and styles.zig hold them):
 //! `TERMANCY_<COMMAND>_<FLAG>` variables for every flag (`.env_prefix` on the flag set);
 //! `--timeout <duration>`, which ends with status 124 and `timed out` on stderr unless the
 //! command takes it as an answer; style groups per part (`--cursor.foreground`,
@@ -65,7 +65,7 @@ pub const format = format_zig.command;
 pub const join = join_zig.command;
 pub const log = log_zig.command;
 
-/// Every gum-style command.
+/// Every `termancy ui` command.
 pub const commands = .{
     choose, confirm, input, write, filter, spin, table, pager, file, style, format, join, log,
 };
@@ -134,7 +134,7 @@ test "style: plain without color, escapes when forced" {
 test "format: Markdown marks become styles, or go" {
     const args: []const []const u8 = &.{ "format", "# Hi", "a **b**" };
     try expectRun(args, &.{.{ "NO_COLOR", "1" }}, 0, "\n  # Hi\n\n  a b\n", "");
-    // gum's default style sheet, pink.
+    // The default style sheet, pink.
     const colored = "\n  \x1b[1;4;38;5;212mHi\x1b[0m\n\n  a \x1b[1;38;5;212mb\x1b[0m\n";
     try expectRun(args, &.{.{ "FORCE_COLOR", "3" }}, 0, colored, "");
 }

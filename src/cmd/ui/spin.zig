@@ -1,8 +1,7 @@
-//! `termancy ui spin`: run a command with a spinner on the terminal while it works, as gum's
-//! `spin` does.
+//! `termancy ui spin`: run a command with a spinner on the terminal while it works.
 //!
 //! The spinner is a `tui.Program` and the command its background work (`tui.Cmd.work`):
-//! `Job.finish` reads the command's output (on POSIX a pseudo-terminal, as gum's, and a pipe
+//! `Job.finish` reads the command's output (on POSIX a pseudo-terminal, and a pipe
 //! for standard error; pipes elsewhere) into the `Job`, which the view shows from while
 //! it runs, then waits for it. The command runs in a process group of its own, so Ctrl-C
 //! and `--timeout` can stop all of it (SIGINT, as a terminal's Ctrl-C does, or SIGTERM, as
@@ -25,7 +24,7 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
 
-/// gum's spinners, then termancy's older names.
+/// The spinners, then their older names.
 pub const Name = enum {
     line,
     dot,
@@ -61,8 +60,8 @@ pub const Flags = struct {
 };
 const flags_flags = cli.flags(Flags, field.Set(.{ field.Spec(Flags){ .fields = .{
     .title = .{ .help = "Text next to the spinner" },
-    .spinner = .{ .help = "The spinner's frames, by gum's names (dots, mini-dot, arc, and " ++
-        "bouncing-bar are termancy's own)" },
+    .spinner = .{ .help = "The spinner's frames, by name (dots is the older name of " ++
+        "mini-dot)" },
     .@"align" = .{ .help = "Where the spinner is: left or right of the title" },
     .show_output = .{
         .help = "Show the command's output as it runs, and print it if the command succeeds",
@@ -93,7 +92,7 @@ pub const command = cli.command(.{
     \\--show-error prints both if it fails. Where standard output is not a terminal
     \\(files=$(termancy ui spin -- find .)), the command's standard output goes straight
     \\there, and its standard error follows once the spinner is gone.
-    \\The command runs on a pseudo-terminal, as in gum, so it keeps its colors; its
+    \\The command runs on a pseudo-terminal, so it keeps its colors; its
     \\standard error stays apart, on a pipe.
     \\
     \\Ctrl-C stops the command and exits with status 130; --timeout stops it with status
@@ -150,7 +149,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
 }
 
 /// Starts the command for the spinner: on POSIX, on a pseudo-terminal of `size` (its
-/// standard output where that is caught, and its controlling terminal), as gum does, so
+/// standard output where that is caught, and its controlling terminal), so
 /// it keeps its colors and can open `/dev/tty`; elsewhere on pipes. Standard error is a
 /// pipe either way, so the two stay apart; standard output not `caught` is termancy's.
 fn startJob(ctx: *cli.Context, caught: bool, size: tui.Size) !Job {
@@ -266,7 +265,7 @@ pub const Output = struct {
     both: []const u8 = "",
 };
 
-/// What gum prints once the command has ended, where standard output is a terminal: the
+/// What is printed once the command has ended, where standard output is a terminal: the
 /// streams the flags show when it succeeded, both with `--show-error` when it failed, and
 /// otherwise nothing.
 pub fn printed(flags: Flags, status: u8, output: Output) []const u8 {
@@ -525,7 +524,7 @@ pub fn writeTail(
     try tui.width.truncate(w, body[last..], rows * columns, "…");
 }
 
-/// bubbles' dot frames, which end in a space: gum draws two between them and the title.
+/// bubbles' dot frames, which end in a space: two go between them and the title.
 const dot = blk: {
     var frames: [live.frames.dot.len][]const u8 = undefined;
     for (&frames, live.frames.dot) |*frame, glyph| frame.* = glyph ++ " ";
@@ -533,7 +532,7 @@ const dot = blk: {
     break :blk final;
 };
 
-/// The spinner `name` names, with its frames and pace: gum's, for gum's names.
+/// The spinner `name` names, with its frames and pace.
 pub fn spinnerOf(name: Name) Spinner {
     const f = live.frames;
     const frames: []const []const u8, const ms: i64 = switch (name) {
@@ -561,12 +560,12 @@ test spinnerOf {
     try testing.expectEqualStrings("⣾ ", spinnerOf(.dot).frames[0]);
     try testing.expectEqualStrings("🙈", spinnerOf(.monkey).frames[0]);
     try testing.expectEqual(333, spinnerOf(.hamburger).interval.toMilliseconds());
-    // termancy's older names: dots is gum's minidot.
+    // The older names: dots is minidot.
     try testing.expectEqual(spinnerOf(.minidot).frames.ptr, spinnerOf(.dots).frames.ptr);
     try testing.expectEqualStrings("[    ]", spinnerOf(.bouncing_bar).frames[0]);
 }
 
-test "printed: gum's rules, where standard output is a terminal" {
+test "printed: the rules, where standard output is a terminal" {
     const output: Output = .{ .stdout = "out\n", .stderr = "err\n", .both = "out\nerr\n" };
     try testing.expectEqualStrings("", printed(.{}, 0, output));
     try testing.expectEqualStrings("out\nerr\n", printed(.{ .show_output = true }, 0, output));

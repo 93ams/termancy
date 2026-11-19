@@ -113,7 +113,7 @@ fn run(ctx: *cli.Context, flags: Flags) !void {
         .delimiter = flags.input_delimiter,
     };
     var selected = flags.selected;
-    // As gum: with the items as arguments, piped standard input names those selected.
+    // With the items as arguments, piped standard input names those selected.
     if (ctx.args.len > 0 and selected.len == 0) {
         selected = try term.stdinItems(ctx, input) orelse &.{};
     }
@@ -293,7 +293,7 @@ pub fn multiple(
     model.header = look.header;
     model.styles = .{ .header = .{}, .chosen = look.selected, .count = look.count };
     model.limit = if (flags.no_limit) null else flags.limit;
-    // As gum, choosing them all is for --no-limit.
+    // Choosing them all is for --no-limit.
     model.toggle_all = flags.no_limit;
     model.cursor_mark = flags.cursor_prefix;
     model.chosen_mark = flags.selected_prefix;
@@ -336,7 +336,7 @@ fn lookOf(arena: *std.heap.ArenaAllocator, flags: Flags) !Look {
     return .of(arena.allocator(), flags, &cli.Theme.default);
 }
 
-test "one choice: the first --selected item starts highlighted, under gum's header" {
+test "one choice: the first --selected item starts highlighted, under the header" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const flags: Flags = .{ .selected = &.{ "blue", "green" }, .cursor = "→ " };
@@ -422,7 +422,7 @@ test "--select-if-one prints the value, without a terminal; labels need the deli
     try testing.expect(std.mem.endsWith(u8, bad.err, message));
 }
 
-test "gum's keys: round past the ends, ctrl+a for all, ctrl+q to print" {
+test "the keys: round past the ends, ctrl+a for all, ctrl+q to print" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     const flags: Flags = .{ .no_limit = true };

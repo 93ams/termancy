@@ -15,8 +15,7 @@
 //! set, only files ending in one of them are listed. A directory that cannot be read
 //! leaves the listing as it was and says why.
 //!
-//! `show_permissions` and `show_size` add columns before the name, as gum's file picker
-//! has them: `drwxr-xr-x   4.1kB src/`. The highlighted row is all in `styles.selected`;
+//! `show_permissions` and `show_size` add columns before the name: `drwxr-xr-x   4.1kB src/`. The highlighted row is all in `styles.selected`;
 //! the others are styled part by part.
 //!
 //! The picker reads directories with the `std.Io` it was given, when it starts and when
@@ -323,7 +322,7 @@ fn windowsBits(read_only: bool, directory: bool, name: []const u8) u32 {
     return bits;
 }
 
-/// `bytes` as gum's file picker shows a size (go-humanize's, without the space): powers
+/// `bytes` as a short size (go-humanize's, without the space): powers
 /// of 1000, one decimal below ten: `6B`, `4.1kB`, `15MB`.
 fn formatSize(buffer: *[16]u8, bytes: u64) []const u8 {
     if (bytes < 10) return std.fmt.bufPrint(buffer, "{d}B", .{bytes}) catch unreachable;

@@ -141,7 +141,7 @@ fn look(
     theme: *const cli.Theme,
     home: []const u8,
 ) !void {
-    // A space after the cursor, as gum's, and as much before every other entry.
+    // A space after the cursor, and as much before every other entry.
     const cursor = try std.fmt.allocPrint(arena, "{s} ", .{flags.cursor});
     const blank = try arena.alloc(u8, tui.width.of(cursor));
     @memset(blank, ' ');
@@ -168,7 +168,7 @@ fn look(
 
 const testing = std.testing;
 
-test "gum's columns, cursor, and header, framed" {
+test "the columns, cursor, and header, framed" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     const io = testing.io;

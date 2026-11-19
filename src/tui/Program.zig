@@ -288,7 +288,7 @@ pub const Options = struct {
     /// drawn together once the time comes. 0 draws every change at once.
     max_fps: u16 = 0,
     /// End the program this long after `start`, without the model, as on Ctrl-C but with
-    /// `Outcome.timed_out` set (gum's `--timeout`). A deadline like any other, so it needs
+    /// `Outcome.timed_out` set (as for a `--timeout`). A deadline like any other, so it needs
     /// no signals.
     timeout: ?Io.Duration = null,
 };
@@ -334,7 +334,7 @@ pub const Queries = struct {
 pub const Outcome = struct {
     /// Ended by Ctrl-C; by convention the command exits with status 130.
     interrupted: bool,
-    /// Ended by `Options.timeout`; gum exits with status 124.
+    /// Ended by `Options.timeout`; `termancy ui` exits with status 124.
     timed_out: bool = false,
 };
 

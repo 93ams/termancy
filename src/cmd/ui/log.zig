@@ -1,4 +1,4 @@
-//! `termancy ui log`: write a log record from a shell script, as gum's `log`: a message at a
+//! `termancy ui log`: write a log record from a shell script: a message at a
 //! level (or none), with key-value fields, as charm-styled text, logfmt, or JSON.
 
 const std = @import("std");
@@ -33,7 +33,7 @@ const flags_flags = cli.flags(Flags, field_.Set(.{ field_.Spec(Flags){ .fields =
     .format = .{ .help = "The first argument is a printf format for the rest: %s, %d, %v, %%" },
     .structured = .{ .help = "The arguments after the message are key value pairs" },
     .formatter = .{ .help = "How the record is written" },
-    .time = .{ .help = "Add the local time in Go's layout of this name, as gum's: kitchen, " ++
+    .time = .{ .help = "Add the local time in Go's layout of this name: kitchen, " ++
         "layout, ansic, unixdate, rubydate, rfc822, rfc822z, rfc850, rfc1123, rfc1123z, " ++
         "rfc3339, rfc3339nano, stamp, stampmilli, stampmicro, stampnano, datetime, " ++
         "dateonly, timeonly; or date-time (2006/01/02 15:04:05) or time" },
@@ -44,7 +44,7 @@ const flags_flags = cli.flags(Flags, field_.Set(.{ field_.Spec(Flags){ .fields =
     .env_prefix = "TERMANCY_LOG_",
     .exclusive = &.{&.{ .format, .structured }},
     .fields = .{
-        // TERMANCY_LOG_LEVEL is --min-level's, as GUM_LOG_LEVEL is gum's.
+        // TERMANCY_LOG_LEVEL is --min-level's.
         .level = .{ .short = 'l', .env = "" },
         .format = .{ .short = 'f' },
         .structured = .{ .short = 's' },
@@ -61,15 +61,15 @@ const flags_flags = cli.flags(Flags, field_.Set(.{ field_.Spec(Flags){ .fields =
     },
 });
 
-/// gum's levels, and termancy's trace.
+/// The levels, trace included.
 const Level = enum { none, trace, debug, info, warn, @"error", fatal };
 
 pub const command = cli.command(.{
     .name = "log",
     .summary = "Write a log record: a level, a message, and fields",
     .description =
-    \\Write the arguments, joined by spaces, as one log record on standard error, as gum's
-    \\log: styled as charm's log at a terminal, or as logfmt or JSON lines (--formatter).
+    \\Write the arguments, joined by spaces, as one log record on standard
+    \\error: styled as charm's log at a terminal, or as logfmt or JSON lines (--formatter).
     \\With --structured, the first argument is the message and the rest are key value
     \\pairs; with --format, the first is a printf format for the rest (%s, %d, and %v each
     \\write the next argument, padded to a width such as %8s or %-8s; %% writes %).
@@ -151,7 +151,7 @@ fn sysLevel(level: Level) log.Level {
     };
 }
 
-/// Each part as gum's log draws it (bold levels in charm's colors, the prefix bold and
+/// Each part as the log draws it (bold levels in charm's colors, the prefix bold and
 /// faint, keys and `=` faint), with the style flags over it, for an output showing `color`.
 fn stylesOf(
     arena: std.mem.Allocator,
@@ -186,7 +186,7 @@ fn sgr(
 pub const PrintfError = error{ UnknownVerb, MissingArgument, ExtraArgument };
 
 /// `format` with each verb replaced by the next of `args`, as Go's printf fills it with
-/// strings for gum's `--format`: `%s`, `%d`, and `%v` write the argument, padded with
+/// strings for `--format`: `%s`, `%d`, and `%v` write the argument, padded with
 /// spaces to a width (`%8s`; `%-8s` pads on the right); `%%` writes `%`. Every argument
 /// must be used.
 pub fn printf(
@@ -266,7 +266,7 @@ test stylesOf {
         .key_style = .{ .faint = false, .foreground = .{ .indexed = 212 } },
     };
     const st = try stylesOf(arena.allocator(), flags, .warn, .ansi256);
-    // gum's level: bold, in charm's color unless the flags give one.
+    // The level: bold, in charm's color unless the flags give one.
     try testing.expectEqualStrings("\x1b[1;38;5;192;48;5;1m", st.level);
     try testing.expectEqualStrings("\x1b[1;2m", st.prefix);
     try testing.expectEqualStrings("\x1b[38;5;212m", st.key);
@@ -290,7 +290,7 @@ fn expectLog(
     try result.expect(status, "", err);
 }
 
-test "gum's ways to write a record" {
+test "the ways to write a record" {
     try expectLog(&.{ "log", "two", "words" }, &.{}, 0, "two words\n");
     try expectLog(&.{ "log", "-l", "error", "-s", "--prefix", "app", "failed", "code", "7" }, &.{}, 0, "ERROR app: failed code=7\n");
     try expectLog(&.{ "log", "-f", "%s=%d", "n", "1" }, &.{}, 0, "n=1\n");

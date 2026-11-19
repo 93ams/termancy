@@ -133,7 +133,7 @@ pub const Style = enum {
 };
 
 /// How timestamps are written in text records (JSON and logfmt always use RFC 3339), in
-/// the logger's `zone`: these, and the rest of Go's named layouts as gum's log names them
+/// the logger's `zone`: these, and the rest of Go's named layouts by name
 /// (`goLayout`).
 pub const TimeFormat = enum {
     /// `2026-10-12T10:00:00Z`
@@ -197,7 +197,7 @@ pub const Styles = struct {
     time: []const u8 = "\x1b[2m",
     /// Empty for the level's own color, bold (`Level.charmColor`).
     level: []const u8 = "",
-    /// charm's four letters (`ERRO`); false writes the whole name (`ERROR`), as gum's log.
+    /// charm's four letters (`ERRO`); false writes the whole name (`ERROR`).
     short_levels: bool = true,
     prefix: []const u8 = "\x1b[1m",
     message: []const u8 = "",
