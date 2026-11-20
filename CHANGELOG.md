@@ -9,24 +9,24 @@ git history.
 
 ### Breaking
 
-- **`termancy ui` follows gum**, so some commands now behave differently:
-  - `write` submits with enter, as gum's; ctrl+j (or alt+enter) starts a line, and Ctrl-D
+- **`termancy ui` commands behave differently:**
+  - `write` submits with enter; ctrl+j (or alt+enter) starts a line, and Ctrl-D
     still submits.
   - `log` takes its arguments as one message, joined by spaces; key value pairs need
-    `-s`/`--structured`. `-f`/`--format` is gum's printf switch, so the output format moved
+    `-s`/`--structured`. `-f`/`--format` is a printf format, so the output format moved
     to `--formatter text|json|logfmt`, and `--format=json` is refused rather than misread
     as a message. The default level is `none` (no level written), and `--min-level` reads
     `TERMANCY_LOG_LEVEL`.
   - `spin` hides the command's output where standard output is a terminal unless
     `--show-output`, `--show-stdout`, `--show-stderr`, or `--show-error` asks for it, and
-    its default spinner is gum's `dot` (`--spinner dots` gives the old one).
+    its default spinner is `dot` (`--spinner dots` gives the old one).
   - `table` reads CSV as Go's `encoding/csv` does: a stray quote is an error unless
     `--lazy-quotes`, and a line with another number of fields than the first is one unless
     `--fields-per-record`. `--height` counts the table's lines, header and border included,
     and defaults to `0`, which fits the terminal (it was 10 data rows).
   - `pager`: esc exits 0, as q does; an argument that names no file is shown as the text
     itself; empty standard input is a usage error (status 2).
-  - `choose` has gum's `Choose:` header unless `--header` is given, and `filter` fills the
+  - `choose` has a `Choose:` header unless `--header` is given, and `filter` fills the
     terminal on the alternate screen unless `--height` is given.
 - **A line feed is ctrl+j, not enter:** `term.input` decodes LF (0x0a) as ctrl+j, as Bubble
   Tea and crossterm do; enter is CR, which every terminal sends in raw mode (Windows
@@ -92,7 +92,7 @@ git history.
 - **snek's commands are grouped by what they act on, not by library:** `platform` is gone;
   its `dirs`, `info`, `update`, `release`, and `ssh` move to the top level, and `platform
   webauthn` becomes `passkey`. `cli freeze`, `cli record`, `cli explain`, `tui md`, `tui
-  image`, and `tui serve` move to the top level too. The gum-style widgets and `demo` move
+  image`, and `tui serve` move to the top level too. The shell-script widgets and `demo` move
   from `tui` to `ui` (`snek ui choose`); `tui` keeps `init`, `add`, `list`, and `diff`.
 - **snek uses the library's built-ins:** `platform update` without a terminal (or under CI)
   and without `--yes` exits 1 naming `--yes` (was 2), and a declined update says "not
@@ -193,12 +193,11 @@ git history.
 
 ### Added
 
-- **`termancy ui` works like gum:** gum's commands with gum's flags, defaults, keys, and
-  exit statuses, so most gum scripts run with `gum` replaced by `termancy ui`
-  (docs/coming-from-charm.md lists where it deliberately differs).
+- **`termancy ui` grows into a full set of shell-script widgets,** with shared flags,
+  defaults, keys, and exit statuses:
   - Every interactive command takes `--timeout 500ms` (status 124 and `timed out` on stderr;
     `confirm` takes the highlighted answer instead), `--show-help`/`--no-show-help`,
-    `--padding`, and style groups for each part spelled as gum's (`--cursor.foreground 212`,
+    `--padding`, and style groups for each part (`--cursor.foreground 212`,
     `--header.bold`), defaulting to the theme's colors. Commands that read items take
     `--strip-ansi`, `--input-delimiter`, and `--output-delimiter`. Every flag of every
     command can come from a variable: `TERMANCY_CHOOSE_HEIGHT`, `TERMANCY_LOG_LEVEL`.
@@ -208,8 +207,8 @@ git history.
     when the items are arguments.
   - `filter`: `--strict`/`--no-strict` (the typed text as an answer), `--fuzzy` and
     `--fuzzy-sort` (and `--no-` of each), `--reverse`, `--width`, `--height`, `--indicator`,
-    the prefixes, `--selected`, `--select-if-one`, gum's look (`•`, `◉`/`○`), and plain
-    prompts under `ACCESSIBLE=1`. Both lists take gum's keys: ctrl+q submits, left/right
+    the prefixes, `--selected`, `--select-if-one`, the `•` and `◉`/`○` marks, and plain
+    prompts under `ACCESSIBLE=1`. Both lists take the same keys: ctrl+q submits, left/right
     (h/l) page, up/down go round past either end, ctrl+a chooses all.
   - `input`: `--width` (wider text scrolls sideways), `--cursor.mode blink|static|hide`, and
     its value from standard input when piped.
@@ -219,16 +218,16 @@ git history.
   - `confirm`: the prompt as its argument (`Are you sure?` by default), `--show-output`,
     `--default=false` and `--no-default` beside `--default no`, an empty `--negative` for one
     button, and `q` for no.
-  - `spin`: `--show-output`, `--show-stdout`, `--show-stderr`, `--show-error`, gum's eleven
-    spinners at gum's pace (`dot`, `minidot`, `jump`, `monkey`, `meter`, `hamburger`, ...),
-    and `--align`. On POSIX the command runs on a pseudo-terminal, as in gum, so it keeps its
+  - `spin`: `--show-output`, `--show-stdout`, `--show-stderr`, `--show-error`, eleven
+    spinners, each at its own pace (`dot`, `minidot`, `jump`, `monkey`, `meter`, `hamburger`, ...),
+    and `--align`. On POSIX the command runs on a pseudo-terminal, so it keeps its
     colors and can open `/dev/tty`; Ctrl-C and `--timeout` stop its whole process group, and
     a command that cannot run gives 126 or 127.
   - `table`: `--file`, `--return-column`, `--hide-count` (the row count leads the help line),
     `--lazy-quotes`, `--fields-per-record`, `-b` for `--border`, any one character as
     `--separator`, q and ctrl+q to quit as esc does; its columns narrow to fit the terminal.
-  - `pager`: the text as the argument (gum's `pager "$text"`) as well as a file or standard
-    input, in gum's rounded box (`--border`, `--width`, `--height`, `--foreground`), lines
+  - `pager`: the text as the argument (`pager "$text"`) as well as a file or standard
+    input, in a rounded box (`--border`, `--width`, `--height`, `--foreground`), lines
     numbered and soft-wrapped (`--no-show-line-numbers`, `--no-soft-wrap` with sideways
     scrolling), colored input keeping its colors, and `/` searching for a regular
     expression (smart case) with every match highlighted and n/N going round them.
@@ -236,9 +235,9 @@ git history.
     a directory, `--no-file`, `-c/--cursor`, `--header`, `--height`, and the path from
     `TERMANCY_FILE_PATH`.
   - `style`: `--trim`, `--strip-ansi`, and `--align top|middle|bottom` for every style group.
-    `format`: gum's `pink` style sheet by default and gum's template functions in all their
-    spellings. `log`: `--structured`, `--format` (printf), `--formatter`, the `none` level,
-    gum's `--time` layout names (`kitchen`, `ansic`, `rfc822`, ...) in the local time zone,
+    `format`: the `pink` style sheet by default and template functions (`Bold`, `Color`,
+    `Foreground`, ...) in all their spellings. `log`: `--structured`, `--format` (printf), `--formatter`, the `none` level,
+    Go's `--time` layout names (`kitchen`, `ansic`, `rfc822`, ...) in the local time zone,
     a status of 1 after `fatal`, and a style group for each part.
 - **`cli` flag groups:** a group's place (`cli.GroupPlace`, shareable between flags
   structs) takes `.separator` (`"."` spells `--cursor.foreground`) and `.env_prefix`;
@@ -264,7 +263,7 @@ git history.
   in it (`writeTimeAs` takes the offset); `sys.log` also gains `Styles` (charm's look part by
   part), Go's named time layouts (`goLayout`), and `Level.charmColor`.
 - `term.Regex.searchFrom` searches on from an offset; `term.Pty.SpawnOptions` takes `stdin`
-  and `stdout` files and `pipe_stderr` (`Pty.errors`); `term.live.frames.dot` is gum's `dot`
+  and `stdout` files and `pipe_stderr` (`Pty.errors`); `term.live.frames.dot` is the `dot`
   spinner; `sys.process.editText` takes `.at`.
 - `Config.initFor(X, gpa)`: a configuration that knows its settings type, and its defaults,
   from the start. `field.Reason`, a writer that keeps the template and arguments a check gave
@@ -834,7 +833,7 @@ From a review before the repository went public:
 - `platform.secure`'s page-range test assumed a 4 KiB page, which aarch64 need not have.
 - `ctx.render` text tables line up by display width, not by codepoints.
 - `Program.init` copied the model, so `deinit` on the caller's copy freed stale memory (kv,
-  lobby, repos, gum, prompts).
+  lobby, repos, prompts, and the widgets example).
 - Flow step reports, `ctx.log`, and `ctx.warn` flush standard error, so they show when they
   happen instead of after the command's output.
 - `term.live`: a SIGINT, SIGTERM, SIGHUP, or SIGQUIT that ends the process mid-animation no

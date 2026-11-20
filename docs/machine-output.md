@@ -31,7 +31,7 @@ JSON is UTF-8, indented with two spaces, and ends with one newline.
 | 0 | success |
 | 1 | the command failed (message on stderr). `cfg validate`, `cfg fmt --check`, `cfg diff`, and `ui confirm` also use 1 for "no" |
 | 2 | usage error: unknown command or flag, invalid value, missing argument, a flag a non-interactive run must pass (message and `Run '... --help'` on stderr) |
-| 124 | `ui`: `--timeout` passed (`timed out` on stderr), as gum and timeout(1) |
+| 124 | `ui`: `--timeout` passed (`timed out` on stderr), as timeout(1) |
 | 126, 127 | `ui spin`: the command could not be run (126) or was not found (127), as in sh(1) |
 | 130 | interrupted (Ctrl-C) |
 | 141 | standard output was closed early (`termancy ... \| head`); nothing more is printed |
@@ -151,13 +151,13 @@ user's answer on stdout, one item per line (or per `--output-delimiter`), and no
 Their interface goes to the terminal, never to stdout. Cancelling (Esc) exits 1 with no
 output; Ctrl-C exits 130; `--timeout` exits 124 with `timed out` on stderr. `ui confirm`
 answers with its status: Esc is no, and a timeout takes the highlighted answer; with
-`--show-output` it prints the question and the answer (`Deploy? No`), Esc included, as gum.
-`ui pager` has nothing to cancel: q and Esc both exit 0, as gum's.
+`--show-output` it prints the question and the answer (`Deploy? No`), Esc included.
+`ui pager` has nothing to cancel: q and Esc both exit 0.
 
 `ui spin -- <cmd>` exits with the command's own status. Where stdout is not a terminal, the
 command's stdout goes straight to it and its stderr to stderr once the spinner is gone; where
 stdout is a terminal, the output is printed only as `--show-output`, `--show-stdout`,
-`--show-stderr`, and `--show-error` ask, as gum does.
+`--show-stderr`, and `--show-error` ask.
 
 `tui diff` follows diff(1): exit 0 when identical, 1 when different, unified diff on stdout.
 

@@ -11,7 +11,7 @@ Zig **0.17.0**, standard library only.
 | [**`term`**](docs/term.md) | styles, layout, Unicode widths, a terminal emulator, Markdown, images in the terminal | like lipgloss, x/vt, glamour |
 | [**`tui`**](docs/tui.md) | Elm-architecture UIs, components you copy and own, headless tests, serving over SSH | like Bubble Tea, Bubbles, huh |
 | [**`sys`**](docs/sys.md) | directories, processes, secure memory, logging, self-update, an SSH server | like wish, log, melt |
-| [**`termancy`**](docs/termancy.md) | the program: config tooling, generators, gum-style widgets, glow, vhs, freeze | |
+| [**`termancy`**](docs/termancy.md) | the program: config tooling, generators, shell-script widgets, glow, vhs, freeze | |
 
 `cli` and `tui` build on `term`, and `cli` and `cfg` on `field`; otherwise no library imports
 another, so `cli` and `cfg` work alone or together.
