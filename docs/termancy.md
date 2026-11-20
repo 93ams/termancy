@@ -1,7 +1,7 @@
 # The `termancy` program
 
 A program built only from the libraries' public surfaces: configuration tooling, project and
-command generators, gum-style shell widgets, a Markdown reader (glow), terminal recordings as
+command generators, shell-script widgets, a Markdown reader (glow), terminal recordings as
 GIFs (vhs), images of code (freeze), and system information. What it prints for scripts is a
 contract: [machine-output.md](machine-output.md). To install it, see the
 [README](../README.md#install).
@@ -88,10 +88,10 @@ element in JSON, say) is rewritten whole, losing its comments, with a warning.
 ## `ui`: shell-script widgets
 
 `ui choose`, `confirm`, `input`, `write`, `filter`, `spin`, `table`, `pager`, `file`, `style`,
-`format`, `join`, `log`: in the spirit of [gum](https://github.com/charmbracelet/gum).
+`format`, `join`, `log`: interactive pieces for shell scripts.
 `ACCESSIBLE=1` asks with plain lines.
 
-The commands share gum's conventions, each where it applies:
+The commands share these conventions, each where it applies:
 
 - **Variables:** every flag can come from `TERMANCY_<COMMAND>_<FLAG>`, its name in
   SCREAMING_SNAKE: `TERMANCY_CHOOSE_HEIGHT=5`, `TERMANCY_CHOOSE_CURSOR_FOREGROUND=212`. The
@@ -104,7 +104,7 @@ The commands share gum's conventions, each where it applies:
   `ui style`'s flags: `foreground`, `background`, `border`, `border-foreground`,
   `border-background`, `align`, `width`, `height`, `margin`, `padding`, `bold`, `faint`,
   `italic`, `strikethrough`, `underline`. Colors are 0-255, `#rrggbb`, or a name. Help lists
-  each part's colors; the rest work without being listed, as in gum. Unset, a part keeps the
+  each part's colors; the rest work without being listed. Unset, a part keeps the
   theme's look: the accent for the cursor and chosen items, the heading style for headers.
 - **`--show-help`** (on; `--no-show-help` turns it off): the keys, under the component.
 - **`--padding`:** space around the whole component: `1`, `1 2`, or `1 2 1 2`.
@@ -112,7 +112,7 @@ The commands share gum's conventions, each where it applies:
   splits it into items, and `--output-delimiter` separates the items printed (both `\n` by
   default, typed with escapes: `\n`, `\t`, `\0`, `\\`).
 
-`choose` and `filter` take gum's flags too:
+`choose` and `filter` take more flags:
 
 - **`choose`:** `--limit N` or `--no-limit` (space chooses, `a` chooses all), `--ordered`
   (the items sorted, and several printed in the order chosen), `--selected` (repeated or
@@ -127,7 +127,7 @@ The commands share gum's conventions, each where it applies:
   is. `--height 0`, the default, fills the terminal; `--reverse` puts the query at the bottom;
   `--width` caps the columns. `--indicator`, `--selected-prefix`, `--unselected-prefix`,
   `--value`, `--placeholder`, `--prompt`, `--selected`, and `--select-if-one` (on the matches
-  of `--value`) as gum's. With `ACCESSIBLE=1`, it asks for the query, then numbers the
+  of `--value`). With `ACCESSIBLE=1`, it asks for the query, then numbers the
   matches.
 
 ```sh
@@ -136,15 +136,15 @@ branch=$(git branch --format='%(refname:short)' | termancy ui filter --no-strict
 printf 'b\nc\n' | termancy ui choose --no-limit a b c d   # b and c chosen at the start
 ```
 
-The output commands, as gum's:
+The output commands:
 
 - **`style`** lays the arguments (one per line) or standard input out as a block in the
   style flags, at the top level: `--width` wraps at spaces, `--align top|middle|bottom`
   places the text in a `--height` taller than it, `--trim` removes the whitespace around
   each line first.
-- **`format`** renders Markdown (in gum's `pink` style sheet where colors show, `notty`
+- **`format`** renders Markdown (in the `pink` style sheet where colors show, `notty`
   where not; `--theme` picks another), code (`-t code -l zig`), emoji shortcodes, or a
-  template of gum's functions: `{{ Bold "x" }}` (and `Italic`, `Faint`, `Underline`,
+  template of style functions: `{{ Bold "x" }}` (and `Italic`, `Faint`, `Underline`,
   `CrossOut`, `Blink`, `Reverse`, `Overline`), `{{ Color "fg" "x" }}`,
   `{{ Color "fg" "bg" "x" }}`, `Foreground`, `Background`, and pipes:
   `{{ "x" | Bold | Color "212" }}`. Arguments are double-quoted strings; Go's `if`,
@@ -155,7 +155,7 @@ The output commands, as gum's:
 - **`log`** writes one record on standard error: the arguments joined by spaces; with
   `-s`, a message and `key value` pairs; with `-f`, a printf format (`%s`, `%d`, `%v`, a
   width such as `%-8s`, `%%`) and its arguments. `--level none` (the default) writes no
-  level; `--formatter text|json|logfmt`; `--time` takes Go's layout names, as gum's
+  level; `--formatter text|json|logfmt`; `--time` takes Go's layout names
   (`kitchen`, `rfc3339`, `datetime`, `stampmilli`, ...), in local time (`TZ`, else the
   system's zone), and JSON and logfmt keep RFC 3339; `--min-level` or `TERMANCY_LOG_LEVEL` leaves out lower levels, never a record
   with no level; `fatal` ends with status 1. `--level.*`, `--time.*`, `--prefix.*`,
@@ -166,22 +166,21 @@ piped; their cursor is the terminal's own (`--cursor.mode blink`, `static`, or `
 `write` submits with enter, starts a line with ctrl+j (or alt+enter), and opens the text in
 `$VISUAL` or `$EDITOR` with ctrl+e; with `ACCESSIBLE=1` it reads plain lines until an empty
 line twice or Ctrl-D. `ui confirm` answers with its status (0 yes, 1 no);
-`--show-output` prints the question and the answer, `--default` takes `yes`/`no` or gum's
+`--show-output` prints the question and the answer, `--default` takes `yes`/`no` or
 `--default=false`, and `--timeout` takes the highlighted answer instead of failing.
 
-**`ui spin -- <command>`** runs the command under a spinner and exits with its status, as
-gum's does. Where standard output is a terminal, the command's output stays hidden:
+**`ui spin -- <command>`** runs the command under a spinner and exits with its status. Where standard output is a terminal, the command's output stays hidden:
 `--show-output` (or `--show-stdout`, `--show-stderr`) shows it under the spinner as it comes
 and prints it if the command succeeds, and `--show-error` prints it if the command fails.
 Elsewhere (`x=$(termancy ui spin -- cmd)`) its standard output goes straight through and its
-standard error follows the spinner. On POSIX the command runs on a pseudo-terminal, as in gum, so
+standard error follows the spinner. On POSIX the command runs on a pseudo-terminal, so
 it keeps its colors and can open `/dev/tty`; its standard error is a pipe apart (on Windows
-both are pipes). `--spinner` takes gum's names (`dot`, the default,
+both are pipes). `--spinner` takes a name (`dot`, the default,
 `line`, `minidot`, `jump`, `pulse`, `points`, `globe`, `moon`, `monkey`, `meter`,
-`hamburger`), at gum's pace; `--align right` puts it after the title. Ctrl-C and
+`hamburger`), each at its own pace; `--align right` puts it after the title. Ctrl-C and
 `--timeout` stop the command's whole process group.
 
-**`ui table`** reads CSV from standard input or `--file` as gum does, with Go's
+**`ui table`** reads CSV from standard input or `--file`, with Go's
 `encoding/csv` rules: every line has as many fields as the first (`--fields-per-record`
 says otherwise; `-1` allows any), and a quote in an unquoted field, or a lone one in a quoted
 field, is an error unless `--lazy-quotes`. Enter prints the chosen row as CSV, or with
